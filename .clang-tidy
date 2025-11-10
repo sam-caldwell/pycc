@@ -1,13 +1,63 @@
+# file: .clang-tidy
+#
+# Note on docstring validation:
+#   clang-tidy-docstring is an external validator (not a clang-tidy plugin).
+#   It runs as part of `make lint` and the CMake target `validate_docstrings`.
+#   Requirement per function/method definition:
+#     - Docstring immediately above the definition
+#     - Fields: "Function:" (or "Method:"), "Parameters:", "Returns:" (or "Outputs:")
+#     - The function name and each parameter name must appear in the fields
+#   To run manually:
+#     ./build/clang_tidy_docstring -d include -d src
+#
 Checks: >
-  -*,
-  pycc-*,
   bugprone-*,
-  performance-*,
-  modernize-*,
-  readability-*,
+  cert-msc51-cpp,
+  cert-msc50-cpp,
+  cert-err60-cpp,
+  cert-err33-c,
+  concurrency-*,
   cppcoreguidelines-*,
-  clang-analyzer-*,
-  hicpp-*
-WarningsAsErrors: ''
-HeaderFilterRegex: '^(include|src)/'
-FormatStyle: none
+  darwin-avoid-spinlock,
+  darwin-dispatch-once-nonstatic,
+  hicpp-exception-baseclass,
+  llvm-*,
+  -llvmlibc-*,
+  misc-const-correctness,
+  misc-confusable-identifiers,
+  misc-coroutine-hostile-raii,
+  misc-definitions-in-headers,
+  misc-header-include-cycle,
+  misc-include-cleaner,
+  misc-misleading-bidirectional,
+  misc-misleading-identifier,
+  misc-misplaced-const,
+  misc-new-delete-overloads,
+  misc-non-copyable-objects,
+  misc-redundant-expression,
+  misc-static-assert,
+  misc-throw-by-value-catch-by-reference,
+  misc-uniqueptr-reset-release,
+  misc-unused-alias-decls,
+  misc-unused-parameters,  # we should be disabling this one on a line-by-line basis to be intentional.
+  misc-unused-using-decls,
+  misc-use-internal-linkage,
+  -modernize-*,
+  performance-*,
+  portability-*,
+  -portability-avoid-pragma-once,
+  readability-*,
+# Tune complexity/size thresholds to your policy
+CheckOptions:
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 15
+  - key: readability-function-size.LineThreshold
+    value: 80
+  - key: readability-function-size.BranchThreshold
+    value: 30
+  - key: readability-function-size.ParameterThreshold
+    value: 6
+  - key: readability-function-size.NestingThreshold
+    value: 3
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^(src|include)/'
