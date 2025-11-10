@@ -16,6 +16,7 @@ stack.
 - Demonstration programs are in `demos/<project>` (built as `build/demos/<project>`)
 - The project must use OOP design patterns and be extensible.
 - The C++ compiler code must adhere to RAII principles.
+- The pycc compiler must enforce all ACTIVE pep standards (https://peps.python.org/)
 
 ---
 
