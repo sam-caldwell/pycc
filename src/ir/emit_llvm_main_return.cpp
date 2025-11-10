@@ -11,22 +11,22 @@
 #include "pycc/ir/emit_llvm_main_return.h"
 
 #include <sstream>
+#include <string>
 
 namespace pycc {
 namespace ir {
 
 bool EmitLLVMMainReturnInt(int value, const std::string& module, std::string& out_ir) {
-  std::ostringstream ss;
-  ss << "; ModuleID = '" << module << "'\n";
-  ss << "source_filename = \"" << module << "\"\n\n";
-  ss << "define i32 @main() {\n";
-  ss << "entry:\n";
-  ss << "  ret i32 " << value << "\n";
-  ss << "}\n";
-  out_ir = ss.str();
+  std::ostringstream stream;
+  stream << "; ModuleID = '" << module << "'\n";
+  stream << "source_filename = \"" << module << "\"\n\n";
+  stream << "define i32 @main() {\n";
+  stream << "entry:\n";
+  stream << "  ret i32 " << value << "\n";
+  stream << "}\n";
+  out_ir = stream.str();
   return true;
 }
 
 }  // namespace ir
 }  // namespace pycc
-

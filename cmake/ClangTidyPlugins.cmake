@@ -45,8 +45,10 @@ if(PYCC_BUILD_TIDY_PLUGINS)
     if(NOT CLANG_ASTMATCH_INCLUDE)
       message(STATUS "Clang ASTMatchers headers not found; skipping plugin build")
       set(PYCC_BUILD_TIDY_PLUGINS OFF CACHE BOOL "" FORCE)
+      set(PYCC_HAVE_CLANG_ASTMATCHERS OFF CACHE BOOL "" FORCE)
       return()
     endif()
+    set(PYCC_HAVE_CLANG_ASTMATCHERS ON CACHE BOOL "" FORCE)
     add_library(pycc_tidy MODULE
       src/clang-tidy/declare-only/RegisterMatchers.cpp
       src/clang-tidy/declare-only/Check.cpp
@@ -57,6 +59,25 @@ if(PYCC_BUILD_TIDY_PLUGINS)
       src/clang-tidy/module/RegisterModule.cpp)
     target_include_directories(pycc_tidy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${Clang_INCLUDE_DIRS} ${CLANG_ASTMATCH_INCLUDE})
     target_link_libraries(pycc_tidy PRIVATE clangTidy clangTooling clangAST clangASTMatchers clangBasic clangFrontend)
+    # Always build the plugin for the native host OS/arch.
+    # On macOS, ensure we don't accidentally produce a universal or mismatched arch;
+    # clang-tidy can only load a plugin that matches its running architecture.
+    if(APPLE)
+      # Prefer an explicit single arch from the host; fall back to uname -m.
+      set(_PYCC_NATIVE_OSX_ARCH "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+      if(NOT _PYCC_NATIVE_OSX_ARCH)
+        execute_process(COMMAND /usr/bin/uname -m
+                        OUTPUT_VARIABLE _PYCC_NATIVE_OSX_ARCH
+                        OUTPUT_STRIP_TRAILING_WHITESPACE)
+      endif()
+      # Map common aliases to Apple's expected values, just in case.
+      if(_PYCC_NATIVE_OSX_ARCH MATCHES "^(aarch64|arm64)$")
+        set(_PYCC_NATIVE_OSX_ARCH "arm64")
+      elseif(_PYCC_NATIVE_OSX_ARCH MATCHES "^(x86_64|amd64)$")
+        set(_PYCC_NATIVE_OSX_ARCH "x86_64")
+      endif()
+      set_target_properties(pycc_tidy PROPERTIES OSX_ARCHITECTURES "${_PYCC_NATIVE_OSX_ARCH}")
+    endif()
     set_target_properties(pycc_tidy PROPERTIES
       OUTPUT_NAME "pycc-tidy"
       LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -64,4 +85,6 @@ if(PYCC_BUILD_TIDY_PLUGINS)
     set(PYCC_TIDY_PLUGIN_PATH "${CMAKE_BINARY_DIR}/${CMAKE_SHARED_MODULE_PREFIX}pycc-tidy${CMAKE_SHARED_MODULE_SUFFIX}"
         CACHE STRING "Path to pycc Clang-Tidy plugin" FORCE)
   endif()
+else()
+  set(PYCC_HAVE_CLANG_ASTMATCHERS OFF CACHE BOOL "" FORCE)
 endif()

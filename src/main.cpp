@@ -10,12 +10,11 @@
  *   configure compilation, and invoke the frontend/backend. For now,
  *   it prints a placeholder banner and reflects build options.
  */
+#include <exception>
 #include <iostream>
-#include <sstream>
-#include <vector>
 
-#include "pycc/driver/cli.h"
 #include "pycc/driver/app.h"
+#include "pycc/driver/cli.h"
 #include "pycc/exceptions/pycc_exception.h"
 #include "pycc/metrics/metrics.h"
 
@@ -33,12 +32,13 @@ auto main(const int argc, char **argv) -> int {
         using pycc::driver::ParseCli;
         using pycc::driver::PrintUsage;
         CliOptions opts;
+        const char* const program_name = (argc > 0 && argv != nullptr) ? *argv : nullptr;
         if (!ParseCli(argc, (const char * const*) argv, opts, std::cerr)) {
-            PrintUsage(std::cerr, argv[0]); // NOLINT(*-pro-bounds-pointer-arithmetic)
+            PrintUsage(std::cerr, program_name);
             return 2;
         }
         if (opts.show_help) {
-            PrintUsage(std::cout, argv[0]); // NOLINT(*-pro-bounds-pointer-arithmetic)
+            PrintUsage(std::cout, program_name);
             return 0;
         }
         pycc::metrics::Metrics::Enable(opts.metrics);

@@ -17,9 +17,8 @@ namespace stages {
 class FileReader : public metrics::Metrics {
  public:
   /*** Read: Read file at path into out_src. */
-  bool Read(const std::string& path, std::string& out_src, std::string& err);
+  static bool Read(const std::string& path, std::string& out_src, std::string& err);
 };
 
 }  // namespace stages
 }  // namespace pycc
-

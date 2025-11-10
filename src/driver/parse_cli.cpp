@@ -13,84 +13,32 @@
  *   -S (assembly only), -c (compile only), and positional input files.
  */
 #include "pycc/driver/cli.h"
+#include "pycc/driver/cli_parse.h"
 
-#include <cstring>
+#include <cstddef>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace pycc::driver {
 
-auto ParseCli(int argc, const char* const* argv, CliOptions& dst, std::ostream& err) -> bool {
+auto ParseCli(const int argc, const char* const* argv, CliOptions& dst, std::ostream& err) -> bool {
   // Reset to defaults
   dst = CliOptions{};
 
+  // Normalize argv into a vector of strings to avoid pointer arithmetic.
+  std::vector<std::string> args;
+  detail::NormalizeArgv(argc, argv, args);
+
   for (int arg_index = 1; arg_index < argc; ++arg_index) {
-    const std::string arg = argv[arg_index] ? argv[arg_index] : "";
-    if (arg == "-h" || arg == "--help") {
-      dst.show_help = true;
-      return true;
-    } else if (arg == "--metrics") {
-      dst.metrics = true;
-      dst.metrics_format = CliOptions::MetricsFormat::Text;
-    } else if (arg.rfind("--metrics=", 0) == 0) {
-      dst.metrics = true;
-      const std::string val = arg.substr(std::string("--metrics=").size());
-      if (val == "json") {
-        dst.metrics_format = CliOptions::MetricsFormat::Json;
-      } else if (val == "text") {
-        dst.metrics_format = CliOptions::MetricsFormat::Text;
-      } else {
-        err << "pycc: error: unknown metrics format '" << val << "' (expected json or text)" << '\n';
-        return false;
-      }
-    } else if (arg == "-I") {
-      if (arg_index + 1 >= argc) {
-        err << "pycc: error: missing path after '-I'" << '\n';
-        return false;
-      }
-      dst.include_dirs.emplace_back(argv[++arg_index]);
-    } else if (arg.rfind("-I", 0) == 0 && arg.size() > 2) {
-      dst.include_dirs.emplace_back(arg.substr(2));
-    } else if (arg == "-L") {
-      if (arg_index + 1 >= argc) {
-        err << "pycc: error: missing path after '-L'" << '\n';
-        return false;
-      }
-      dst.link_dirs.emplace_back(argv[++arg_index]);
-    } else if (arg.rfind("-L", 0) == 0 && arg.size() > 2) {
-      dst.link_dirs.emplace_back(arg.substr(2));
-    } else if (arg == "-l") {
-      if (arg_index + 1 >= argc) {
-        err << "pycc: error: missing name after '-l'" << '\n';
-        return false;
-      }
-      dst.link_libs.emplace_back(argv[++arg_index]);
-    } else if (arg.rfind("-l", 0) == 0 && arg.size() > 2) {
-      dst.link_libs.emplace_back(arg.substr(2));
-    } else if (arg == "-o") {
-      if (i + 1 >= argc) {
-        err << "pycc: error: missing filename after '-o'" << '\n';
-        return false;
-      }
-      dst.output = argv[++i];
-    } else if (arg == "-S") {
-      dst.emit_asm = true;  // Compile to assembly, do not link
-    } else if (arg == "-c") {
-      dst.compile_only = true;  // Compile to object, do not link
-    } else if (arg == "--") {
-      // End of options; rest are positional inputs
-      for (++arg_index; arg_index < argc; ++arg_index) {
-        dst.inputs.emplace_back(argv[arg_index] ? argv[arg_index] : "");
-      }
-      break;
-    } else if (!arg.empty() && arg[0] == '-') {
-      err << "pycc: error: unknown option '" << arg << "'" << '\n';
+    const std::string& arg = args[static_cast<std::size_t>(arg_index)];
+    const detail::OptResult result = detail::RunHandlers(args, arg_index, argc, dst, err);
+    if (result == detail::OptResult::Error) {
       return false;
-    } else if (!arg.empty()) {
-      dst.inputs.push_back(arg);
     }
   }
 
+  // ReSharper disable once CppDFAConstantConditions
   if (!dst.show_help && dst.inputs.empty()) {
     err << "pycc: error: no input files" << '\n';
     return false;

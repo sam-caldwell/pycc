@@ -9,6 +9,11 @@
  * Theory of Operation: -S → AssembleOnly, -c → ObjectOnly, else Link.
  */
 #include "pycc/driver/app.h"
+#include "pycc/backend/clang_build.h"  // direct use of backend::BuildKind
+#include "pycc/driver/cli.h"          // direct use of driver::CliOptions
+
+#include <string>
+#include <utility>
 
 namespace pycc::driver {
 

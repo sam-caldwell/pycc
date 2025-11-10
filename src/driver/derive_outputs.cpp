@@ -9,6 +9,8 @@
  */
 #include "pycc/driver/app.h"
 
+#include <string>
+
 namespace pycc::driver {
 
 auto DeriveOutputs(const std::string& out_bin) -> Outputs {

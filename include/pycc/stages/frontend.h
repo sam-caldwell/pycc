@@ -19,9 +19,8 @@ namespace stages {
 class Frontend : public metrics::Metrics {
  public:
   /*** Build: Construct an AST for the source. */
-  bool Build(const std::string& src, std::unique_ptr<ast::Node>& out_root, std::string& err);
+  static bool Build(const std::string& src, std::unique_ptr<ast::Node>& out_root, std::string& err);
 };
 
 }  // namespace stages
 }  // namespace pycc
-

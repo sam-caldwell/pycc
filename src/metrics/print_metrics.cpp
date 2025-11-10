@@ -10,6 +10,7 @@
 #include "pycc/metrics/metrics.h"
 
 #include <iomanip>
+#include <ios>
 #include <ostream>
 
 namespace pycc::metrics {

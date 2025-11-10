@@ -13,16 +13,16 @@
 
 namespace pycc::tidy {
 
-void DeclareOnlyCheck::check(const clang::ast_matchers::MatchFinder::MatchResult& Result) {
-  const auto* SM = Result.SourceManager;
+void DeclareOnlyCheck::check(const clang::ast_matchers::MatchFinder::MatchResult& Result) {  // NOLINT(readability-convert-member-functions-to-static,readability-function-cognitive-complexity,readability-function-size)
+  const auto* source_manager = Result.SourceManager;
   const auto& Ctx = *Result.Context;
 
   // Header policy enforcement: function/method definitions should not be in headers.
   if (const auto* FD = Result.Nodes.getNodeAs<clang::FunctionDecl>("def")) {
     auto Loc = FD->getLocation();
     if (Loc.isValid()) {
-      clang::FileID FID = SM->getFileID(Loc);
-      const clang::FileEntry* FE = SM->getFileEntryForID(FID);
+      clang::FileID FID = source_manager->getFileID(Loc);
+      const clang::FileEntry* FE = source_manager->getFileEntryForID(FID);
       if (FE && FE->getName().endswith(".h")) {
         diag(Loc, "function/method definition not allowed in header: %0") << FD->getNameInfo().getName();
       }
@@ -33,8 +33,8 @@ void DeclareOnlyCheck::check(const clang::ast_matchers::MatchFinder::MatchResult
   if (const auto* ND = Result.Nodes.getNodeAs<clang::NamedDecl>("decl")) {
     auto Loc = ND->getLocation();
     if (Loc.isValid()) {
-      clang::FileID FID = SM->getFileID(Loc);
-      const clang::FileEntry* FE = SM->getFileEntryForID(FID);
+      clang::FileID FID = source_manager->getFileID(Loc);
+      const clang::FileEntry* FE = source_manager->getFileEntryForID(FID);
       if (FE && FE->getName().endswith(".h")) {
         auto& C = DeclCount_[FE];
         C += 1;
@@ -48,4 +48,3 @@ void DeclareOnlyCheck::check(const clang::ast_matchers::MatchFinder::MatchResult
 }
 
 }  // namespace pycc::tidy
-

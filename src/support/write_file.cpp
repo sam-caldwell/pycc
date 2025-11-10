@@ -8,21 +8,24 @@
  *   - err: error message on failure
  * Theory of Operation: Uses std::ofstream and checks .good().
  */
+// NOLINTNEXTLINE(misc-include-cleaner) - include interface to ensure signature stays in sync
 #include "pycc/support/fs.h"
 
 #include <fstream>
+#include <ios>
+#include <string>
 
 namespace pycc {
 namespace support {
 
 bool WriteFile(const std::string& path, const std::string& data, std::string& err) {
-  std::ofstream f(path, std::ios::binary);
-  if (!f.good()) {
+  std::ofstream file_stream(path, std::ios::binary);
+  if (!file_stream.good()) {
     err = "failed to open file for write: " + path;
     return false;
   }
-  f << data;
-  if (!f.good()) {
+  file_stream << data;
+  if (!file_stream.good()) {
     err = "failed to write file: " + path;
     return false;
   }
@@ -31,4 +34,3 @@ bool WriteFile(const std::string& path, const std::string& data, std::string& er
 
 }  // namespace support
 }  // namespace pycc
-

@@ -7,6 +7,7 @@
  * Theory of Operation: Reads Metrics registry and prints text or JSON.
  */
 #include "pycc/driver/app.h"
+#include "pycc/driver/cli.h"  // direct use of driver::CliOptions
 #include "pycc/metrics/metrics.h"
 
 #include <iostream>

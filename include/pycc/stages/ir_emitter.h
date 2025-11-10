@@ -19,9 +19,8 @@ namespace stages {
 class IREmitter : public metrics::Metrics {
  public:
   /*** Emit: Emit LLVM IR for the given AST. */
-  bool Emit(const ast::Node& root, const std::string& module, std::string& out_ir, const std::string& src_hint);
+  static bool Emit(const ast::Node& root, const std::string& module, std::string& out_ir, const std::string& src_hint);
 };
 
 }  // namespace stages
 }  // namespace pycc
-

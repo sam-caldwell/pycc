@@ -8,11 +8,11 @@
  */
 #include "pycc/exceptions/pycc_exception.h"
 
-namespace pycc {
-namespace exceptions {
+#include <string>
+#include <utility>
+
+namespace pycc::exceptions {
 
 PyccException::PyccException(std::string msg) noexcept : message_(std::move(msg)) {}
 
-}  // namespace exceptions
-}  // namespace pycc
-
+}  // namespace pycc::exceptions

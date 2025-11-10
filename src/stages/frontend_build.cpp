@@ -10,12 +10,17 @@
  */
 #include "pycc/stages/frontend.h"
 
+#include "pycc/ast/ast.h"            // direct use of ast::ComputeGeometry, ASTGeometry
 #include "pycc/frontend/build_ast.h"
+#include "pycc/metrics/metrics.h"     // direct use of Metrics::ScopedTimer
+
+#include <memory>
+#include <string>
 
 namespace pycc::stages {
 
 auto Frontend::Build(const std::string& src, std::unique_ptr<ast::Node>& out_root, std::string& err) -> bool {
-  metrics::Metrics::ScopedTimer timer(metrics::Metrics::Phase::Parse);
+  const metrics::Metrics::ScopedTimer timer(metrics::Metrics::Phase::Parse);
   if (!frontend::BuildMinimalReturnIntModule(src, out_root, err)) {
     return false;
   }

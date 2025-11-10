@@ -9,13 +9,17 @@
  */
 #include "pycc/metrics/metrics.h"
 
+#include <cstddef>
+#include <iomanip>
+#include <ios>
 #include <ostream>
+#include <sstream>
 #include <string>
 
 namespace pycc::metrics {
 
 static const char* PhaseName(Metrics::Phase phase) {
-  switch (p) {
+  switch (phase) {
     case Metrics::Phase::ReadFile: return "ReadFile";
     case Metrics::Phase::Parse: return "Parse";
     case Metrics::Phase::Sema: return "Sema";
@@ -27,11 +31,12 @@ static const char* PhaseName(Metrics::Phase phase) {
   return "Unknown";
 }
 
-static std::string JsonEscape(const std::string& s) {
+static std::string JsonEscape(const std::string& str) {  // NOLINT(readability-function-size)
   std::string out;
-  out.reserve(s.size() + 8);
-  for (unsigned char c : s) {
-    switch (c) {
+  constexpr std::size_t kReservePadding = 8;
+  out.reserve(str.size() + kReservePadding);
+  for (const unsigned char uchar : str) {
+    switch (uchar) {
       case '"': out += "\\\""; break;
       case '\\': out += "\\\\"; break;
       case '\b': out += "\\b"; break;
@@ -40,19 +45,21 @@ static std::string JsonEscape(const std::string& s) {
       case '\r': out += "\\r"; break;
       case '\t': out += "\\t"; break;
       default:
-        if (c < 0x20) {
-          char buf[7];
-          std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-          out += buf;
+        constexpr unsigned char kMinPrintable = 0x20;
+        if (uchar < kMinPrintable) {
+          std::ostringstream hex;
+          hex << "\\u" << std::hex << std::uppercase << std::setw(4) << std::setfill('0')
+              << static_cast<int>(uchar);
+          out += hex.str();
         } else {
-          out += static_cast<char>(c);
+          out += static_cast<char>(uchar);
         }
     }
   }
   return out;
 }
 
-void Metrics::PrintMetricsJson(const Registry& reg, std::ostream& out) {
+auto Metrics::PrintMetricsJson(const Registry& reg, std::ostream& out) -> void {
   if (!reg.enabled) {
     return;
   }
@@ -61,7 +68,7 @@ void Metrics::PrintMetricsJson(const Registry& reg, std::ostream& out) {
   out << "\n  \"durations_ns\": [";
   for (size_t i = 0; i < reg.durations_ns.size(); ++i) {
     const auto& item = reg.durations_ns[i];
-    out << (i ? ",\n    {" : "\n    {")
+    out << (i != 0U ? ",\n    {" : "\n    {")
         << R"("phase": ")" << PhaseName(item.first) << R"(", "ns": )" << item.second << "}";
   }
   out << "\n  ],";
@@ -71,10 +78,9 @@ void Metrics::PrintMetricsJson(const Registry& reg, std::ostream& out) {
   // optimizations
   out << "\n  \"optimizations\": [";
   for (size_t i = 0; i < reg.optimizations.size(); ++i) {
-    out << (i ? ", " : " ") << "\"" << JsonEscape(reg.optimizations[i]) << "\"";
+    out << (i != 0U ? ", " : " ") << "\"" << JsonEscape(reg.optimizations[i]) << "\"";
   }
   out << " ]\n}";
 }
 
-}  // namespace metrics
-}  // namespace pycc
+}  // namespace pycc::metrics

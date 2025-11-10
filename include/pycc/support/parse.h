@@ -13,8 +13,7 @@
 namespace pycc {
 namespace support {
 
-bool ParseIntLiteralStrict(std::string_view sv, int& out_val, std::string* err = nullptr);
+bool ParseIntLiteralStrict(std::string_view text, int& out_val, std::string* err = nullptr);
 
 }  // namespace support
 }  // namespace pycc
-

@@ -7,11 +7,10 @@
  */
 #include "pycc/exceptions/pycc_exception.h"
 
-namespace pycc {
-namespace exceptions {
+namespace pycc::exceptions {
 
 const char* PyccException::what() const noexcept { return message_.c_str(); }
 
-}  // namespace exceptions
-}  // namespace pycc
+}  // namespace pycc::exceptions
+
 

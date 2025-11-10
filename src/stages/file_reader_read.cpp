@@ -10,12 +10,15 @@
  */
 #include "pycc/stages/file_reader.h"
 
+#include "pycc/metrics/metrics.h"  // direct use of Metrics::ScopedTimer
 #include "pycc/support/fs.h"
+
+#include <string>
 
 namespace pycc::stages {
 
 auto FileReader::Read(const std::string& path, std::string& out_src, std::string& err) -> bool {
-  metrics::Metrics::ScopedTimer timer(metrics::Metrics::Phase::ReadFile);
+  const metrics::Metrics::ScopedTimer timer(metrics::Metrics::Phase::ReadFile);
   return support::ReadFile(path, out_src, err);
 }
 

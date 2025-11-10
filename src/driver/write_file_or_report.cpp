@@ -9,19 +9,21 @@
  *   - bool: true on success, false on failure (message printed)
  * Theory of Operation: Wraps support::WriteFile and prints a 'pycc: ' prefixed message.
  */
+// NOLINTNEXTLINE(misc-include-cleaner) - interface for declarations
 #include "pycc/driver/app.h"
 #include "pycc/support/fs.h"
 
 #include <iostream>
+#include <string>
 
 namespace pycc::driver {
 
 auto WriteFileOrReport(const std::string& path, const std::string& data, std::string& err) -> bool {
-  if (!support::WriteFile(path, data, err)) {
+  const bool is_ok = support::WriteFile(path, data, err);
+  if (!is_ok) {
     std::cerr << "pycc: " << err << '\n';
-    return false;
   }
-  return true;
+  return is_ok;
 }
 
 }  // namespace pycc::driver

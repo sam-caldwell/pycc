@@ -10,10 +10,15 @@
  */
 #include "pycc/stages/backend.h"
 
+#include "pycc/backend/clang_build.h"  // direct use of backend::BuildKind
+#include "pycc/metrics/metrics.h"  // direct use of Metrics::ScopedTimer
+
+#include <string>
+
 namespace pycc::stages {
 
 auto Backend::EmitAsmSide(const std::string& ir_path, const std::string& asm_out, std::string& err) -> bool {
-  metrics::Metrics::ScopedTimer timer(metrics::Metrics::Phase::EmitASM);
+  const metrics::Metrics::ScopedTimer timer(metrics::Metrics::Phase::EmitASM);
   return backend::ClangFromIR(ir_path, asm_out, backend::BuildKind::AssembleOnly, err);
 }
 

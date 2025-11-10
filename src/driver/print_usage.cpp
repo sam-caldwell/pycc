@@ -7,30 +7,32 @@
  * Outputs: None
  * Theory of Operation: Renders a concise, GCC-like usage with supported flags.
  */
+// NOLINTNEXTLINE(misc-include-cleaner) - ensure signature stays in sync
 #include "pycc/driver/cli.h"
 
 #include <cstring>
 #include <iostream>
-#include <string>
+#include <string_view>
 
 namespace pycc::driver {
 
-static std::string_view Basename(const char* path) {
-  if (path == nullptr || *path == '\0') {
-    return std::string_view{"pycc"};
-  }
-  const char* last_slash = std::strrchr(path, '/');
-#ifdef _WIN32
-  const char* last_backslash = std::strrchr(path, '\\');
-  if (last_backslash != nullptr && (last_slash == nullptr || last_backslash > last_slash)) {
-    last_slash = last_backslash;
-  }
-#endif
-  return std::string_view(last_slash != nullptr ? last_slash + 1 : path);
-}
-
 auto PrintUsage(std::ostream& out, const char* argv0) -> void {
-  const std::string_view program_name = Basename(argv0);
+  std::string_view program_name{"pycc"};
+  if (argv0 != nullptr && *argv0 != '\0') {
+    const char* last_slash = std::strrchr(argv0, '/');
+#ifdef _WIN32
+    const char* last_backslash = std::strrchr(argv0, '\\');
+    if (last_backslash != nullptr && (last_slash == nullptr || last_backslash > last_slash)) {
+      last_slash = last_backslash;
+    }
+#endif
+    const std::string_view all(argv0);
+    std::size_t offset = 0;
+    if (last_slash != nullptr) {
+      offset = static_cast<std::size_t>(last_slash - argv0) + 1U;
+    }
+    program_name = all.substr(offset);
+  }
   out << "Usage: " << program_name << " [options] file..." << '\n'
       << '\n'
       << "Options:" << '\n'

@@ -18,11 +18,10 @@ namespace stages {
 class Backend : public metrics::Metrics {
  public:
   /*** EmitAsmSide: Emit assembly side artifact (clang -S). */
-  bool EmitAsmSide(const std::string& ir_path, const std::string& asm_out, std::string& err);
+  static bool EmitAsmSide(const std::string& ir_path, const std::string& asm_out, std::string& err);
   /*** Build: Build primary output (object or binary). */
-  bool Build(const std::string& ir_path, const std::string& out, backend::BuildKind kind, std::string& err);
+  static bool Build(const std::string& ir_path, const std::string& out, backend::BuildKind kind, std::string& err);
 };
 
 }  // namespace stages
 }  // namespace pycc
-

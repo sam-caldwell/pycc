@@ -9,8 +9,10 @@
  * Theory of Operation: Line-wise scan for a token 'return ' followed by an optional
  *   sign and digits; ignores other content. Intended as an MVP parser.
  */
+// NOLINTNEXTLINE(misc-include-cleaner) - interface for ParseReturnInt
 #include "pycc/frontend/simple_return_int.h"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 
@@ -20,25 +22,23 @@ namespace pycc::frontend {
 
 auto ParseReturnInt(const std::string& source, int& out_value, std::string& err) -> bool {
   constexpr std::string_view kReturn = "return ";
-  std::string_view sv(source);
-  const std::size_t pos = sv.find(kReturn);
+  std::string_view view(source);
+  const std::size_t pos = view.find(kReturn);
   if (pos == std::string_view::npos) {
     err = "no 'return <int>' statement found";
     return false;
   }
-  sv.remove_prefix(pos + kReturn.size());
-  const std::size_t line_end = sv.find_first_of("\n\r");
+  view.remove_prefix(pos + kReturn.size());
+  const std::size_t line_end = view.find_first_of("\n\r");
   if (line_end != std::string_view::npos) {
-    sv = sv.substr(0, line_end);
+    view = view.substr(0, line_end);
   }
-  int parsed_value = 0;
-  if (!support::ParseIntLiteralStrict(sv, parsed_value, &err)) {
+  if (!support::ParseIntLiteralStrict(view, out_value, &err)) {
     if (err.empty()) {
       err = "invalid integer literal after return";
     }
     return false;
   }
-  out_value = parsed_value;
   return true;
 }
 

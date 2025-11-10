@@ -12,33 +12,33 @@
  */
 #include "pycc/backend/clang_build.h"
 
-#include <cstdlib>
-#include <sstream>
+#include <cstddef>
 #include <string>
+#include <vector>
+
+#include "pycc/backend/detail/exec.h"
 
 namespace pycc::backend {
 
 auto ClangFromIR(const std::string& ir_path,
                  const std::string& output,
-                 BuildKind kind,
+                 const BuildKind kind,
                  std::string& err,
                  const std::string& clang) -> bool {
-  std::ostringstream cmd;
-  cmd << clang << ' ';
+  std::vector<std::string> args;
+  args.emplace_back(clang);
   if (kind == BuildKind::AssembleOnly) {
-    cmd << "-S ";
+    args.emplace_back("-S");
   }
   if (kind == BuildKind::ObjectOnly) {
-    cmd << "-c ";
+    args.emplace_back("-c");
   }
-  cmd << "-o '" << output << "' '" << ir_path << "'";
-  const std::string command = cmd.str();
-  const int result_code = std::system(command.c_str());
-  if (result_code != 0) {
-    err = "clang invocation failed (rc=" + std::to_string(result_code) + "): " + command;
-    return false;
-  }
-  return true;
+  args.emplace_back("-o");
+  args.emplace_back(output);
+  args.emplace_back(ir_path);
+
+  auto argv = detail::BuildArgvMutable(args);
+  return detail::ExecAndWait(argv, err);
 }
 
 }  // namespace pycc::backend

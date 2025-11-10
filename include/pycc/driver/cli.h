@@ -38,6 +38,18 @@ struct CliOptions {
 };
 
 /***
+ * Name: pycc::driver::detail::OptResult
+ * Purpose: Tri-state result for option handlers.
+ * Inputs: N/A
+ * Outputs: Indicates whether an argument was handled, not matched, or invalid.
+ * Theory of Operation: Allows the main parser to remain simple while delegating
+ *   specific option formats to small helpers.
+ */
+namespace detail {
+enum class OptResult { NotMatched, Handled, Error };
+}
+
+/***
  * Name: pycc::driver::ParseCli
  * Purpose: Parse command-line arguments into a CliOptions structure.
  * Inputs:

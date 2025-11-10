@@ -11,12 +11,17 @@
  */
 #include "pycc/stages/backend.h"
 
+#include "pycc/backend/clang_build.h"  // direct use of backend::BuildKind
+#include "pycc/metrics/metrics.h"  // direct use of Metrics::ScopedTimer
+
+#include <string>
+
 namespace pycc::stages {
 
 auto Backend::Build(const std::string& ir_path, const std::string& out, backend::BuildKind kind, std::string& err)
     -> bool {
-  metrics::Metrics::ScopedTimer timer(kind == backend::BuildKind::Link ? metrics::Metrics::Phase::Link
-                                                                       : metrics::Metrics::Phase::Compile);
+  const metrics::Metrics::ScopedTimer timer(kind == backend::BuildKind::Link ? metrics::Metrics::Phase::Link
+                                                                             : metrics::Metrics::Phase::Compile);
   return backend::ClangFromIR(ir_path, out, kind, err);
 }
 
