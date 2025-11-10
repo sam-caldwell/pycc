@@ -18,6 +18,7 @@ build:
 	@$(CMAKE) --build --preset default --parallel $(JOBS)
 
 test:
+	@$(CMAKE) --build --preset default --parallel $(JOBS)
 	@ctest --preset default --output-on-failure
 
 clean:
@@ -27,7 +28,10 @@ clean:
 
 lint: presets
 	@CC=$(CC) CXX=$(CXX) CMAKE_C_COMPILER=$(CC) CMAKE_CXX_COMPILER=$(CXX) $(CMAKE) --preset lint
-	@$(CMAKE) --build --preset lint --parallel $(JOBS)
+	@echo "[lint] build plugin first (if available)"
+	@$(CMAKE) --build --preset lint --target pycc_tidy --parallel $(JOBS) || echo "[lint] plugin not built (skipping)"
+	@echo "[lint] run custom tidy target (excludes build*/ and deps)"
+	@$(CMAKE) --build --preset lint --target tidy --clean-first --parallel $(JOBS)
 
 demo: build
 	@$(CMAKE) -E make_directory build/demos
