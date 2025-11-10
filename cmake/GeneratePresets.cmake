@@ -27,16 +27,27 @@ file(WRITE "${PRESETS_FILE}" [[
         "PYCC_EMIT_LLVM": { "type": "BOOL", "value": true },
         "PYCC_EMIT_ASM": { "type": "BOOL", "value": true }
       }
+    },
+    {
+      "name": "lint",
+      "displayName": "Lint (Ninja)",
+      "inherits": ["default"],
+      "binaryDir": "build-lint",
+      "cacheVariables": {
+        "PYCC_BUILD_TIDY_PLUGINS": { "type": "BOOL", "value": true },
+        "CMAKE_EXPORT_COMPILE_COMMANDS": { "type": "BOOL", "value": true }
+      }
     }
   ],
   "buildPresets": [
-    { "name": "default", "configurePreset": "default" }
+    { "name": "default", "configurePreset": "default" },
+    { "name": "lint", "configurePreset": "lint" }
   ],
   "testPresets": [
-    { "name": "default", "configurePreset": "default", "output": { "outputOnFailure": true } }
+    { "name": "default", "configurePreset": "default", "output": { "outputOnFailure": true } },
+    { "name": "lint", "configurePreset": "lint", "output": { "outputOnFailure": true } }
   ]
 }
 ]])
 
 message(STATUS "Generated ${PRESETS_FILE}")
-

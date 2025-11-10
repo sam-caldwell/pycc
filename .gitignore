@@ -21,9 +21,11 @@ env.bak/
 venv.bak/
 .env
 .env.*
+.keep
 
 # Python packaging / distribution
 build/
+build-lint/
 dist/
 eggs/
 .eggs/
