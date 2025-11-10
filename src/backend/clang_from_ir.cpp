@@ -16,28 +16,29 @@
 #include <sstream>
 #include <string>
 
-namespace pycc {
-namespace backend {
+namespace pycc::backend {
 
-bool ClangFromIR(const std::string& ir_path,
+auto ClangFromIR(const std::string& ir_path,
                  const std::string& output,
                  BuildKind kind,
                  std::string& err,
-                 const std::string& clang) {
+                 const std::string& clang) -> bool {
   std::ostringstream cmd;
   cmd << clang << ' ';
-  if (kind == BuildKind::AssembleOnly) cmd << "-S ";
-  if (kind == BuildKind::ObjectOnly) cmd << "-c ";
+  if (kind == BuildKind::AssembleOnly) {
+    cmd << "-S ";
+  }
+  if (kind == BuildKind::ObjectOnly) {
+    cmd << "-c ";
+  }
   cmd << "-o '" << output << "' '" << ir_path << "'";
-  const std::string cmd_str = cmd.str();
-  int rc = std::system(cmd_str.c_str());
-  if (rc != 0) {
-    err = "clang invocation failed (rc=" + std::to_string(rc) + "): " + cmd_str;
+  const std::string command = cmd.str();
+  const int result_code = std::system(command.c_str());
+  if (result_code != 0) {
+    err = "clang invocation failed (rc=" + std::to_string(result_code) + "): " + command;
     return false;
   }
   return true;
 }
 
-}  // namespace backend
-}  // namespace pycc
-
+}  // namespace pycc::backend

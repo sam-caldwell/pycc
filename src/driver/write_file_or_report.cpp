@@ -14,10 +14,9 @@
 
 #include <iostream>
 
-namespace pycc {
-namespace driver {
+namespace pycc::driver {
 
-bool WriteFileOrReport(const std::string& path, const std::string& data, std::string& err) {
+auto WriteFileOrReport(const std::string& path, const std::string& data, std::string& err) -> bool {
   if (!support::WriteFile(path, data, err)) {
     std::cerr << "pycc: " << err << '\n';
     return false;
@@ -25,6 +24,4 @@ bool WriteFileOrReport(const std::string& path, const std::string& data, std::st
   return true;
 }
 
-}  // namespace driver
-}  // namespace pycc
-
+}  // namespace pycc::driver

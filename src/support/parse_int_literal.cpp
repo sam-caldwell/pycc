@@ -13,41 +13,50 @@
 #include <cctype>
 #include <limits>
 
-namespace pycc {
-namespace support {
+namespace pycc::support {
 
-bool ParseIntLiteralStrict(std::string_view sv, int& out_val, std::string* err) {
+auto ParseIntLiteralStrict(std::string_view text, int& out_val, std::string* err) -> bool {
   // Trim leading spaces
-  size_t i = 0;
-  while (i < sv.size() && std::isspace(static_cast<unsigned char>(sv[i]))) ++i;
-  if (i) sv.remove_prefix(i);
-
-  bool neg = false;
-  if (!sv.empty() && (sv[0] == '+' || sv[0] == '-')) {
-    neg = (sv[0] == '-');
-    sv.remove_prefix(1);
+  std::size_t index = 0;
+  while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index])) != 0) {
+    ++index;
   }
-  if (sv.empty() || !std::isdigit(static_cast<unsigned char>(sv[0]))) {
-    if (err) *err = "invalid integer literal";
+  if (index > 0) {
+    text.remove_prefix(index);
+  }
+
+  bool is_negative = false;
+  if (!text.empty() && (text[0] == '+' || text[0] == '-')) {
+    is_negative = (text[0] == '-');
+    text.remove_prefix(1);
+  }
+  if (text.empty() || std::isdigit(static_cast<unsigned char>(text[0])) == 0) {
+    if (err != nullptr) {
+      *err = "invalid integer literal";
+    }
     return false;
   }
-  long long val = 0;
-  for (char c : sv) {
-    if (std::isspace(static_cast<unsigned char>(c))) break;
-    if (!std::isdigit(static_cast<unsigned char>(c))) {
-      if (err) *err = "invalid character in integer literal";
+  long long value = 0;
+  for (char ch : text) {
+    if (std::isspace(static_cast<unsigned char>(ch)) != 0) {
+      break;
+    }
+    if (std::isdigit(static_cast<unsigned char>(ch)) == 0) {
+      if (err != nullptr) {
+        *err = "invalid character in integer literal";
+      }
       return false;
     }
-    val = val * 10 + (c - '0');
-    if (val > std::numeric_limits<int>::max()) {
-      if (err) *err = "integer overflow";
+    value = value * 10 + (ch - '0');
+    if (value > std::numeric_limits<int>::max()) {
+      if (err != nullptr) {
+        *err = "integer overflow";
+      }
       return false;
     }
   }
-  out_val = static_cast<int>(neg ? -val : val);
+  out_val = static_cast<int>(is_negative ? -value : value);
   return true;
 }
 
-}  // namespace support
-}  // namespace pycc
-
+}  // namespace pycc::support

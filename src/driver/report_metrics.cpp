@@ -11,11 +11,12 @@
 
 #include <iostream>
 
-namespace pycc {
-namespace driver {
+namespace pycc::driver {
 
-void ReportMetricsIfRequested(const driver::CliOptions& opts) {
-  if (!opts.metrics) return;
+auto ReportMetricsIfRequested(const driver::CliOptions& opts) -> void {
+  if (!opts.metrics) {
+    return;
+  }
   const auto& reg = metrics::Metrics::GetRegistry();
   if (opts.metrics_format == driver::CliOptions::MetricsFormat::Json) {
     metrics::Metrics::PrintMetricsJson(reg, std::cout);
@@ -24,6 +25,4 @@ void ReportMetricsIfRequested(const driver::CliOptions& opts) {
   }
 }
 
-}  // namespace driver
-}  // namespace pycc
-
+}  // namespace pycc::driver

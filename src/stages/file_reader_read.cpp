@@ -12,14 +12,11 @@
 
 #include "pycc/support/fs.h"
 
-namespace pycc {
-namespace stages {
+namespace pycc::stages {
 
-bool FileReader::Read(const std::string& path, std::string& out_src, std::string& err) {
-  metrics::Metrics::ScopedTimer t(metrics::Metrics::Phase::ReadFile);
+auto FileReader::Read(const std::string& path, std::string& out_src, std::string& err) -> bool {
+  metrics::Metrics::ScopedTimer timer(metrics::Metrics::Phase::ReadFile);
   return support::ReadFile(path, out_src, err);
 }
 
-}  // namespace stages
-}  // namespace pycc
-
+}  // namespace pycc::stages

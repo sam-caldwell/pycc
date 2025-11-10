@@ -10,16 +10,17 @@
  */
 #include "pycc/driver/app.h"
 
-namespace pycc {
-namespace driver {
+namespace pycc::driver {
 
-std::pair<backend::BuildKind, std::string> SelectBuildTarget(const driver::CliOptions& opts,
-                                                             const Outputs& out) {
-  if (opts.emit_asm) return {backend::BuildKind::AssembleOnly, out.s};
-  if (opts.compile_only) return {backend::BuildKind::ObjectOnly, out.o};
+auto SelectBuildTarget(const driver::CliOptions& opts, const Outputs& out)
+    -> std::pair<backend::BuildKind, std::string> {
+  if (opts.emit_asm) {
+    return {backend::BuildKind::AssembleOnly, out.s};
+  }
+  if (opts.compile_only) {
+    return {backend::BuildKind::ObjectOnly, out.o};
+  }
   return {backend::BuildKind::Link, out.bin};
 }
 
-}  // namespace driver
-}  // namespace pycc
-
+}  // namespace pycc::driver

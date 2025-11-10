@@ -9,20 +9,21 @@
  */
 #include "pycc/ast/ast.h"
 
-namespace pycc {
-namespace ast {
+namespace pycc::ast {
 
-static void dfs(const Node& n, std::size_t depth, ASTGeometry& out) {
-  if (depth > out.max_depth) out.max_depth = depth;
+static void DepthFirstAccumulate(const Node& node, std::size_t depth_value, ASTGeometry& out) {
+  if (depth_value > out.max_depth) {
+    out.max_depth = depth_value;
+  }
   ++out.node_count;
-  for (const auto& ch : n.children) dfs(*ch, depth + 1, out);
+  for (const auto& child : node.children) {
+    DepthFirstAccumulate(*child, depth_value + 1, out);
+  }
 }
 
-void ComputeGeometry(const Node& root, ASTGeometry& out) {
+auto ComputeGeometry(const Node& root, ASTGeometry& out) -> void {
   out = ASTGeometry{};
-  dfs(root, 1, out);
+  DepthFirstAccumulate(root, 1, out);
 }
 
-}  // namespace ast
-}  // namespace pycc
-
+}  // namespace pycc::ast

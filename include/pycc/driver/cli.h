@@ -31,6 +31,10 @@ struct CliOptions {
   bool metrics = false;             // --metrics
   enum class MetricsFormat { Text, Json };
   MetricsFormat metrics_format = MetricsFormat::Text; // --metrics[=json|text]
+  // Placeholders for future behavior (parsed only)
+  std::vector<std::string> include_dirs;  // -I <dir> or -Idir
+  std::vector<std::string> link_dirs;     // -L <dir> or -Ldir
+  std::vector<std::string> link_libs;     // -l <lib> or -llib
 };
 
 /***

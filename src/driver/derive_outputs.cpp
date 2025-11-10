@@ -9,13 +9,10 @@
  */
 #include "pycc/driver/app.h"
 
-namespace pycc {
-namespace driver {
+namespace pycc::driver {
 
-Outputs DeriveOutputs(const std::string& out_bin) {
+auto DeriveOutputs(const std::string& out_bin) -> Outputs {
   return Outputs{out_bin, out_bin + ".ll", out_bin + ".s", out_bin + ".o"};
 }
 
-}  // namespace driver
-}  // namespace pycc
-
+}  // namespace pycc::driver

@@ -18,15 +18,14 @@
 #include <iostream>
 #include <string>
 
-namespace pycc {
-namespace driver {
+namespace pycc::driver {
 
-bool ParseCli(int argc, const char* const* argv, CliOptions& dst, std::ostream& err) {
+auto ParseCli(int argc, const char* const* argv, CliOptions& dst, std::ostream& err) -> bool {
   // Reset to defaults
   dst = CliOptions{};
 
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i] ? argv[i] : "";
+  for (int arg_index = 1; arg_index < argc; ++arg_index) {
+    const std::string arg = argv[arg_index] ? argv[arg_index] : "";
     if (arg == "-h" || arg == "--help") {
       dst.show_help = true;
       return true;
@@ -44,6 +43,30 @@ bool ParseCli(int argc, const char* const* argv, CliOptions& dst, std::ostream& 
         err << "pycc: error: unknown metrics format '" << val << "' (expected json or text)" << '\n';
         return false;
       }
+    } else if (arg == "-I") {
+      if (arg_index + 1 >= argc) {
+        err << "pycc: error: missing path after '-I'" << '\n';
+        return false;
+      }
+      dst.include_dirs.emplace_back(argv[++arg_index]);
+    } else if (arg.rfind("-I", 0) == 0 && arg.size() > 2) {
+      dst.include_dirs.emplace_back(arg.substr(2));
+    } else if (arg == "-L") {
+      if (arg_index + 1 >= argc) {
+        err << "pycc: error: missing path after '-L'" << '\n';
+        return false;
+      }
+      dst.link_dirs.emplace_back(argv[++arg_index]);
+    } else if (arg.rfind("-L", 0) == 0 && arg.size() > 2) {
+      dst.link_dirs.emplace_back(arg.substr(2));
+    } else if (arg == "-l") {
+      if (arg_index + 1 >= argc) {
+        err << "pycc: error: missing name after '-l'" << '\n';
+        return false;
+      }
+      dst.link_libs.emplace_back(argv[++arg_index]);
+    } else if (arg.rfind("-l", 0) == 0 && arg.size() > 2) {
+      dst.link_libs.emplace_back(arg.substr(2));
     } else if (arg == "-o") {
       if (i + 1 >= argc) {
         err << "pycc: error: missing filename after '-o'" << '\n';
@@ -56,8 +79,8 @@ bool ParseCli(int argc, const char* const* argv, CliOptions& dst, std::ostream& 
       dst.compile_only = true;  // Compile to object, do not link
     } else if (arg == "--") {
       // End of options; rest are positional inputs
-      for (++i; i < argc; ++i) {
-        dst.inputs.emplace_back(argv[i] ? argv[i] : "");
+      for (++arg_index; arg_index < argc; ++arg_index) {
+        dst.inputs.emplace_back(argv[arg_index] ? argv[arg_index] : "");
       }
       break;
     } else if (!arg.empty() && arg[0] == '-') {
@@ -80,5 +103,4 @@ bool ParseCli(int argc, const char* const* argv, CliOptions& dst, std::ostream& 
   return true;
 }
 
-}  // namespace driver
-}  // namespace pycc
+}  // namespace pycc::driver

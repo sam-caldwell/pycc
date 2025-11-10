@@ -12,10 +12,9 @@
 #include <ostream>
 #include <string>
 
-namespace pycc {
-namespace metrics {
+namespace pycc::metrics {
 
-static const char* PhaseName(Metrics::Phase p) {
+static const char* PhaseName(Metrics::Phase phase) {
   switch (p) {
     case Metrics::Phase::ReadFile: return "ReadFile";
     case Metrics::Phase::Parse: return "Parse";
@@ -54,14 +53,16 @@ static std::string JsonEscape(const std::string& s) {
 }
 
 void Metrics::PrintMetricsJson(const Registry& reg, std::ostream& out) {
-  if (!reg.enabled) return;
+  if (!reg.enabled) {
+    return;
+  }
   out << "{";
   // durations
   out << "\n  \"durations_ns\": [";
   for (size_t i = 0; i < reg.durations_ns.size(); ++i) {
     const auto& item = reg.durations_ns[i];
     out << (i ? ",\n    {" : "\n    {")
-        << "\"phase\": \"" << PhaseName(item.first) << "\", \"ns\": " << item.second << "}";
+        << R"("phase": ")" << PhaseName(item.first) << R"(", "ns": )" << item.second << "}";
   }
   out << "\n  ],";
   // AST

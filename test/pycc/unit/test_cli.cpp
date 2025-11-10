@@ -77,3 +77,23 @@ TEST(Cli, MetricsJson) {
   // Verify format JSON
   EXPECT_EQ(CliOptions::MetricsFormat::Json, opts.metrics_format);
 }
+
+TEST(Cli, IncludeDirShortAndSpaced) {
+  CliOptions opts; std::ostringstream err;
+  auto argv_vec = MakeArgv({"pycc", "-Iinc1", "-I", "inc2", "main.py"});
+  EXPECT_TRUE(ParseCli(static_cast<int>(argv_vec.size()), argv_vec.data(), opts, err)) << err.str();
+  ASSERT_EQ(2u, opts.include_dirs.size());
+  EXPECT_EQ("inc1", opts.include_dirs[0]);
+  EXPECT_EQ("inc2", opts.include_dirs[1]);
+}
+
+TEST(Cli, LinkDirAndLibs) {
+  CliOptions opts; std::ostringstream err;
+  auto argv_vec = MakeArgv({"pycc", "-Llibpath", "-l", "m", "-lssl", "main.py"});
+  EXPECT_TRUE(ParseCli(static_cast<int>(argv_vec.size()), argv_vec.data(), opts, err)) << err.str();
+  ASSERT_EQ(1u, opts.link_dirs.size());
+  EXPECT_EQ("libpath", opts.link_dirs[0]);
+  ASSERT_EQ(2u, opts.link_libs.size());
+  EXPECT_EQ("m", opts.link_libs[0]);
+  EXPECT_EQ("ssl", opts.link_libs[1]);
+}

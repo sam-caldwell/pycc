@@ -10,14 +10,11 @@
  */
 #include "pycc/stages/backend.h"
 
-namespace pycc {
-namespace stages {
+namespace pycc::stages {
 
-bool Backend::EmitAsmSide(const std::string& ir_path, const std::string& asm_out, std::string& err) {
-  metrics::Metrics::ScopedTimer t(metrics::Metrics::Phase::EmitASM);
+auto Backend::EmitAsmSide(const std::string& ir_path, const std::string& asm_out, std::string& err) -> bool {
+  metrics::Metrics::ScopedTimer timer(metrics::Metrics::Phase::EmitASM);
   return backend::ClangFromIR(ir_path, asm_out, backend::BuildKind::AssembleOnly, err);
 }
 
-}  // namespace stages
-}  // namespace pycc
-
+}  // namespace pycc::stages

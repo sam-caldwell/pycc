@@ -12,18 +12,17 @@
 
 #include "pycc/frontend/build_ast.h"
 
-namespace pycc {
-namespace stages {
+namespace pycc::stages {
 
-bool Frontend::Build(const std::string& src, std::unique_ptr<ast::Node>& out_root, std::string& err) {
-  metrics::Metrics::ScopedTimer t(metrics::Metrics::Phase::Parse);
-  if (!frontend::BuildMinimalReturnIntModule(src, out_root, err)) return false;
-  ast::ASTGeometry g;
-  ast::ComputeGeometry(*out_root, g);
-  metrics::Metrics::SetASTGeometry(g);
+auto Frontend::Build(const std::string& src, std::unique_ptr<ast::Node>& out_root, std::string& err) -> bool {
+  metrics::Metrics::ScopedTimer timer(metrics::Metrics::Phase::Parse);
+  if (!frontend::BuildMinimalReturnIntModule(src, out_root, err)) {
+    return false;
+  }
+  ast::ASTGeometry geometry{};
+  ast::ComputeGeometry(*out_root, geometry);
+  metrics::Metrics::SetASTGeometry(geometry);
   return true;
 }
 
-}  // namespace stages
-}  // namespace pycc
-
+}  // namespace pycc::stages
