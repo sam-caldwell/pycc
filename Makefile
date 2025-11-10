@@ -6,15 +6,13 @@ CC ?= clang
 CXX ?= clang++
 JOBS ?=
 
-.PHONY: presets configure confiugre build test clean lint demo
+.PHONY: presets configure build test clean lint demo
 
 presets:
 	@$(CMAKE) -P cmake/GeneratePresets.cmake
 
 configure: presets
 		@CC=$(CC) CXX=$(CXX) CMAKE_C_COMPILER=$(CC) CMAKE_CXX_COMPILER=$(CXX) $(CMAKE) --preset default
-
-confiugre: configure
 
 build:
 	@$(CMAKE) --build --preset default --parallel $(JOBS)
