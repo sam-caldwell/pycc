@@ -12,6 +12,7 @@
 #
 Checks: >
   bugprone-*,
+  -bugprone-easily-swappable-parameters,
   cert-msc51-cpp,
   cert-msc50-cpp,
   cert-err60-cpp,

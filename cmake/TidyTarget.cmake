@@ -19,7 +19,7 @@ set(TIDY_FILES
 
 list(REMOVE_DUPLICATES TIDY_FILES)
 
-set(TIDY_ARGS "--config-file=${TIDY_CONFIG_FILE}" "-p" "${CMAKE_BINARY_DIR}")
+set(TIDY_ARGS "--extra-arg-before=--driver-mode=c++" "--config-file=${TIDY_CONFIG_FILE}" "-p" "${CMAKE_BINARY_DIR}")
 if(DEFINED PYCC_TIDY_PLUGIN_PATH AND EXISTS "${PYCC_TIDY_PLUGIN_PATH}")
   list(INSERT TIDY_ARGS 0 "--load=${PYCC_TIDY_PLUGIN_PATH}")
 endif()
@@ -37,4 +37,3 @@ else()
     COMMAND ${CMAKE_COMMAND} -E echo "clang-tidy not found; skipping"
     COMMENT "clang-tidy not found; skipping")
 endif()
-
