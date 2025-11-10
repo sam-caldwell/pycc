@@ -1,0 +1,104 @@
+# OS-specific files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.pytype/
+.pyre/
+
+# Python environments and dotenv
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.env
+.env.*
+
+# Python packaging / distribution
+build/
+dist/
+eggs/
+.eggs/
+downloads/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+share/python-wheels/
+wheels/
+
+# Test and coverage artifacts
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+htmlcov/
+.hypothesis/
+pytestdebug.log
+
+# C/C++ and CMake build outputs
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+CMakeScripts/
+Testing/
+install_manifest.txt
+cmake_install.cmake
+CTestTestfile.cmake
+_deps/
+log/
+out/
+bin/
+
+# Compiled objects and libraries
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+*.out
+*.app
+*.i*
+*.s
+*.d
+*.pch
+*.out
+*.log
+
+# Coverage (C/C++)
+*.gcno
+*.gcda
+*.gcov
+
+# IDE / Editor settings
+.idea/
+.vscode/
+*.code-workspace
+.vs/
+*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Editor swap/backup files
+*.sw?
+*~
+*.orig
+*.rej
+
+# Sphinx docs build
+docs/_build/
