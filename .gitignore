@@ -78,8 +78,11 @@ CMakePresets.json
 *.s
 *.d
 *.pch
-*.out
 *.log
+*.ll
+*.bc
+*.asm
+*.profraw
 
 # Coverage (C/C++)
 *.gcno

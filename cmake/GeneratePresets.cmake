@@ -1,53 +1,6 @@
-# (c) 2025 Sam Caldwell. See LICENSE.txt
-# cmake/GeneratePresets.cmake
-# Generate a basic CMakePresets.json if one does not already exist.
+cmake_minimum_required(VERSION 3.25)
 
-get_filename_component(ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
-set(PRESETS_FILE "${ROOT}/CMakePresets.json")
+# Generate a simple CMakePresets.json with default and lint presets
+file(WRITE ${CMAKE_SOURCE_DIR}/CMakePresets.json "{\n  \"version\": 4,\n  \"cmakeMinimumRequired\": { \"major\": 3, \"minor\": 25, \"patch\": 0 },\n  \"configurePresets\": [\n    {\n      \"name\": \"default\",\n      \"displayName\": \"Default (Debug)\",\n      \"generator\": \"Ninja\",\n      \"binaryDir\": \"build\",\n      \"cacheVariables\": {\n        \"CMAKE_C_COMPILER\": \"${env.CC}\",\n        \"CMAKE_CXX_COMPILER\": \"${env.CXX}\",\n        \"CMAKE_BUILD_TYPE\": \"Debug\",\n        \"PYCC_EMIT_LLVM\": \"ON\",\n        \"PYCC_EMIT_ASM\": \"ON\"\n      }\n    },\n    {\n      \"name\": \"lint\",\n      \"displayName\": \"Lint\",\n      \"inherits\": \"default\",\n      \"binaryDir\": \"build-lint\",\n      \"cacheVariables\": {\n        \"PYCC_ENABLE_TIDY\": \"ON\",\n        \"PYCC_REQUIRE_TIDY_PLUGIN\": \"OFF\"\n      }\n    }\n  ],\n  \"buildPresets\": [\n    { \"name\": \"default\", \"configurePreset\": \"default\" },\n    { \"name\": \"lint\",    \"configurePreset\": \"lint\" }\n  ],\n  \"testPresets\": [\n    { \"name\": \"default\", \"configurePreset\": \"default\" }\n  ]\n}\n")
 
-if(EXISTS "${PRESETS_FILE}")
-  message(STATUS "CMakePresets.json already exists; skipping generation.")
-  return()
-endif()
-
-file(WRITE "${PRESETS_FILE}" [[
-{
-  "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
-  "configurePresets": [
-    {
-      "name": "default",
-      "displayName": "Default (Ninja)",
-      "generator": "Ninja",
-      "binaryDir": "build",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": { "type": "STRING", "value": "Debug" },
-        "CMAKE_C_COMPILER": { "type": "STRING", "value": "$env{CMAKE_C_COMPILER}" },
-        "CMAKE_CXX_COMPILER": { "type": "STRING", "value": "$env{CMAKE_CXX_COMPILER}" },
-        "PYCC_EMIT_LLVM": { "type": "BOOL", "value": true },
-        "PYCC_EMIT_ASM": { "type": "BOOL", "value": true }
-      }
-    },
-    {
-      "name": "lint",
-      "displayName": "Lint (Ninja)",
-      "inherits": ["default"],
-      "binaryDir": "build-lint",
-      "cacheVariables": {
-        "PYCC_BUILD_TIDY_PLUGINS": { "type": "BOOL", "value": true },
-        "CMAKE_EXPORT_COMPILE_COMMANDS": { "type": "BOOL", "value": true }
-      }
-    }
-  ],
-  "buildPresets": [
-    { "name": "default", "configurePreset": "default" },
-    { "name": "lint", "configurePreset": "lint" }
-  ],
-  "testPresets": [
-    { "name": "default", "configurePreset": "default", "output": { "outputOnFailure": true } },
-    { "name": "lint", "configurePreset": "lint", "output": { "outputOnFailure": true } }
-  ]
-}
-]])
-
-message(STATUS "Generated ${PRESETS_FILE}")
+message(STATUS "Generated CMakePresets.json")

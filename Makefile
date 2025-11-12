@@ -1,39 +1,62 @@
 SHELL := /bin/sh
 
-# Thin wrappers that defer to CMake presets
 CMAKE ?= cmake
 CC ?= clang
 CXX ?= clang++
 JOBS ?=
 
-.PHONY: presets configure build test clean lint demo
+# Timestamped build directories to keep repo root clean
+LAST_TS_FILE := build/.last_run_ts
+RUN_TS := $(shell mkdir -p build >/dev/null 2>&1; if [ -f $(LAST_TS_FILE) ]; then cat $(LAST_TS_FILE); else date +%Y%m%d-%H%M%S | tee $(LAST_TS_FILE); fi)
+OUTDIR := build/tmp-$(RUN_TS)
+OUTDIR_LINT := $(OUTDIR)-lint
+
+.PHONY: presets configure build build-inter test clean lint demo coverage
 
 presets:
 	@$(CMAKE) -P cmake/GeneratePresets.cmake
 
-configure: presets
-		@CC=$(CC) CXX=$(CXX) CMAKE_C_COMPILER=$(CC) CMAKE_CXX_COMPILER=$(CXX) $(CMAKE) --preset default
+configure:
+	@echo "[configure] Configuring in $(OUTDIR)"
+	@CC=$(CC) CXX=$(CXX) CMAKE_C_COMPILER=$(CC) CMAKE_CXX_COMPILER=$(CXX) $(CMAKE) -S . -B $(OUTDIR) -G Ninja
 
 build:
-	@$(CMAKE) --build --preset default --parallel $(JOBS)
+	@$(CMAKE) --build $(OUTDIR) --parallel $(JOBS)
 
 test:
-	@$(CMAKE) --build --preset default --parallel $(JOBS)
-	@ctest --preset default --output-on-failure
+	@$(CMAKE) --build $(OUTDIR) --parallel $(JOBS)
+	@ctest --test-dir $(OUTDIR) --output-on-failure
 
 clean:
-	@$(CMAKE) --build --preset default --target clean || true
-	@$(CMAKE) --build --preset lint --target clean || true
-	@$(CMAKE) -E rm -rf build build-lint
+	@rm -rf build build-lint cmake-build-*
+	@mkdir -p build
 
-lint: presets
-	@CC=$(CC) CXX=$(CXX) CMAKE_C_COMPILER=$(CC) CMAKE_CXX_COMPILER=$(CXX) $(CMAKE) --preset lint
-	@echo "[lint] build plugin first (if available)"
-	@$(CMAKE) --build --preset lint --target pycc_tidy --parallel $(JOBS) || echo "[lint] plugin not built (skipping)"
-	@echo "[lint] run custom tidy target (excludes build*/ and deps)"
-	@$(CMAKE) --build --preset lint --target tidy --clean-first --parallel $(JOBS)
+lint:
+	@echo "[lint] configuring lint tree at $(OUTDIR_LINT)"
+	@CC=$(CC) CXX=$(CXX) CMAKE_C_COMPILER=$(CC) CMAKE_CXX_COMPILER=$(CXX) $(CMAKE) -S . -B $(OUTDIR_LINT) -G Ninja -DPYCC_ENABLE_TIDY=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+	@echo "[build-inter] building clang-tidy plugins (pycc_tidy)"
+	@$(CMAKE) --build $(OUTDIR_LINT) --target pycc_tidy --parallel $(JOBS) || echo "[build-inter] plugin build skipped/unavailable"
+	@echo "[lint] run clang-tidy via CMake target"
+	@$(CMAKE) --build $(OUTDIR_LINT) --target tidy --parallel $(JOBS)
+
+build-inter:
+	@echo "[build-inter] deprecated; use 'make lint'"
 
 demo: build
-	@$(CMAKE) -E make_directory build/demos
-	@./build/pycc -o build/demos/minimal demos/minimal.py
-	@echo "[demo] Done: build/demos/minimal"
+	@$(CMAKE) -E make_directory $(OUTDIR)/demos
+	@$(OUTDIR)/pycc -o $(OUTDIR)/demos/minimal demos/minimal.py
+	@echo "[demo] Done: $(OUTDIR)/demos/minimal"
+
+coverage:
+	@echo "[coverage] Reconfiguring with coverage flags in $(OUTDIR)"
+	@$(CMAKE) -S . -B $(OUTDIR) -G Ninja -DPYCC_COVERAGE=ON
+	@$(CMAKE) --build $(OUTDIR) --parallel $(JOBS)
+	@echo "[coverage] Running tests with coverage runtime"
+	@LLVM_PROFILE_FILE=$(OUTDIR)/coverage-%p.profraw ctest --test-dir $(OUTDIR) --output-on-failure || true
+	@# If coverage files weren't produced (e.g., tests not run), run them now
+	@sh -c 'ls $(OUTDIR)/*.profraw >/dev/null 2>&1 || { \
+		echo "[coverage] No .profraw found; running tests now"; \
+		LLVM_PROFILE_FILE=$(OUTDIR)/coverage-%p.profraw ctest --test-dir $(OUTDIR) --output-on-failure || true; \
+	}'
+	@echo "[coverage] Generating report by phase"
+	@PYCC_BUILD_DIR=$(OUTDIR) python3 tools/coverage.py || echo "[coverage] skipped (requires llvm-cov/llvm-profdata)"

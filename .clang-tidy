@@ -29,7 +29,8 @@ Checks: >
   misc-coroutine-hostile-raii,
   misc-definitions-in-headers,
   misc-header-include-cycle,
-  misc-include-cleaner,
+  # Disable include-cleaner; heavy forward-decls and aliases confuse it
+  -misc-include-cleaner,
   misc-misleading-bidirectional,
   misc-misleading-identifier,
   misc-misplaced-const,

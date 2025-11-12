@@ -1,13 +1,19 @@
-# Source discovery
+include_guard(GLOBAL)
 
-# Gather all .cpp files under src/ recursively.
-file(GLOB_RECURSE PYCC_ALL_SOURCES CONFIGURE_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+file(GLOB_RECURSE PYCC_HEADERS CONFIGURE_DEPENDS
+  ${CMAKE_SOURCE_DIR}/include/**/*.h)
 
-# Separate the application entrypoint
-set(PYCC_MAIN ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
-list(FILTER PYCC_ALL_SOURCES EXCLUDE REGEX ".*/src/main\\.cpp$")
-# Exclude clang-tidy plugin sources from the driver library; they are built separately.
-list(FILTER PYCC_ALL_SOURCES EXCLUDE REGEX ".*/src/clang-tidy/.*")
+file(GLOB_RECURSE PYCC_SOURCES CONFIGURE_DEPENDS
+  ${CMAKE_SOURCE_DIR}/src/**/*.cpp)
 
-set(PYCC_DRIVER_SOURCES ${PYCC_ALL_SOURCES})
+# Exclude clang-tidy plugin sources from the main compiler build
+foreach(SRC ${PYCC_SOURCES})
+  string(FIND "${SRC}" "/src/clang-tidy/" POS)
+  if(NOT POS EQUAL -1)
+    list(REMOVE_ITEM PYCC_SOURCES ${SRC})
+  endif()
+endforeach()
+
+# Separate CLI main from core for re-use in tests
+set(PYCC_MAIN ${CMAKE_SOURCE_DIR}/src/cli/Main.cpp)
+list(REMOVE_ITEM PYCC_SOURCES ${PYCC_MAIN})

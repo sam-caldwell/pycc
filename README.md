@@ -81,6 +81,12 @@ pycc my_module.py --target=x86_64-unknown-linux-gnu --mcpu=native
 - Testability: Components are decoupled and unit-testable. Integration and e2e
   tests exercise end-to-end flows.
 
+- AST polymorphism: The AST now supports polymorphic traversal via
+  `ast::Node::accept(ast::VisitorBase&)` and concrete visitors. This replaces
+  ad hoc `if`/`switch` branches across Sema, Codegen, and geometry with a
+  single central dispatch and specialized visitors, reducing cognitive
+  complexity and making extensions safer.
+
 
 ## CLI Usage
 
@@ -130,6 +136,8 @@ pycc --help
 - Flag: `--metrics` prints a human-friendly summary of phase durations, AST geometry
   (node count and maximum depth), and a list of optimization or transformation
   events performed during compilation.
+- Flag: `--metrics-json` prints the same core metrics as structured JSON
+  for machine consumption and logging systems.
 - Intended use: performance profiling and visibility into the compiler pipeline.
 
 Example output:

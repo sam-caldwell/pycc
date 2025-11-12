@@ -1,0 +1,215 @@
+/***
+ * Name: pycc::Compiler::run
+ * Purpose: Execute Milestone 1 pipeline end-to-end.
+ */
+#include "compiler/Compiler.h"
+#include "ast/GeometrySummary.h"
+#include "ast/Module.h"
+#include "cli/ColorMode.h"
+#include "cli/Options.h"
+#include "codegen/Codegen.h"
+#include "lexer/Lexer.h"
+#include "observability/AstPrinter.h"
+#include "observability/Metrics.h"
+#include "optimizer/AlgebraicSimplify.h"
+#include "optimizer/ConstantFold.h"
+#include "optimizer/DCE.h"
+#include "optimizer/Optimizer.h"
+#include "parser/Parser.h"
+#include "sema/Sema.h"
+
+#include <chrono>
+#include <cstdint>
+#include <ctime>
+#include <exception>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <stdio.h>
+#include <string>
+#include <system_error>
+#include <unistd.h>
+#include <vector>
+
+namespace pycc {
+
+// removed in favor of streaming lexer input
+
+int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-size,readability-function-cognitive-complexity)
+  if (opts.inputs.empty()) {
+    std::cerr << "pycc: no input files provided\n";
+    return 2;
+  }
+  const std::string input = opts.inputs.front();
+
+  obs::Metrics metrics;
+  metrics.start("Lex");
+  lex::Lexer lexer;
+  lexer.pushFile(input);
+  metrics.stop("Lex");
+
+  // Optional log directory creation
+  bool logsEnabled = true;
+  const std::string logDir = opts.logPath.empty() ? std::string(".") : opts.logPath;
+  if (!logDir.empty()) {
+    std::error_code errCode;
+    namespace fs = std::filesystem;
+    if (!fs::exists(logDir, errCode)) {
+      if (!fs::create_directories(logDir, errCode) && !fs::exists(logDir)) {
+        std::cerr << "pycc: failed to create log directory '" << logDir << "': " << errCode.message() << "\n";
+        logsEnabled = false;
+      }
+    }
+  }
+
+  std::unique_ptr<ast::Module> mod;
+  try {
+    metrics.start("Parse");
+    parse::Parser parser(lexer);
+    mod = parser.parseModule();
+    metrics.stop("Parse");
+  } catch (const std::exception& ex) {
+    std::cerr << "pycc: parse error: " << ex.what() << "\n";
+    return 1;
+  }
+
+  auto geom = ast::ComputeGeometry(*mod);
+  metrics.setAstGeometry({geom.nodes, geom.maxDepth});
+
+  // Sema
+  metrics.start("Sema");
+  sema::Sema sema;
+  std::vector<sema::Diagnostic> diags;
+  const bool semaOk = sema.check(*mod, diags);
+  metrics.stop("Sema");
+  if (!semaOk) {
+    bool color = false;
+    if (opts.color == cli::ColorMode::Always) { color = true; }
+    else if (opts.color == cli::ColorMode::Never) { color = false; }
+    else {
+      constexpr int kStderrFd = 2;
+      color = (isatty(kStderrFd) != 0) || use_env_color();
+    }
+    for (const auto& diag : diags) { print_error(diag, color, opts.diagContext); }
+    return 1;
+  }
+
+  // Timestamp prefix for logs
+  auto tsNow = std::chrono::system_clock::now();
+  const std::time_t tsTime = std::chrono::system_clock::to_time_t(tsNow);
+  std::tm tmBuf{};
+#ifdef _WIN32
+  localtime_s(&tmBuf, &tsTime);
+#else
+  localtime_r(&tsTime, &tmBuf);
+#endif
+  std::ostringstream timestampStream;
+  timestampStream << std::put_time(&tmBuf, "%Y%m%d-%H%M%S");
+  const std::string tsPrefix = timestampStream.str() + "-";
+
+  // Optional AST logging (before optimization)
+  if (opts.astLog == cli::AstLogMode::Before || opts.astLog == cli::AstLogMode::Both) {
+    obs::AstPrinter printer;
+    const auto out = printer.print(*mod);
+    std::cout << "== AST (before opt) ==\n" << out;
+    if (logsEnabled && opts.logAst) {
+      std::ofstream beforeAst(logDir + "/" + tsPrefix + "ast.before.ast.log");
+      beforeAst << out;
+    }
+  }
+
+  // Optional optimizer analysis pass (non-mutating; visitor-based)
+  metrics.start("OptimizeAST");
+  const opt::Optimizer optimizer;
+  (void)optimizer.analyze(*mod);
+  metrics.stop("OptimizeAST");
+
+  if (opts.optConstFold) {
+    metrics.start("ConstFold");
+    opt::ConstantFold constFold;
+    auto folds = constFold.run(*mod);
+    metrics.setOptimizerStat("folds", static_cast<uint64_t>(folds));
+    for (const auto& [key, count] : constFold.stats()) { metrics.incOptimizerBreakdown("constfold", key, count); }
+    metrics.stop("ConstFold");
+  }
+
+  if (opts.optAlgebraic) {
+    metrics.start("Algebraic");
+    opt::AlgebraicSimplify algebraic;
+    auto rewrites = algebraic.run(*mod);
+    metrics.setOptimizerStat("algebraic", static_cast<uint64_t>(rewrites));
+    for (const auto& [key, count] : algebraic.stats()) { metrics.incOptimizerBreakdown("algebraic", key, count); }
+    metrics.stop("Algebraic");
+  }
+
+  if (opts.optDCE) {
+    metrics.start("DCE");
+    opt::DCE dce;
+    auto removed = dce.run(*mod);
+    metrics.setOptimizerStat("dce_removed", static_cast<uint64_t>(removed));
+    for (const auto& [key, count] : dce.stats()) { metrics.incOptimizerBreakdown("dce", key, count); }
+    metrics.stop("DCE");
+  }
+
+  // Optional AST logging (after optimization)
+  if (opts.astLog == cli::AstLogMode::After || opts.astLog == cli::AstLogMode::Both) {
+    obs::AstPrinter printer2;
+    const auto out = printer2.print(*mod);
+    std::cout << "== AST (after opt) ==\n" << out;
+    if (logsEnabled && opts.logAst) {
+      std::ofstream afterAst(logDir + "/" + tsPrefix + "ast.after.ast.log");
+      afterAst << out;
+    }
+  }
+
+  metrics.start("EmitIR");
+  const codegen::Codegen codegenDriver(true, true);
+  codegen::EmitResult res;
+  const std::string outBase = opts.outputFile;
+  const std::string err = codegenDriver.emit(*mod, outBase, opts.emitAssemblyOnly, opts.compileOnly, res);
+  metrics.stop("EmitIR");
+  if (!err.empty()) {
+    std::cerr << "pycc: codegen error: " << err << "\n";
+    return 1;
+  }
+
+  if (logsEnabled) {
+    // Lexer log
+    if (opts.logLexer) {
+      std::ofstream lexFile(logDir + "/" + tsPrefix + "lexer.lex.log");
+      for (const auto& tok : lexer.tokens()) {
+        lexFile << tok.file << ":" << tok.line << ":" << tok.col << " " << to_string(tok.kind) << " " << tok.text << "\n";
+      }
+    }
+    // Codegen log (IR)
+    if (opts.logCodegen) {
+      try {
+        auto irText = codegen::Codegen::generateIR(*mod);
+        std::ofstream codegenFile(logDir + "/" + tsPrefix + "codegen.codegen.log");
+        codegenFile << irText;
+      } catch (...) { /* no-op: best-effort IR log */ } // NOLINT(bugprone-empty-catch)
+    }
+  }
+
+  if (opts.metricsJson) { std::cout << metrics.summaryJson(); }
+  else if (opts.metrics) { std::cout << metrics.summaryText(); std::cout << metrics.summaryJson(); }
+
+  // Always write metrics JSON to log directory when any metrics requested
+  if (opts.metrics || opts.metricsJson) {
+    const auto jsonSummary = metrics.summaryJson();
+    if (logsEnabled) {
+      std::ofstream metricsFile(logDir + "/" + tsPrefix + "metrics.json");
+      metricsFile << jsonSummary;
+    } else {
+      // Fallback to current dir
+      std::ofstream metricsFile(std::string("./" + tsPrefix + std::string("metrics.json")));
+      metricsFile << jsonSummary;
+    }
+  }
+  return 0;
+}
+
+} // namespace pycc
