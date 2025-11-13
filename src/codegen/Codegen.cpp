@@ -143,6 +143,27 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     sigs[funcSig->name] = std::move(sig);
   }
 
+  // Lightweight interprocedural summary: functions that consistently return the same parameter index
+  std::unordered_map<std::string, int> retParamIdxs; // func -> param index
+  for (const auto& f : mod.functions) {
+    int retIdx = -1; bool hasReturn = false; bool consistent = true;
+    for (const auto& st : f->body) {
+      if (!consistent) break;
+      if (st->kind == ast::NodeKind::ReturnStmt) {
+        hasReturn = true;
+        const auto* r = dynamic_cast<const ast::ReturnStmt*>(st.get());
+        if (!(r && r->value && r->value->kind == ast::NodeKind::Name)) { consistent = false; break; }
+        const auto* n = dynamic_cast<const ast::Name*>(r->value.get());
+        if (!n) { consistent = false; break; }
+        int idxFound = -1;
+        for (size_t i = 0; i < f->params.size(); ++i) { if (f->params[i].name == n->id) { idxFound = static_cast<int>(i); break; } }
+        if (idxFound < 0) { consistent = false; break; }
+        if (retIdx < 0) retIdx = idxFound; else if (retIdx != idxFound) { consistent = false; break; }
+      }
+    }
+    if (hasReturn && consistent && retIdx >= 0) { retParamIdxs[f->name] = retIdx; }
+  }
+
   // Collect string literals to emit as global constants
   auto hash64 = [](const std::string& str) {
     constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ULL;
@@ -318,12 +339,13 @@ std::string Codegen::generateIR(const ast::Module& mod) {
 
     // NOLINTBEGIN
     struct ExpressionLowerer : public ast::VisitorBase {
-      ExpressionLowerer(std::ostringstream& ir_, int& temp_, std::unordered_map<std::string, Slot>& slots_, const std::unordered_map<std::string, Sig>& sigs_)
-        : ir(ir_), temp(temp_), slots(slots_), sigs(sigs_) {}
+      ExpressionLowerer(std::ostringstream& ir_, int& temp_, std::unordered_map<std::string, Slot>& slots_, const std::unordered_map<std::string, Sig>& sigs_, const std::unordered_map<std::string, int>& retParamIdxs_)
+        : ir(ir_), temp(temp_), slots(slots_), sigs(sigs_), retParamIdxs(retParamIdxs_) {}
       std::ostringstream& ir; // NOLINT
       int& temp; // NOLINT
       std::unordered_map<std::string, Slot>& slots; // NOLINT
       const std::unordered_map<std::string, Sig>& sigs; // NOLINT
+      const std::unordered_map<std::string, int>& retParamIdxs; // NOLINT
       Value out{ { }, ValKind::I32 };
 
       std::string fneg(const std::string& v) {
@@ -487,8 +509,25 @@ std::string Codegen::generateIR(const ast::Module& mod) {
                 auto v = run(*arg0);
                 if (v.k != ValKind::Ptr) throw std::runtime_error("len(call): callee did not return pointer");
                 std::ostringstream r64, r32; r64 << "%t" << temp++; r32 << "%t" << temp++;
-                auto itSig = sigs.find(cname->id);
-                const bool isList = (itSig != sigs.end() && itSig->second.ret == ast::TypeKind::List);
+                bool isList = false;
+                // First, try interprocedural param-forwarding tag inference
+                auto itRet = retParamIdxs.find(cname->id);
+                if (itRet != retParamIdxs.end()) {
+                  int rp = itRet->second;
+                  if (rp >= 0 && static_cast<size_t>(rp) < c->args.size()) {
+                    const auto* a = c->args[rp].get();
+                    if (a && a->kind == ast::NodeKind::Name) {
+                      const auto* an = static_cast<const ast::Name*>(a);
+                      auto itn = slots.find(an->id);
+                      if (itn != slots.end()) { isList = (itn->second.tag == PtrTag::List); }
+                    }
+                  }
+                }
+                // Fallback to return-type based choice
+                if (!isList) {
+                  auto itSig = sigs.find(cname->id);
+                  if (itSig != sigs.end()) { isList = (itSig->second.ret == ast::TypeKind::List); }
+                }
                 if (isList) {
                   ir << "  " << r64.str() << " = call i64 @pycc_list_len(ptr " << v.s << ")\n";
                 } else {
@@ -741,7 +780,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
 
     auto evalExpr = [&](const ast::Expr* e) -> Value {
       if (!e) throw std::runtime_error("null expr");
-      ExpressionLowerer V{irStream, temp, slots, sigs};
+      ExpressionLowerer V{irStream, temp, slots, sigs, retParamIdxs};
       return V.run(*e);
     };
 
@@ -749,8 +788,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     int ifCounter = 0;
 
     struct StmtEmitter : public ast::VisitorBase {
-      StmtEmitter(std::ostringstream& ir_, int& temp_, int& ifCounter_, std::unordered_map<std::string, Slot>& slots_, const ast::FunctionDef& fn_, std::function<Value(const ast::Expr*)> eval_, std::string& retStructTy_, std::vector<std::string>& tupleElemTys_, const std::unordered_map<std::string, Sig>& sigs_)
-        : ir(ir_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_), eval(std::move(eval_)), retStructTyRef(retStructTy_), tupleElemTysRef(tupleElemTys_), sigs(sigs_) {}
+      StmtEmitter(std::ostringstream& ir_, int& temp_, int& ifCounter_, std::unordered_map<std::string, Slot>& slots_, const ast::FunctionDef& fn_, std::function<Value(const ast::Expr*)> eval_, std::string& retStructTy_, std::vector<std::string>& tupleElemTys_, const std::unordered_map<std::string, Sig>& sigs_, const std::unordered_map<std::string, int>& retParamIdxs_)
+        : ir(ir_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_), eval(std::move(eval_)), retStructTyRef(retStructTy_), tupleElemTysRef(tupleElemTys_), sigs(sigs_), retParamIdxs(retParamIdxs_) {}
       std::ostringstream& ir;
       int& temp;
       int& ifCounter;
@@ -761,6 +800,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       std::string& retStructTyRef;
       std::vector<std::string>& tupleElemTysRef;
       const std::unordered_map<std::string, Sig>& sigs;
+      const std::unordered_map<std::string, int>& retParamIdxs;
 
       void visit(const ast::AssignStmt& asg) override {
         auto val = eval(asg.value.get());
@@ -806,6 +846,19 @@ std::string Codegen::generateIR(const ast::Module& mod) {
                   if (itSig->second.ret == ast::TypeKind::Str) { it->second.tag = PtrTag::Str; }
                   else if (itSig->second.ret == ast::TypeKind::List) { it->second.tag = PtrTag::List; }
                   else if (itSig->second.ret == ast::TypeKind::Dict) { it->second.tag = PtrTag::Object; }
+                }
+                // Interprocedural propagation: if callee forwards one of its params, take tag from that arg
+                auto itRet = retParamIdxs.find(cname->id);
+                if (itRet != retParamIdxs.end()) {
+                  int rp = itRet->second;
+                  if (rp >= 0 && static_cast<size_t>(rp) < c->args.size()) {
+                    const auto* a = c->args[rp].get();
+                    if (a && a->kind == ast::NodeKind::Name) {
+                      const auto* an = static_cast<const ast::Name*>(a);
+                      auto itn = slots.find(an->id);
+                      if (itn != slots.end()) { it->second.tag = itn->second.tag; }
+                    }
+                  }
                 }
               }
             }
@@ -895,7 +948,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       bool emitStmtList(const std::vector<std::unique_ptr<ast::Stmt>>& stmts) {
         bool brReturned = false;
         for (const auto& st : stmts) {
-          StmtEmitter child{ir, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef, sigs};
+          StmtEmitter child{ir, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef, sigs, retParamIdxs};
           st->accept(child);
           if (child.returned) brReturned = true;
         }
@@ -903,7 +956,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
     };
 
-    StmtEmitter root{irStream, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs};
+    StmtEmitter root{irStream, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs, retParamIdxs};
     returned = root.emitStmtList(func->body);
     if (!returned) {
       // default return based on function type

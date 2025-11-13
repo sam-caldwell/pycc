@@ -5,6 +5,7 @@
 #include "sema/Sema.h"
 #include "sema/TypeEnv.h"
 #include <sstream>
+#include <functional>
 
 #include "ast/AssignStmt.h"
 #include "ast/Binary.h"
@@ -50,10 +51,13 @@ static void addDiag(std::vector<Diagnostic>& diags, const std::string& msg, cons
 }
 
 struct ExpressionTyper : public ast::VisitorBase {
-  ExpressionTyper(const TypeEnv& env_, const std::unordered_map<std::string, Sig>& sigs_, std::vector<Diagnostic>& diags_)
-    : env(&env_), sigs(&sigs_), diags(&diags_) {}
+  // retParamIdxs: mapping of function name -> parameter index when return is trivially forwarded
+  ExpressionTyper(const TypeEnv& env_, const std::unordered_map<std::string, Sig>& sigs_,
+                  const std::unordered_map<std::string, int>& retParamIdxs_, std::vector<Diagnostic>& diags_)
+    : env(&env_), sigs(&sigs_), retParamIdxs(&retParamIdxs_), diags(&diags_) {}
   const TypeEnv* env{nullptr};
   const std::unordered_map<std::string, Sig>* sigs{nullptr};
+  const std::unordered_map<std::string, int>* retParamIdxs{nullptr};
   std::vector<Diagnostic>* diags{nullptr};
   Type out{Type::NoneType};
   bool ok{true};
@@ -97,7 +101,7 @@ struct ExpressionTyper : public ast::VisitorBase {
     out = Type::NoneType;
     for (const auto& f : obj.fields) {
       if (f) {
-        ExpressionTyper sub{*env, *sigs, *diags};
+        ExpressionTyper sub{*env, *sigs, *retParamIdxs, *diags};
         f->accept(sub);
         if (!sub.ok) { ok = false; return; }
       }
@@ -116,7 +120,7 @@ struct ExpressionTyper : public ast::VisitorBase {
   void visit(const ast::Unary& unaryNode) override {
     ast::Expr* operandExpr = unaryNode.operand.get();
     if (operandExpr == nullptr) { addDiag(*diags, "null operand", &unaryNode); ok = false; return; }
-    ExpressionTyper sub{*env, *sigs, *diags};
+    ExpressionTyper sub{*env, *sigs, *retParamIdxs, *diags};
     operandExpr->accept(sub); if (!sub.ok) { ok = false; return; }
     if (unaryNode.op == ast::UnaryOperator::Neg) {
       if (!typeIsInt(sub.out)) { addDiag(*diags, "unary '-' requires int", &unaryNode); ok = false; return; }
@@ -132,8 +136,8 @@ struct ExpressionTyper : public ast::VisitorBase {
   }
   // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
   void visit(const ast::Binary& binaryNode) override {
-    ExpressionTyper lhsTyper{*env, *sigs, *diags};
-    ExpressionTyper rhsTyper{*env, *sigs, *diags};
+    ExpressionTyper lhsTyper{*env, *sigs, *retParamIdxs, *diags};
+    ExpressionTyper rhsTyper{*env, *sigs, *retParamIdxs, *diags};
     binaryNode.lhs->accept(lhsTyper);
     if (!lhsTyper.ok) { ok = false; return; }
     binaryNode.rhs->accept(rhsTyper);
@@ -200,7 +204,7 @@ struct ExpressionTyper : public ast::VisitorBase {
   void visit(const ast::TupleLiteral& tupleLiteral) override {
     // Infer element types; mark this as a tuple
     for (const auto& element : tupleLiteral.elements) {
-      ExpressionTyper elemTyper{*env, *sigs, *diags};
+      ExpressionTyper elemTyper{*env, *sigs, *retParamIdxs, *diags};
       element->accept(elemTyper);
       if (!elemTyper.ok) { ok = false; return; }
     }
@@ -219,7 +223,7 @@ struct ExpressionTyper : public ast::VisitorBase {
   }
   void visit(const ast::ListLiteral& listLiteral) override {
     for (const auto& element : listLiteral.elements) {
-      ExpressionTyper elemTyper{*env, *sigs, *diags};
+      ExpressionTyper elemTyper{*env, *sigs, *retParamIdxs, *diags};
       element->accept(elemTyper);
       if (!elemTyper.ok) { ok = false; return; }
     }
@@ -243,7 +247,7 @@ struct ExpressionTyper : public ast::VisitorBase {
     // Builtins: len(x) -> int; isinstance(x, T) -> bool
     if (nameNode->id == "len") {
       if (callNode.args.size() != 1) { addDiag(*diags, "len() takes exactly one argument", &callNode); ok = false; return; }
-      ExpressionTyper argTyper{*env, *sigs, *diags}; callNode.args[0]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
+      ExpressionTyper argTyper{*env, *sigs, *retParamIdxs, *diags}; callNode.args[0]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
       // Allow len of tuple/list/str; others will be flagged later if desired
       out = Type::Int; const_cast<ast::Call&>(callNode).setType(out); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       return;
@@ -251,7 +255,7 @@ struct ExpressionTyper : public ast::VisitorBase {
     if (nameNode->id == "obj_get") {
       if (callNode.args.size() != 2) { addDiag(*diags, "obj_get() takes two arguments", &callNode); ok = false; return; }
       // First arg is an object pointer (opaque), second must be int index
-      ExpressionTyper idxTyper{*env, *sigs, *diags}; callNode.args[1]->accept(idxTyper); if (!idxTyper.ok) { ok = false; return; }
+      ExpressionTyper idxTyper{*env, *sigs, *retParamIdxs, *diags}; callNode.args[1]->accept(idxTyper); if (!idxTyper.ok) { ok = false; return; }
       if (!typeIsInt(idxTyper.out)) { addDiag(*diags, "obj_get index must be int", callNode.args[1].get()); ok = false; return; }
       out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); // treat as string pointer result
       return;
@@ -267,11 +271,23 @@ struct ExpressionTyper : public ast::VisitorBase {
     const auto& sig = sigIt->second;
     if (sig.params.size() != callNode.args.size()) { addDiag(*diags, std::string("arity mismatch calling function: ") + nameNode->id, &callNode); ok = false; return; }
     for (size_t i = 0; i < callNode.args.size(); ++i) {
-      ExpressionTyper argTyper{*env, *sigs, *diags}; callNode.args[i]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
+      ExpressionTyper argTyper{*env, *sigs, *retParamIdxs, *diags}; callNode.args[i]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
       if (argTyper.out != sig.params[i]) { addDiag(*diags, "call argument type mismatch", callNode.args[i].get()); ok = false; return; }
     }
-    out = sig.ret; const_cast<ast::Call&>(callNode).setType(out); // NOLINT(cppcoreguidelines-pro-type-const-cast)
-    // do not set canonical for calls (unknown side-effects)
+    out = sig.ret; auto& mutableCall = const_cast<ast::Call&>(callNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
+    mutableCall.setType(out);
+    // Interprocedural canonical propagation for trivial forwarders: f(x, ...) -> x
+    if (callNode.callee && callNode.callee->kind == ast::NodeKind::Name) {
+      const auto* cname = static_cast<const ast::Name*>(callNode.callee.get());
+      auto it = retParamIdxs->find(cname->id);
+      if (it != retParamIdxs->end()) {
+        const int idx = it->second;
+        if (idx >= 0 && static_cast<size_t>(idx) < callNode.args.size()) {
+          const auto& arg = callNode.args[idx];
+          if (arg && arg->canonical()) { mutableCall.setCanonicalKey(*arg->canonical()); }
+        }
+      }
+    }
   }
   void visit(const ast::ReturnStmt& returnStmt) override { addDiag(*diags, "internal error: return is not expression", &returnStmt); ok = false; }
   void visit(const ast::AssignStmt& assignStmt) override { addDiag(*diags, "internal error: assign is not expression", &assignStmt); ok = false; }
@@ -283,10 +299,11 @@ struct ExpressionTyper : public ast::VisitorBase {
 static bool inferExprType(const ast::Expr* expr,
                           const TypeEnv& env,
                           const std::unordered_map<std::string, Sig>& sigs,
+                          const std::unordered_map<std::string, int>& retParamIdxs,
                           Type& outType,
                           std::vector<Diagnostic>& diags) {
   if (expr == nullptr) { addDiag(diags, "null expression", nullptr); return false; }
-  ExpressionTyper exprTyper{env, sigs, diags};
+  ExpressionTyper exprTyper{env, sigs, retParamIdxs, diags};
   expr->accept(exprTyper);
   if (!exprTyper.ok) { return false; }
   outType = exprTyper.out;
@@ -302,6 +319,34 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
     for (const auto& p : fn->params) s.params.push_back(p.type);
     sigs[fn->name] = std::move(s);
   }
+  // Build a trivial interprocedural summary: which function consistently returns a specific parameter index
+  std::unordered_map<std::string, int> retParamIdxs; // func -> param index
+  for (const auto& fn : mod.functions) {
+    int retIdx = -1; bool hasReturn = false; bool consistent = true;
+    std::function<void(const ast::Stmt&)> walk;
+    walk = [&](const ast::Stmt& st) {
+      if (!consistent) return;
+      if (st.kind == ast::NodeKind::ReturnStmt) {
+        hasReturn = true;
+        const auto* r = static_cast<const ast::ReturnStmt*>(&st);
+        if (!(r->value && r->value->kind == ast::NodeKind::Name)) { consistent = false; return; }
+        const auto* n = static_cast<const ast::Name*>(r->value.get());
+        int idxFound = -1;
+        for (size_t i = 0; i < fn->params.size(); ++i) { if (fn->params[i].name == n->id) { idxFound = static_cast<int>(i); break; } }
+        if (idxFound < 0) { consistent = false; return; }
+        if (retIdx < 0) retIdx = idxFound; else if (retIdx != idxFound) { consistent = false; }
+        return;
+      }
+      if (st.kind == ast::NodeKind::IfStmt) {
+        const auto* iff = static_cast<const ast::IfStmt*>(&st);
+        for (const auto& s2 : iff->thenBody) { if (s2) walk(*s2); }
+        for (const auto& s3 : iff->elseBody) { if (s3) walk(*s3); }
+        return;
+      }
+    };
+    for (const auto& st : fn->body) { if (st) walk(*st); }
+    if (hasReturn && consistent && retIdx >= 0) { retParamIdxs[fn->name] = retIdx; }
+  }
 
   for (const auto& fn : mod.functions) {
     if (!(typeIsInt(fn->returnType) || typeIsBool(fn->returnType) || typeIsFloat(fn->returnType) || typeIsStr(fn->returnType) || fn->returnType == Type::Tuple)) { Diagnostic d; d.message = "only int/bool/float/str/tuple returns supported"; diags.push_back(std::move(d)); return false; }
@@ -311,17 +356,17 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
       env.define(p.name, p.type, {fn->name, 0, 0});
     }
     struct StmtChecker : public ast::VisitorBase {
-      StmtChecker(const ast::FunctionDef& fn_, const std::unordered_map<std::string, Sig>& sigs_, TypeEnv& env_, std::vector<Diagnostic>& diags_)
-        : fn(fn_), sigs(sigs_), env(env_), diags(diags_) {}
+      StmtChecker(const ast::FunctionDef& fn_, const std::unordered_map<std::string, Sig>& sigs_,
+                  const std::unordered_map<std::string, int>& retParamIdxs_, TypeEnv& env_, std::vector<Diagnostic>& diags_)
+        : fn(fn_), sigs(sigs_), retParamIdxs(retParamIdxs_), env(env_), diags(diags_) {}
       const ast::FunctionDef& fn;
       const std::unordered_map<std::string, Sig>& sigs;
+      const std::unordered_map<std::string, int>& retParamIdxs;
       TypeEnv& env;
       std::vector<Diagnostic>& diags;
       bool ok{true};
 
-      bool infer(const ast::Expr* e, Type& out) {
-        return inferExprType(e, env, sigs, out, diags);
-      }
+      bool infer(const ast::Expr* e, Type& out) { return inferExprType(e, env, sigs, retParamIdxs, out, diags); }
 
       void visit(const ast::AssignStmt& a) override {
         Type t{}; if (!infer(a.value.get(), t)) { ok = false; return; }
@@ -421,7 +466,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
       void visit(const ast::NoneLiteral&) override {}
     };
 
-    StmtChecker C{*fn, sigs, env, diags};
+    StmtChecker C{*fn, sigs, retParamIdxs, env, diags};
     for (const auto& st : fn->body) {
       st->accept(C);
       if (!C.ok) return false;

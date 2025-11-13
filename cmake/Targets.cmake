@@ -13,6 +13,11 @@ add_executable(pycc ${PYCC_MAIN})
 target_link_libraries(pycc PRIVATE pycc_core)
 target_include_directories(pycc PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
+# Toggle IR emission style for GEP based on opaque-pointer preference
+if(PYCC_USE_OPAQUE_PTR_GEP)
+  target_compile_definitions(pycc_core PRIVATE PYCC_USE_OPAQUE_PTR_GEP)
+endif()
+
 if(PYCC_ENABLE_TIDY)
   find_program(CLANG_TIDY_EXE NAMES clang-tidy)
   if(CLANG_TIDY_EXE)

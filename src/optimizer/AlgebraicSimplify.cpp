@@ -86,6 +86,16 @@ static bool simplifyExpr(std::unique_ptr<Expr>& expr, size_t& changes, std::unor
             default: break;
           }
         }
+        // Generic canonical equality: x - x -> 0 for typed int/float even when no literals are present
+        if (bin->op == BinaryOperator::Sub) {
+          if (bin->lhs && bin->rhs && bin->lhs->canonical() && bin->rhs->canonical() && *bin->lhs->canonical() == *bin->rhs->canonical()) {
+            auto leftType = bin->lhs->type(); auto rightType = bin->rhs->type();
+            if (leftType && rightType && *leftType == *rightType) {
+              if (*leftType == TypeKind::Int) { expr = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_int"]++; return true; }
+              if (*leftType == TypeKind::Float) { expr = std::make_unique<FloatLiteral>(0.0); ++changes; stats["algebraic_float"]++; return true; }
+            }
+          }
+        }
       }
       return false;
     }
