@@ -3,97 +3,124 @@
  * Purpose: Minimal GCC-like CLI argument parser for pycc.
  */
 #include "cli/Options.h"
+#include <cstddef>
 #include <iostream>
+#include <string_view>
 
 namespace pycc::cli {
 
-static bool isFlag(const char* a, const char* s) {
-  return std::strcmp(a, s) == 0;
-}
+static bool isFlag(std::string_view arg, std::string_view flag) { return arg == flag; }
 
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity,misc-use-internal-linkage)
 bool ParseArgs(const int argc, char** argv, Options& out) {
   for (int i = 1; i < argc; ++i) {
-    const char* a = argv[i];
-    if (isFlag(a, "-h") || isFlag(a, "--help")) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    const std::string_view arg{argv[i]};
+    if (isFlag(arg, "-h") || isFlag(arg, "--help")) {
       out.showHelp = true;
       continue;
     }
-    if (isFlag(a, "--")) {
+    if (isFlag(arg, "--")) {
       // Treat everything after as positional
-      for (int j = i + 1; j < argc; ++j) out.inputs.emplace_back(argv[j]);
+      for (int j = i + 1; j < argc; ++j) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        out.inputs.emplace_back(argv[j]);
+      }
       break;
     }
-    if (isFlag(a, "-o")) {
-      if (i + 1 >= argc) return false;
+    if (isFlag(arg, "-o")) {
+      if (i + 1 >= argc) { return false; }
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
       out.outputFile = argv[++i];
       continue;
     }
-    if (isFlag(a, "-S")) {
-      out.emitAssemblyOnly = true; continue;
+    if (isFlag(arg, "-S")) {
+      out.emitAssemblyOnly = true;
+      continue;
     }
-    if (isFlag(a, "-c")) {
-      out.compileOnly = true; continue;
+    if (isFlag(arg, "-c")) {
+      out.compileOnly = true;
+      continue;
     }
-    if (isFlag(a, "--metrics")) {
-      out.metrics = true; continue;
+    if (isFlag(arg, "--metrics")) {
+      out.metrics = true;
+      continue;
     }
-    if (isFlag(a, "--metrics-json")) {
-      out.metricsJson = true; continue;
+    if (isFlag(arg, "--metrics-json")) {
+      out.metricsJson = true;
+      continue;
     }
-    if (isFlag(a, "--opt-const-fold")) {
-      out.optConstFold = true; continue;
+    if (isFlag(arg, "--opt-const-fold")) {
+      out.optConstFold = true;
+      continue;
     }
-    if (isFlag(a, "--opt-algebraic")) {
-      out.optAlgebraic = true; continue;
+    if (isFlag(arg, "--opt-algebraic")) {
+      out.optAlgebraic = true;
+      continue;
     }
-    if (isFlag(a, "--opt-dce")) {
-      out.optDCE = true; continue;
+    if (isFlag(arg, "--opt-dce")) {
+      out.optDCE = true;
+      continue;
     }
-    if (isFlag(a, "--ast-log")) {
-      out.astLog = pycc::cli::AstLogMode::Before; continue;
+    if (isFlag(arg, "--ast-log")) {
+      out.astLog = pycc::cli::AstLogMode::Before;
+      continue;
     }
-    if (std::strncmp(a, "--ast-log=", 10) == 0) {
+    {
+      constexpr std::string_view kPrefix{"--ast-log="};
+      if (arg.rfind(kPrefix, 0) == 0) {
       using enum pycc::cli::AstLogMode;
-      const char* v = a + 10;
-      if (std::strcmp(v, "before") == 0) out.astLog = Before;
-      else if (std::strcmp(v, "after") == 0) out.astLog = After;
-      else if (std::strcmp(v, "both") == 0) out.astLog = Both;
-      else out.astLog = Before;
+      const auto value = arg.substr(kPrefix.size());
+      out.astLog = Before;
+      if (value == "after") { out.astLog = After; }
+      else if (value == "both") { out.astLog = Both; }
       continue;
-    }
-    if (std::strncmp(a, "--log-path=", 11) == 0) {
-      out.logPath = std::string(a + 11);
-      continue;
-    }
-    if (isFlag(a, "--log-lexer")) { out.logLexer = true; continue; }
-    if (isFlag(a, "--log-ast")) { out.logAst = true; continue; }
-    if (isFlag(a, "--log-codegen")) { out.logCodegen = true; continue; }
-    if (std::strncmp(a, "--color=", 8) == 0) {
-      using enum pycc::cli::ColorMode;
-      if (const char* v = a + 8; std::strcmp(v, "always") == 0)
-        out.color = Always;
-      else if (std::strcmp(v, "never") == 0)
-        out.color = Never;
-      else
-        out.color = Auto;
-      continue;
-    }
-    if (std::strncmp(a, "--diag-context=", 15) == 0) {
-      const char* v = a + 15;
-      int n = std::atoi(v);
-      if (n < 0) {
-        n = 0;
       }
-      out.diagContext = n;
+    }
+    {
+      constexpr std::string_view kPrefix{"--log-path="};
+      if (arg.rfind(kPrefix, 0) == 0) {
+        out.logPath = std::string(arg.substr(kPrefix.size()));
+        continue;
+      }
+    }
+    if (isFlag(arg, "--log-lexer")) { out.logLexer = true; continue; }
+    if (isFlag(arg, "--log-ast")) { out.logAst = true; continue; }
+    if (isFlag(arg, "--log-codegen")) { out.logCodegen = true; continue; }
+    {
+      constexpr std::string_view kPrefix{"--color="};
+      if (arg.rfind(kPrefix, 0) == 0) {
+      using enum pycc::cli::ColorMode;
+      const auto value = arg.substr(kPrefix.size());
+      if (value == "always") {
+        out.color = Always;
+      } else if (value == "never") {
+        out.color = Never;
+      } else {
+        out.color = Auto;
+      }
       continue;
+      }
+    }
+    {
+      constexpr std::string_view kPrefix{"--diag-context="};
+      if (arg.rfind(kPrefix, 0) == 0) {
+        const auto value = std::string(arg.substr(kPrefix.size()));
+        int numLines = 0;
+        try {
+          numLines = std::stoi(value);
+        } catch (...) { numLines = 0; }
+        out.diagContext = std::max(numLines, 0);
+        continue;
+      }
     }
 
     // Positional
-    if (a[0] == '-') {
-      std::cerr << "pycc: unknown option '" << a << "'\n";
+    if (!arg.empty() && arg[0] == '-') {
+      std::cerr << "pycc: unknown option '" << arg << "'\n";
       return false;
     }
-    out.inputs.emplace_back(a);
+    out.inputs.emplace_back(std::string(arg));
   }
 
   if (out.emitAssemblyOnly && out.compileOnly) {

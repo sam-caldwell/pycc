@@ -43,6 +43,7 @@ class AstPrinter : public ast::VisitorBase {
   void visit(const ast::Unary& u) override { line("Unary"); depth_++; if (u.operand) u.operand->accept(*this); depth_--; }
   void visit(const ast::TupleLiteral& t) override { line("TupleLiteral"); depth_++; for (const auto& e : t.elements) e->accept(*this); depth_--; }
   void visit(const ast::ListLiteral& t) override { line("ListLiteral"); depth_++; for (const auto& e : t.elements) e->accept(*this); depth_--; }
+  void visit(const ast::ObjectLiteral& t) override { line("ObjectLiteral"); depth_++; for (const auto& e : t.fields) e->accept(*this); depth_--; }
 
  private:
   void indent() { for (int i = 0; i < depth_; ++i) ss_ << "  "; }

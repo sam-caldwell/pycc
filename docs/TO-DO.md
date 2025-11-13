@@ -265,4 +265,4 @@ stack.
 - Unit/Integration: 95% test coverage of the project with 'green' tests for ARM64 and AMD64 using linux and macOS 
   targets.
 - E2E: All Example projects build and run successfully with verified input/output along happy and sad paths which
-  exercise all language features on linux/macos and arm64/amd64 targets.
+  exercise all language features on linux/macOS and arm64/amd64 targets.

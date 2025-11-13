@@ -141,8 +141,8 @@ class FileInput : public InputSource {
   bool getline(std::string& out) override;
   const std::string& name() const override { return path_; }
  private:
-  std::string path_;
-  std::unique_ptr<std::istream> in_;
+  std::string path_{};
+  std::unique_ptr<std::istream> in_{nullptr};
 };
 
 // String-backed input (useful for tests)
@@ -152,8 +152,8 @@ class StringInput : public InputSource {
   bool getline(std::string& out) override;
   const std::string& name() const override { return name_; }
  private:
-  std::string name_;
-  std::unique_ptr<std::istream> in_;
+  std::string name_{};
+  std::unique_ptr<std::istream> in_{nullptr};
 };
 
 class Lexer : public ITokenStream {
@@ -192,7 +192,7 @@ class Lexer : public ITokenStream {
   bool readNextLine(State& st);     // load next line into state
   bool atEOF() const;               // no more inputs
   bool emitIndentTokens(State& st, std::vector<Token>& out, int baseCol);
-  Token scanOne(State& st);         // scan a single token from current state
+  Token scanOne(State& state);      // scan a single token from current state
 
   void buildAll();                  // build tokens_ from all inputs (LIFO)
 };

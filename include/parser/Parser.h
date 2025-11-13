@@ -32,8 +32,8 @@ class Parser {
   const lex::Token& peek() const;
   const lex::Token& peekNext() const;
   lex::Token get();
-  bool match(lex::TokenKind k);
-  void expect(lex::TokenKind k, const char* msg);
+  bool match(lex::TokenKind tokenKind);
+  void expect(lex::TokenKind tokenKind, const char* msg);
 
   std::unique_ptr<ast::FunctionDef> parseFunction();
   void parseParamList(std::vector<ast::Param>& outParams);

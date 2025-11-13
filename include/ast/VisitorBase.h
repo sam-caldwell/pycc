@@ -7,7 +7,7 @@ namespace pycc::ast {
 
 // Forward declarations to break include cycles
 template <typename T, NodeKind K> struct Literal;
-struct Name; struct Call; struct Binary; struct Unary; struct TupleLiteral; struct ListLiteral; struct NoneLiteral;
+struct Name; struct Call; struct Binary; struct Unary; struct TupleLiteral; struct ListLiteral; struct ObjectLiteral; struct NoneLiteral;
 struct ReturnStmt; struct AssignStmt; struct IfStmt; struct ExprStmt;
 struct FunctionDef; struct Module;
 
@@ -32,6 +32,7 @@ struct VisitorBase {
   virtual void visit(const Unary&) = 0;
   virtual void visit(const TupleLiteral&) = 0;
   virtual void visit(const ListLiteral&) = 0;
+  virtual void visit(const ObjectLiteral&) = 0;
 };
 
 } // namespace pycc::ast

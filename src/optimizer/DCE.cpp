@@ -9,7 +9,7 @@ using namespace pycc::ast;
 static size_t dceBlock(std::vector<std::unique_ptr<Stmt>>& body) {
   size_t removed = 0;
   std::vector<std::unique_ptr<Stmt>> newBody;
-  bool seenReturn = false;
+  bool seenReturn = false; // NOLINT(misc-const-correctness)
   for (auto& st : body) {
     if (seenReturn) { ++removed; continue; }
     if (st->kind == NodeKind::ReturnStmt) {
@@ -18,9 +18,9 @@ static size_t dceBlock(std::vector<std::unique_ptr<Stmt>>& body) {
       continue;
     }
     if (st->kind == NodeKind::IfStmt) {
-      auto* i = static_cast<IfStmt*>(st.get());
-      removed += dceBlock(i->thenBody);
-      removed += dceBlock(i->elseBody);
+      auto* ifStmt = static_cast<IfStmt*>(st.get());
+      removed += dceBlock(ifStmt->thenBody);
+      removed += dceBlock(ifStmt->elseBody);
     }
     newBody.emplace_back(std::move(st));
   }
@@ -28,14 +28,15 @@ static size_t dceBlock(std::vector<std::unique_ptr<Stmt>>& body) {
   return removed;
 }
 
-size_t DCE::run(Module& m) {
-  stats_.clear(); size_t removed = 0;
-  for (auto& fn : m.functions) {
-    removed += dceBlock(fn->body);
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+size_t DCE::run(Module& module) {
+  stats_.clear();
+  size_t removed = 0;
+  for (auto& func : module.functions) {
+    removed += dceBlock(func->body);
   }
   stats_["removed"] = removed;
   return removed;
 }
 
 } // namespace pycc::opt
-

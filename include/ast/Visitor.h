@@ -23,6 +23,7 @@ void dispatch(Node& n, V& v) {
         case NodeKind::UnaryExpr: v.visit(static_cast<Unary&>(n)); break;
         case NodeKind::TupleLiteral: v.visit(static_cast<TupleLiteral&>(n)); break;
         case NodeKind::ListLiteral: v.visit(static_cast<ListLiteral&>(n)); break;
+        case NodeKind::ObjectLiteral: v.visit(static_cast<ObjectLiteral&>(n)); break;
         case NodeKind::NoneLiteral: v.visit(static_cast<NoneLiteral&>(n)); break;
     }
 }

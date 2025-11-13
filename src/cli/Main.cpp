@@ -10,6 +10,7 @@
  */
 #include "cli/CLI.h"
 #include "compiler/Compiler.h"
+#include <cstddef>
 #include <iostream>
 
 int main(const int argc, char** argv) {
@@ -23,7 +24,5 @@ int main(const int argc, char** argv) {
     std::cout << pycc::cli::Usage();
     return 0;
   }
-  pycc::Compiler c;
-  return c.run(opts);
+  return pycc::Compiler::run(opts);
 }
-

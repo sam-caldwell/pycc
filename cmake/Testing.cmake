@@ -49,4 +49,14 @@ if(BUILD_TESTING)
     file(MAKE_DIRECTORY ${RUN_DIR})
     set_tests_properties(test_e2e PROPERTIES WORKING_DIRECTORY ${RUN_DIR})
   endif()
+
+  # Runtime-only test target for fast, isolated runtime/GC testing
+  file(GLOB TEST_RUNTIME_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/test/pycc/unit/test_runtime_*.cpp)
+  if(TEST_RUNTIME_SOURCES)
+    add_executable(test_runtime_only ${TEST_RUNTIME_SOURCES})
+    target_link_libraries(test_runtime_only PRIVATE pycc_runtime GTest::gtest_main)
+    target_include_directories(test_runtime_only PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_runtime_only COMMAND test_runtime_only)
+  endif()
 endif()

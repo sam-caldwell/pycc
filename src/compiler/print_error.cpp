@@ -1,5 +1,6 @@
 #include "compiler/Compiler.h"
 #include "sema/Sema.h"
+#include <fstream>
 
 extern "C" long write(int, const void*, unsigned long);
 
@@ -49,10 +50,24 @@ void Compiler::print_error(const sema::Diagnostic& diag, const bool color, const
   write_str(diag.message.c_str());
   write_str("\n");
 
-  // Indicate context lines requested (without rendering full excerpts to avoid file IO here)
-  if (context > 0) {
-    write_str("  (context lines: "); write_int(context); write_str(")\n");
+  // Best-effort: print source line and caret under column
+  if (!diag.file.empty() && diag.line > 0 && diag.col > 0) {
+    std::ifstream in(diag.file);
+    if (in) {
+      std::string lineStr;
+      int curLine = 1;
+      while (curLine < diag.line && std::getline(in, lineStr)) { ++curLine; }
+      if (curLine == diag.line && std::getline(in, lineStr)) {
+        write_str("  "); write_str(lineStr.c_str()); write_str("\n");
+        write_str("  ");
+        for (int i = 1; i < diag.col; ++i) { write_str(" "); }
+        write_str("^\n");
+      }
+    }
   }
+
+  // Indicate context lines requested
+  if (context > 0) { write_str("  (context lines: "); write_int(context); write_str(")\n"); }
 }
 
 } // namespace pycc

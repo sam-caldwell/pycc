@@ -63,3 +63,22 @@ TEST(Parser, FunctionParamsTyped) {
   EXPECT_EQ(addFn.params[0].name, "a");
   EXPECT_EQ(addFn.params[1].name, "b");
 }
+
+TEST(Parser, ObjectLiteralSugar) {
+  const char* src =
+      "def main() -> int:\n"
+      "  o = object(1, 2, 3)\n"
+      "  return 0\n";
+  lex::Lexer L; L.pushString(src, "test.py");
+  parse::Parser P(L);
+  auto mod = P.parseModule();
+  ASSERT_TRUE(mod);
+  ASSERT_EQ(mod->functions.size(), 1u);
+  const auto& fn = *mod->functions[0];
+  ASSERT_EQ(fn.body.size(), 2u);
+  const auto* s0 = fn.body[0].get();
+  ASSERT_EQ(s0->kind, ast::NodeKind::AssignStmt);
+  const auto* asg = static_cast<const ast::AssignStmt*>(s0);
+  ASSERT_TRUE(asg->value);
+  EXPECT_EQ(asg->value->kind, ast::NodeKind::ObjectLiteral);
+}

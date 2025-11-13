@@ -18,6 +18,7 @@ namespace pycc::ast {
         UnaryExpr,
         TupleLiteral,
         ListLiteral,
+        ObjectLiteral,
         NoneLiteral
     };
 
@@ -39,6 +40,7 @@ namespace pycc::ast {
             case NodeKind::UnaryExpr: return "UnaryExpr";
             case NodeKind::TupleLiteral: return "TupleLiteral";
             case NodeKind::ListLiteral: return "ListLiteral";
+            case NodeKind::ObjectLiteral: return "ObjectLiteral";
             case NodeKind::NoneLiteral: return "NoneLiteral";
             default: return "unknown";
         }

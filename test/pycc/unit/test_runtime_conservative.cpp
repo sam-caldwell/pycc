@@ -1,0 +1,39 @@
+/***
+ * Name: test_runtime_conservative
+ * Purpose: Verify conservative stack scanning preserves objects referenced only from stack.
+ */
+#include <gtest/gtest.h>
+#include "runtime/Runtime.h"
+
+using namespace pycc::rt;
+
+TEST(RuntimeGC, ConservativeStackScanningPreserves) {
+  gc_reset_for_tests();
+  gc_set_threshold(1); // always collect after an alloc
+
+  // Without conservative scanning, unrooted objects are reclaimed.
+  gc_set_conservative(false);
+  void* s1 = string_new("abc", 3);
+  (void)s1;
+  RuntimeStats before = gc_stats();
+  gc_collect();
+  RuntimeStats after1 = gc_stats();
+  EXPECT_GE(after1.numFreed, before.numFreed + 1);
+
+  // With conservative scanning, an address on the stack should preserve the object.
+  gc_reset_for_tests();
+  gc_set_threshold(1);
+  gc_set_conservative(true);
+  void* s2 = string_new("hello", 5);
+  (void)s2; // keep it on the stack
+  RuntimeStats before2 = gc_stats();
+  gc_collect();
+  RuntimeStats after2 = gc_stats();
+  EXPECT_EQ(after2.numFreed, before2.numFreed);
+
+  // Clear the stack reference, collect again, and expect reclamation.
+  s2 = nullptr;
+  gc_collect();
+  RuntimeStats after3 = gc_stats();
+  EXPECT_GE(after3.numFreed, after2.numFreed + 1);
+}

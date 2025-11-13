@@ -3,6 +3,7 @@
  * Purpose: Minimal parser for Milestone 1.
  */
 #include "parser/Parser.h"
+#include <cstddef>
 #include <stdexcept>
 
 namespace pycc::parse {
@@ -13,13 +14,13 @@ const lex::Token& Parser::peek() const { return ts_.peek(0); }
 const lex::Token& Parser::peekNext() const { return ts_.peek(1); }
 lex::Token Parser::get() { return ts_.next(); }
 
-bool Parser::match(TK k) {
-  if (peek().kind == k) { (void)get(); return true; }
+bool Parser::match(TK tokenKind) {
+  if (peek().kind == tokenKind) { (void)get(); return true; }
   return false;
 }
 
-void Parser::expect(TK k, const char* msg) {
-  if (!match(k)) throw std::runtime_error(std::string("Parse error: expected ") + msg);
+void Parser::expect(TK tokenKind, const char* msg) {
+  if (!match(tokenKind)) { throw std::runtime_error(std::string("Parse error: expected ") + msg); }
 }
 
 std::unique_ptr<ast::Module> Parser::parseModule() {
@@ -36,27 +37,30 @@ std::unique_ptr<ast::Module> Parser::parseModule() {
   return mod;
 }
 
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
   expect(TK::Def, "'def'");
   auto nameTok = get();
-  if (nameTok.kind != TK::Ident) throw std::runtime_error("Parse error: expected function name");
+  if (nameTok.kind != TK::Ident) { throw std::runtime_error("Parse error: expected function name"); }
   expect(TK::LParen, "'('");
   std::vector<ast::Param> params;
   if (peek().kind != TK::RParen) {
     // parse param list
     for (;;) {
       const auto& pNameTok = get();
-      if (pNameTok.kind != TK::Ident)
+      if (pNameTok.kind != TK::Ident) {
         throw std::runtime_error("Parse error: expected parameter name");
-      ast::Param p; p.name = pNameTok.text; p.type = ast::TypeKind::NoneType;
+      }
+      ast::Param param; param.name = pNameTok.text; param.type = ast::TypeKind::NoneType;
       if (peek().kind == TK::Colon) {
         get();
         const auto& pTypeTok = get();
-        if (pTypeTok.kind != TK::TypeIdent)
+        if (pTypeTok.kind != TK::TypeIdent) {
           throw std::runtime_error("Parse error: expected type ident after ':'");
-        p.type = toTypeKind(pTypeTok.text);
+        }
+        param.type = toTypeKind(pTypeTok.text);
       }
-      params.push_back(std::move(p));
+      params.push_back(std::move(param));
       if (peek().kind == TK::Comma) { get(); continue; }
       break;
     }
@@ -64,26 +68,26 @@ std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
   expect(TK::RParen, "')'");
   expect(TK::Arrow, "'->'");
   auto typeTok = get();
-  if (typeTok.kind != TK::TypeIdent) throw std::runtime_error("Parse error: expected return type ident");
+  if (typeTok.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected return type ident"); }
   // Limited Optional/Union syntax support: allow T | None and ignore the None part for now
   if (peek().kind == TK::Pipe) {
     get(); // consume '|'
-    const auto& t2 = get();
-    if (t2.kind != TK::TypeIdent) throw std::runtime_error("Parse error: expected type ident after '|'");
+    const auto& typeTok2 = get();
+    if (typeTok2.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected type ident after '|'"); }
     // ignore t2
   }
   expect(TK::Colon, "':'");
   if (peek().kind == TK::Newline) { get(); }
   expect(TK::Indent, "indent");
 
-  auto fn = std::make_unique<ast::FunctionDef>(nameTok.text, toTypeKind(typeTok.text));
-  fn->params = std::move(params);
+  auto func = std::make_unique<ast::FunctionDef>(nameTok.text, toTypeKind(typeTok.text));
+  func->params = std::move(params);
   while (peek().kind != TK::Dedent && peek().kind != TK::End) {
     if (peek().kind == TK::Newline) { get(); continue; }
-    fn->body.emplace_back(parseStatement());
+    func->body.emplace_back(parseStatement());
   }
   expect(TK::Dedent, "dedent");
-  return fn;
+  return func;
 }
 
 // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
@@ -321,21 +325,36 @@ std::unique_ptr<ast::Expr> Parser::parsePrimary() {
 
 // NOLINTNEXTLINE(readability-function-size)
 std::unique_ptr<ast::Expr> Parser::parsePostfix(std::unique_ptr<ast::Expr> base) {
-  // Only handle calls: base '(' [args] ')'
+  // Handle calls and object(...) sugar
   for (;;) {
     if (peek().kind == TK::LParen) {
       get(); // '('
-      auto call = std::make_unique<ast::Call>(std::move(base));
+      // Parse arguments first so we can decide whether to build a Call or ObjectLiteral
+      std::vector<std::unique_ptr<ast::Expr>> args;
       if (peek().kind != TK::RParen) {
-        // Parse arg list
         for (;;) {
           auto arg = parseExpr();
-          call->args.emplace_back(std::move(arg));
+          args.emplace_back(std::move(arg));
           if (peek().kind == TK::Comma) { get(); continue; }
           break;
         }
       }
       expect(TK::RParen, "')'");
+
+      // If callee is name 'object', desugar to ObjectLiteral
+      if (base && base->kind == ast::NodeKind::Name) {
+        const auto* nm = dynamic_cast<const ast::Name*>(base.get());
+        if (nm != nullptr && nm->id == "object") {
+          auto obj = std::make_unique<ast::ObjectLiteral>();
+          obj->fields = std::move(args);
+          obj->line = base->line; obj->col = base->col; obj->file = base->file;
+          base = std::move(obj);
+          continue;
+        }
+      }
+
+      auto call = std::make_unique<ast::Call>(std::move(base));
+      call->args = std::move(args);
       base = std::move(call);
       continue;
     }

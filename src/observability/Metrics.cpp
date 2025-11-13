@@ -12,14 +12,16 @@ void Metrics::start(const std::string& name) {
   active_[name] = Clock::now();
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void Metrics::stop(const std::string& name) {
-  auto it = active_.find(name);
-  if (it == active_.end()) return;
-  auto us = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - it->second).count();
-  durations_us_[name] += static_cast<uint64_t>(us);
-  active_.erase(it);
+  auto iter = active_.find(name);
+  if (iter == active_.end()) { return; }
+  auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - iter->second).count();
+  durations_us_[name] += static_cast<uint64_t>(microseconds);
+  active_.erase(iter);
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 std::string Metrics::summaryText() const {
   std::ostringstream oss;
   oss << "== Metrics ==\n";
@@ -33,10 +35,11 @@ std::string Metrics::summaryText() const {
   return oss.str();
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 std::string Metrics::summaryJson() const {
   std::ostringstream oss;
   oss << "{\n  \"durations_ms\": {";
-  bool first = true;
+  bool first = true; // NOLINT(misc-const-correctness)
   for (const auto& [k, v] : durations_us_) {
     if (!first) oss << ",";
     first = false;
@@ -49,7 +52,7 @@ std::string Metrics::summaryJson() const {
   }
   if (!optimizerStats_.empty()) {
     oss << ",\n  \"optimizer\": {";
-    bool first2 = true;
+    bool first2 = true; // NOLINT(misc-const-correctness)
     for (const auto& [k, v] : optimizerStats_) {
       if (!first2) oss << ",";
       first2 = false;
@@ -59,7 +62,7 @@ std::string Metrics::summaryJson() const {
   }
   if (!optimizerBreakdown_.empty()) {
     oss << ",\n  \"optimizer_breakdown\": {";
-    bool firstPass = true;
+    bool firstPass = true; // NOLINT(misc-const-correctness)
     for (const auto& [pass, mp] : optimizerBreakdown_) {
       if (!firstPass) oss << ",";
       firstPass = false;

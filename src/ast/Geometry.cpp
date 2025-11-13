@@ -14,6 +14,7 @@
 #include "ast/IntLiteral.h"
 #include "ast/ListLiteral.h"
 #include "ast/Module.h"
+#include "ast/ObjectLiteral.h"
 #include "ast/Name.h"
 #include "ast/NoneLiteral.h"
 #include "ast/ReturnStmt.h"
@@ -100,6 +101,10 @@ struct GeometryVisitor : public VisitorBase {
   void visit(const ListLiteral& list) override {
     bump();
     for (const auto& elem : list.elements) { ++depth; elem->accept(*this); --depth; }
+  }
+  void visit(const ObjectLiteral& obj) override {
+    bump();
+    for (const auto& field : obj.fields) { ++depth; field->accept(*this); --depth; }
   }
   void visit(const Name& /*unused*/) override { bump(); }
   void visit(const Call& call) override {

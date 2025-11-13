@@ -1,5 +1,6 @@
 #include <string>
 namespace pycc::cli {
+    // NOLINTNEXTLINE(misc-use-internal-linkage)
     std::string Usage() {
         return R"(pycc [options] file...
 

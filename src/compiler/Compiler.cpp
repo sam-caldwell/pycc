@@ -47,7 +47,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
 
   obs::Metrics metrics;
   metrics.start("Lex");
-  lex::Lexer lexer;
+  lex::Lexer lexer; // NOLINT(misc-const-correctness)
   lexer.pushFile(input);
   metrics.stop("Lex");
 
@@ -81,7 +81,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
 
   // Sema
   metrics.start("Sema");
-  sema::Sema sema;
+  sema::Sema sema; // NOLINT(misc-const-correctness)
   std::vector<sema::Diagnostic> diags;
   const bool semaOk = sema.check(*mod, diags);
   metrics.stop("Sema");
@@ -112,7 +112,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
 
   // Optional AST logging (before optimization)
   if (opts.astLog == cli::AstLogMode::Before || opts.astLog == cli::AstLogMode::Both) {
-    obs::AstPrinter printer;
+    obs::AstPrinter printer; // NOLINT(misc-const-correctness)
     const auto out = printer.print(*mod);
     std::cout << "== AST (before opt) ==\n" << out;
     if (logsEnabled && opts.logAst) {
@@ -129,7 +129,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
 
   if (opts.optConstFold) {
     metrics.start("ConstFold");
-    opt::ConstantFold constFold;
+    opt::ConstantFold constFold; // NOLINT(misc-const-correctness)
     auto folds = constFold.run(*mod);
     metrics.setOptimizerStat("folds", static_cast<uint64_t>(folds));
     for (const auto& [key, count] : constFold.stats()) { metrics.incOptimizerBreakdown("constfold", key, count); }
@@ -138,7 +138,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
 
   if (opts.optAlgebraic) {
     metrics.start("Algebraic");
-    opt::AlgebraicSimplify algebraic;
+    opt::AlgebraicSimplify algebraic; // NOLINT(misc-const-correctness)
     auto rewrites = algebraic.run(*mod);
     metrics.setOptimizerStat("algebraic", static_cast<uint64_t>(rewrites));
     for (const auto& [key, count] : algebraic.stats()) { metrics.incOptimizerBreakdown("algebraic", key, count); }
@@ -147,7 +147,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
 
   if (opts.optDCE) {
     metrics.start("DCE");
-    opt::DCE dce;
+    opt::DCE dce; // NOLINT(misc-const-correctness)
     auto removed = dce.run(*mod);
     metrics.setOptimizerStat("dce_removed", static_cast<uint64_t>(removed));
     for (const auto& [key, count] : dce.stats()) { metrics.incOptimizerBreakdown("dce", key, count); }
@@ -156,7 +156,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
 
   // Optional AST logging (after optimization)
   if (opts.astLog == cli::AstLogMode::After || opts.astLog == cli::AstLogMode::Both) {
-    obs::AstPrinter printer2;
+    obs::AstPrinter printer2; // NOLINT(misc-const-correctness)
     const auto out = printer2.print(*mod);
     std::cout << "== AST (after opt) ==\n" << out;
     if (logsEnabled && opts.logAst) {
@@ -200,14 +200,11 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
   // Always write metrics JSON to log directory when any metrics requested
   if (opts.metrics || opts.metricsJson) {
     const auto jsonSummary = metrics.summaryJson();
-    if (logsEnabled) {
-      std::ofstream metricsFile(logDir + "/" + tsPrefix + "metrics.json");
-      metricsFile << jsonSummary;
-    } else {
-      // Fallback to current dir
-      std::ofstream metricsFile(std::string("./" + tsPrefix + std::string("metrics.json")));
-      metricsFile << jsonSummary;
-    }
+    const std::string metricsPath = logsEnabled
+        ? (logDir + "/" + tsPrefix + "metrics.json")
+        : (std::string("./") + tsPrefix + std::string("metrics.json"));
+    std::ofstream metricsFile(metricsPath);
+    metricsFile << jsonSummary;
   }
   return 0;
 }

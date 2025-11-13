@@ -9,287 +9,371 @@
 
 namespace pycc::lex {
 
-static bool isIdentStart(char c) { return std::isalpha(static_cast<unsigned char>(c)) || c == '_'; }
-static bool isIdentChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
+static bool isIdentStart(char chr) { return (std::isalpha(static_cast<unsigned char>(chr)) != 0) || chr == '_'; }
+static bool isIdentChar(char chr) { return (std::isalnum(static_cast<unsigned char>(chr)) != 0) || chr == '_'; }
 
 // FileInput implementation
-FileInput::FileInput(std::string path) : path_(std::move(path)) {
+FileInput::FileInput(std::string path) : path_(std::move(path)), in_(nullptr) {
   auto ifs = std::make_unique<std::ifstream>(path_);
   in_ = std::move(ifs);
 }
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 bool FileInput::getline(std::string& out) {
-  if (!in_ || !(*in_)) return false;
-  if (!std::getline(*in_, out)) return false;
+  if (!in_ || !(*in_)) { return false; }
+  if (!std::getline(*in_, out)) { return false; }
   return true;
 }
 
 // StringInput implementation
 StringInput::StringInput(std::string text, std::string name)
-  : name_(std::move(name)) {
+  : name_(std::move(name)), in_(nullptr) {
   auto iss = std::make_unique<std::istringstream>(std::move(text));
   in_ = std::move(iss);
 }
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 bool StringInput::getline(std::string& out) {
-  if (!in_ || !(*in_)) return false;
-  if (!std::getline(*in_, out)) return false;
+  if (!in_ || !(*in_)) { return false; }
+  if (!std::getline(*in_, out)) { return false; }
   return true;
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void Lexer::pushFile(const std::string& path) {
-  State st; st.src = std::make_unique<FileInput>(path); st.lineNo = 0; st.index = 0; st.indentStack = {0}; st.needIndentCheck = true; st.pendingNewline = false;
-  stack_.push_back(std::move(st));
+  State state;
+  state.src = std::make_unique<FileInput>(path);
+  state.lineNo = 0;
+  state.index = 0;
+  state.indentStack = {0};
+  state.needIndentCheck = true;
+  state.pendingNewline = false;
+  stack_.push_back(std::move(state));
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void Lexer::pushString(const std::string& text, const std::string& name) {
-  State st; st.src = std::make_unique<StringInput>(text, name); st.lineNo = 0; st.index = 0; st.indentStack = {0}; st.needIndentCheck = true; st.pendingNewline = false;
-  stack_.push_back(std::move(st));
+  State state;
+  state.src = std::make_unique<StringInput>(text, name);
+  state.lineNo = 0;
+  state.index = 0;
+  state.indentStack = {0};
+  state.needIndentCheck = true;
+  state.pendingNewline = false;
+  stack_.push_back(std::move(state));
 }
 
-bool Lexer::readNextLine(State& st) {
-  st.line.clear();
-  if (!st.src->getline(st.line)) return false;
-  ++st.lineNo;
-  st.index = 0;
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+bool Lexer::readNextLine(State& state) {
+  state.line.clear();
+  if (!state.src->getline(state.line)) { return false; }
+  ++state.lineNo;
+  state.index = 0;
   // Handle CRLF
-  if (!st.line.empty() && st.line.back() == '\r') st.line.pop_back();
-  st.needIndentCheck = true;
-  st.pendingNewline = false;
+  if (!state.line.empty() && state.line.back() == '\r') { state.line.pop_back(); }
+  state.needIndentCheck = true;
+  state.pendingNewline = false;
   return true;
 }
 
-bool Lexer::emitIndentTokens(State& st, std::vector<Token>& out, const int baseCol) {
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity,readability-convert-member-functions-to-static)
+bool Lexer::emitIndentTokens(State& state, std::vector<Token>& out, const int baseCol) {
   // Compute leading spaces
-  size_t i = 0; size_t spaces = 0;
-  while (i < st.line.size() && st.line[i] == ' ') { ++i; ++spaces; }
+  size_t idx = 0; size_t spaces = 0;
+  while (idx < state.line.size() && state.line[idx] == ' ') { ++idx; ++spaces; }
   // Empty or comment line: emit Newline and skip indent changes
-  bool allSpace = (i >= st.line.size());
-  bool comment = (!allSpace && st.line[i] == '#');
+  bool allSpace = (idx >= state.line.size());
+  bool comment = (!allSpace && state.line[idx] == '#');
   if (allSpace || comment) {
-    Token t; t.kind = TokenKind::Newline; t.text = "\n"; t.file = st.src->name(); t.line = st.lineNo; t.col = 1;
-    out.push_back(std::move(t));
-    st.index = st.line.size();
-    st.needIndentCheck = false;
-    st.pendingNewline = false;
+    Token tok; tok.kind = TokenKind::Newline; tok.text = "\n"; tok.file = state.src->name(); tok.line = state.lineNo; tok.col = 1;
+    out.push_back(std::move(tok));
+    state.index = state.line.size();
+    state.needIndentCheck = false;
+    state.pendingNewline = false;
     return true; // handled
   }
-  if (st.needIndentCheck) {
-    if (spaces > st.indentStack.back()) {
-      st.indentStack.push_back(spaces);
-      Token t; t.kind = TokenKind::Indent; t.text = "<INDENT>"; t.file = st.src->name(); t.line = st.lineNo; t.col = baseCol;
-      out.push_back(std::move(t));
+  if (state.needIndentCheck) {
+    if (spaces > state.indentStack.back()) {
+      state.indentStack.push_back(spaces);
+      Token tok; tok.kind = TokenKind::Indent; tok.text = "<INDENT>"; tok.file = state.src->name(); tok.line = state.lineNo; tok.col = baseCol;
+      out.push_back(std::move(tok));
     } else {
-      while (spaces < st.indentStack.back()) {
-        st.indentStack.pop_back();
-        Token t; t.kind = TokenKind::Dedent; t.text = "<DEDENT>"; t.file = st.src->name(); t.line = st.lineNo; t.col = baseCol;
-        out.push_back(std::move(t));
+      while (spaces < state.indentStack.back()) {
+        state.indentStack.pop_back();
+        Token tok; tok.kind = TokenKind::Dedent; tok.text = "<DEDENT>"; tok.file = state.src->name(); tok.line = state.lineNo; tok.col = baseCol;
+        out.push_back(std::move(tok));
       }
     }
-    st.index = i; // start scanning after indent
-    st.needIndentCheck = false;
+    state.index = idx; // start scanning after indent
+    state.needIndentCheck = false;
   }
   return false;
 }
 
-Token Lexer::scanOne(State& st) {
-  auto& line = st.line;
-  size_t& i = st.index;
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
+Token Lexer::scanOne(State& state) {
+  auto& line = state.line;
+  size_t& idx = state.index;
 
-  if (i >= line.size()) {
-    st.pendingNewline = false;
-    Token t; t.kind = TokenKind::Newline; t.text = "\n"; t.file = st.src->name(); t.line = st.lineNo; t.col = static_cast<int>(line.size() + 1);
-    return t;
+  if (idx >= line.size()) {
+    state.pendingNewline = false;
+    Token newlineTok; newlineTok.kind = TokenKind::Newline; newlineTok.text = "\n"; newlineTok.file = state.src->name(); newlineTok.line = state.lineNo; newlineTok.col = static_cast<int>(line.size() + 1);
+    return newlineTok;
   }
 
-  auto makeTok = [&](TokenKind k, size_t start, size_t endExclusive) {
-    Token t; t.kind = k; t.text = line.substr(start, endExclusive - start); t.file = st.src->name(); t.line = st.lineNo; t.col = static_cast<int>(start + 1);
-    return t;
+  auto makeTok = [&](TokenKind kind, size_t start, size_t endExclusive) {
+    Token tok;
+    tok.kind = kind;
+    tok.text = line.substr(start, endExclusive - start);
+    tok.file = state.src->name();
+    tok.line = state.lineNo;
+    tok.col = static_cast<int>(start + 1);
+    return tok;
   };
 
-  char c = line[i];
-  if (c == ' ' || c == '\t') { ++i; return scanOne(st); }
-  if (c == '#') { st.index = line.size(); Token t; t.kind = TokenKind::Newline; t.text = "\n"; t.file = st.src->name(); t.line = st.lineNo; t.col = static_cast<int>(line.size() + 1); return t; }
-  if (c == '(') { ++i; return makeTok(TokenKind::LParen, i-1, i); }
-  if (c == ')') { ++i; return makeTok(TokenKind::RParen, i-1, i); }
-  if (c == '[') { ++i; return makeTok(TokenKind::LBracket, i-1, i); }
-  if (c == ']') { ++i; return makeTok(TokenKind::RBracket, i-1, i); }
-  if (c == ':') { ++i; return makeTok(TokenKind::Colon, i-1, i); }
-  if (c == ',') { ++i; return makeTok(TokenKind::Comma, i-1, i); }
-  if (c == '+') { ++i; return makeTok(TokenKind::Plus, i-1, i); }
-  if (c == '"' || c == '\'') {
-    char quote = c; size_t j = i + 1;
-    while (j < line.size() && line[j] != quote) { ++j; }
+  char chr = line[idx];
+  if (chr == ' ' || chr == '\t') { ++idx; return scanOne(state); }
+  if (chr == '#') {
+    state.index = line.size();
+    Token tok;
+    tok.kind = TokenKind::Newline;
+    tok.text = "\n";
+    tok.file = state.src->name();
+    tok.line = state.lineNo;
+    tok.col = static_cast<int>(line.size() + 1);
+    return tok;
+  }
+  if (chr == '(') { ++idx; return makeTok(TokenKind::LParen, idx-1, idx); }
+  if (chr == ')') { ++idx; return makeTok(TokenKind::RParen, idx-1, idx); }
+  if (chr == '[') { ++idx; return makeTok(TokenKind::LBracket, idx-1, idx); }
+  if (chr == ']') { ++idx; return makeTok(TokenKind::RBracket, idx-1, idx); }
+  if (chr == ':') { ++idx; return makeTok(TokenKind::Colon, idx-1, idx); }
+  if (chr == ',') { ++idx; return makeTok(TokenKind::Comma, idx-1, idx); }
+  if (chr == '+') { ++idx; return makeTok(TokenKind::Plus, idx-1, idx); }
+  if (chr == '"' || chr == '\'') {
+    char quote = chr;
+    size_t jpos = idx + 1;
+    while (jpos < line.size() && line[jpos] != quote) { ++jpos; }
     // consume closing quote if present
-    size_t end = (j < line.size() && line[j] == quote) ? (j + 1) : j;
-    Token t = makeTok(TokenKind::String, i, end);
-    i = end;
-    return t;
+    size_t endPos = (jpos < line.size() && line[jpos] == quote) ? (jpos + 1) : jpos;
+    const Token tok = makeTok(TokenKind::String, idx, endPos);
+    idx = endPos;
+    return tok;
   }
-  if (c == '-') {
-    if (i + 1 < line.size() && line[i+1] == '>') { i += 2; return makeTok(TokenKind::Arrow, i-2, i); }
-    ++i; return makeTok(TokenKind::Minus, i-1, i);
+  if (chr == '-') {
+    if (idx + 1 < line.size() && line[idx+1] == '>') { idx += 2; return makeTok(TokenKind::Arrow, idx-2, idx); }
+    ++idx; return makeTok(TokenKind::Minus, idx-1, idx);
   }
-  if (c == '*') { ++i; return makeTok(TokenKind::Star, i-1, i); }
-  if (c == '/') { ++i; return makeTok(TokenKind::Slash, i-1, i); }
-  if (c == '%') { ++i; return makeTok(TokenKind::Percent, i-1, i); }
-  if (c == '=') { if (i + 1 < line.size() && line[i+1] == '=') { i += 2; return makeTok(TokenKind::EqEq, i-2, i); } ++i; return makeTok(TokenKind::Equal, i-1, i); }
-  if (c == '!') { if (i + 1 < line.size() && line[i+1] == '=') { i += 2; return makeTok(TokenKind::NotEq, i-2, i); } }
-  if (c == '<') { if (i + 1 < line.size() && line[i+1] == '=') { i += 2; return makeTok(TokenKind::Le, i-2, i); } ++i; return makeTok(TokenKind::Lt, i-1, i); }
-  if (c == '>') { if (i + 1 < line.size() && line[i+1] == '=') { i += 2; return makeTok(TokenKind::Ge, i-2, i); } ++i; return makeTok(TokenKind::Gt, i-1, i); }
-  if (c == '|') { ++i; return makeTok(TokenKind::Pipe, i-1, i); }
+  if (chr == '*') { ++idx; return makeTok(TokenKind::Star, idx-1, idx); }
+  if (chr == '/') { ++idx; return makeTok(TokenKind::Slash, idx-1, idx); }
+  if (chr == '%') { ++idx; return makeTok(TokenKind::Percent, idx-1, idx); }
+  if (chr == '=') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::EqEq, idx-2, idx); } ++idx; return makeTok(TokenKind::Equal, idx-1, idx); }
+  if (chr == '!') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::NotEq, idx-2, idx); } }
+  if (chr == '<') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::Le, idx-2, idx); } ++idx; return makeTok(TokenKind::Lt, idx-1, idx); }
+  if (chr == '>') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::Ge, idx-2, idx); } ++idx; return makeTok(TokenKind::Gt, idx-1, idx); }
+  if (chr == '|') { ++idx; return makeTok(TokenKind::Pipe, idx-1, idx); }
 
   auto scanExponent = [&](size_t pos) -> size_t {
-    size_t k = pos;
-    if (k < line.size() && (line[k] == 'e' || line[k] == 'E')) {
-      ++k;
-      if (k < line.size() && (line[k] == '+' || line[k] == '-')) ++k;
-      size_t start = k;
-      while (k < line.size() && std::isdigit(static_cast<unsigned char>(line[k]))) ++k;
-      if (k == start) return pos; // back out if no digits
-      return k;
+    size_t idx = pos;
+    if (idx < line.size() && (line[idx] == 'e' || line[idx] == 'E')) {
+      ++idx;
+      if (idx < line.size() && (line[idx] == '+' || line[idx] == '-')) { ++idx; }
+      size_t startIdx = idx;
+      while (idx < line.size() && std::isdigit(static_cast<unsigned char>(line[idx])) != 0) { ++idx; }
+      if (idx == startIdx) { return pos; } // back out if no digits
+      return idx;
     }
     return pos;
   };
 
-  if (std::isdigit(static_cast<unsigned char>(c))) {
-    size_t j = i;
-    while (j < line.size() && std::isdigit(static_cast<unsigned char>(line[j]))) ++j;
-    size_t k = j;
-    if (k < line.size() && line[k] == '.') {
-      size_t m = k + 1;
-      if (m < line.size() && std::isdigit(static_cast<unsigned char>(line[m]))) {
-        while (m < line.size() && std::isdigit(static_cast<unsigned char>(line[m]))) ++m;
-        size_t epos = scanExponent(m);
-        Token t = makeTok(TokenKind::Float, i, epos); i = epos; return t;
-      } else {
-        size_t epos = scanExponent(k + 1);
-        Token t = makeTok(TokenKind::Float, i, epos); i = epos; return t;
+  if (std::isdigit(static_cast<unsigned char>(chr)) != 0) {
+    size_t jpos = idx;
+    while (jpos < line.size() && std::isdigit(static_cast<unsigned char>(line[jpos])) != 0) { ++jpos; }
+    size_t kpos = jpos;
+    if (kpos < line.size() && line[kpos] == '.') {
+      size_t mpos = kpos + 1;
+      if (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) {
+        while (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) { ++mpos; }
+        size_t epos = scanExponent(mpos);
+        const Token tok = makeTok(TokenKind::Float, idx, epos);
+        idx = epos;
+        return tok;
       }
+      size_t epos = scanExponent(kpos + 1);
+      const Token tok = makeTok(TokenKind::Float, idx, epos);
+      idx = epos;
+      return tok;
     }
-    size_t epos = scanExponent(k);
-    if (epos != k) { Token t = makeTok(TokenKind::Float, i, epos); i = epos; return t; }
-    Token t = makeTok(TokenKind::Int, i, j); i = j; return t;
+    size_t epos = scanExponent(kpos);
+    if (epos != kpos) {
+      const Token tok = makeTok(TokenKind::Float, idx, epos);
+      idx = epos;
+      return tok;
+    }
+    const Token tok = makeTok(TokenKind::Int, idx, jpos);
+    idx = jpos;
+    return tok;
   }
-  if (c == '.' && i + 1 < line.size() && std::isdigit(static_cast<unsigned char>(line[i+1]))) {
-    size_t m = i + 1; while (m < line.size() && std::isdigit(static_cast<unsigned char>(line[m]))) ++m; size_t epos = scanExponent(m); Token t = makeTok(TokenKind::Float, i, epos); i = epos; return t;
+  if (chr == '.' && idx + 1 < line.size() && std::isdigit(static_cast<unsigned char>(line[idx+1])) != 0) {
+    size_t mpos = idx + 1;
+    while (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) { ++mpos; }
+    size_t epos = scanExponent(mpos);
+    const Token tok = makeTok(TokenKind::Float, idx, epos);
+    idx = epos;
+    return tok;
   }
 
-  if (isIdentStart(c)) {
-    size_t j = i + 1; while (j < line.size() && isIdentChar(line[j])) ++j;
-    std::string ident = line.substr(i, j - i);
-    TokenKind k = TokenKind::Ident;
-    if (ident == "def") k = TokenKind::Def;
-    else if (ident == "return") k = TokenKind::Return;
-    else if (ident == "if") k = TokenKind::If;
-    else if (ident == "else") k = TokenKind::Else;
-    else if (ident == "and") k = TokenKind::And;
-    else if (ident == "or") k = TokenKind::Or;
-    else if (ident == "not") k = TokenKind::Not;
-    else if (ident == "True" || ident == "False") k = TokenKind::BoolLit;
-    else if (ident == "int" || ident == "bool" || ident == "float" || ident == "str" || ident == "None" || ident == "tuple" || ident == "list" || ident == "dict") k = TokenKind::TypeIdent;
-    Token t = makeTok(k, i, j); i = j; return t;
+  if (isIdentStart(chr)) {
+    size_t jpos = idx + 1;
+    while (jpos < line.size() && isIdentChar(line[jpos])) { ++jpos; }
+    std::string ident = line.substr(idx, jpos - idx);
+    TokenKind kind = TokenKind::Ident;
+    if (ident == "def") { kind = TokenKind::Def; }
+    else if (ident == "return") { kind = TokenKind::Return; }
+    else if (ident == "if") { kind = TokenKind::If; }
+    else if (ident == "else") { kind = TokenKind::Else; }
+    else if (ident == "and") { kind = TokenKind::And; }
+    else if (ident == "or") { kind = TokenKind::Or; }
+    else if (ident == "not") { kind = TokenKind::Not; }
+    else if (ident == "True" || ident == "False") { kind = TokenKind::BoolLit; }
+    else if (ident == "int" || ident == "bool" || ident == "float" || ident == "str" || ident == "None" || ident == "tuple" || ident == "list" || ident == "dict") { kind = TokenKind::TypeIdent; }
+    const Token tok = makeTok(kind, idx, jpos);
+    idx = jpos;
+    return tok;
   }
 
   // Unknown/other: skip char
-  ++i; return scanOne(st);
+  ++idx; return scanOne(state);
 }
 
 bool Lexer::atEOF() const { return stack_.empty(); }
 
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 bool Lexer::refill() {
   while (true) {
-    if (atEOF()) return false;
-    State& st = stack_.back();
-    // Handle end-of-line and new lines
-    while (st.index >= st.line.size()) {
-      if (st.pendingNewline) {
-        st.pendingNewline = false;
-        Token t; t.kind = TokenKind::Newline; t.text = "\n"; t.file = st.src->name(); t.line = st.lineNo; t.col = static_cast<int>(st.line.size() + 1);
-        buffer_.push_back(t); return true;
-      }
-      if (!readNextLine(st)) {
-        if (st.indentStack.size() > 1) {
-          st.indentStack.pop_back();
-          Token t; t.kind = TokenKind::Dedent; t.text = "<DEDENT>"; t.file = st.src->name(); t.line = st.lineNo + 1; t.col = 1;
-          buffer_.push_back(t); return true;
-        }
-        // done with this source
-        stack_.pop_back();
-        continue; // switch to next top
-      }
-      std::vector<Token> inds;
-      if (emitIndentTokens(st, inds, 1)) { buffer_.push_back(inds.front()); return true; }
-      if (!inds.empty()) { buffer_.push_back(inds.front()); for (size_t i = 1; i < inds.size(); ++i) buffer_.push_back(inds[i]); return true; }
+    if (atEOF()) {
+      return false;
     }
+
+    State& state = stack_.back();
+
+    // Handle end-of-line and new lines (flattened to reduce nesting)
+    if (state.index >= state.line.size()) {
+      if (state.pendingNewline) {
+        state.pendingNewline = false;
+        Token newlineTok;
+        newlineTok.kind = TokenKind::Newline;
+        newlineTok.text = "\n";
+        newlineTok.file = state.src->name();
+        newlineTok.line = state.lineNo;
+        newlineTok.col = static_cast<int>(state.line.size() + 1);
+        buffer_.push_back(newlineTok);
+        return true;
+      }
+
+      if (!readNextLine(state)) {
+        if (state.indentStack.size() > 1) {
+          state.indentStack.pop_back();
+          Token dedentTok;
+          dedentTok.kind = TokenKind::Dedent;
+          dedentTok.text = "<DEDENT>";
+          dedentTok.file = state.src->name();
+          dedentTok.line = state.lineNo + 1;
+          dedentTok.col = 1;
+          buffer_.push_back(dedentTok);
+          return true;
+        }
+        // done with this source; switch to next top on next loop
+        stack_.pop_back();
+        continue;
+      }
+
+      std::vector<Token> indentTokens;
+      if (emitIndentTokens(state, indentTokens, 1)) {
+        buffer_.push_back(indentTokens.front());
+        return true;
+      }
+      if (!indentTokens.empty()) {
+        buffer_.push_back(indentTokens.front());
+        for (size_t idx = 1; idx < indentTokens.size(); ++idx) {
+          buffer_.push_back(indentTokens[idx]);
+        }
+        return true;
+      }
+      // Fallthrough: have content on this line; proceed to scanning below
+    }
+
     // We have characters to scan
-    Token t = scanOne(st);
-    if (st.index >= st.line.size()) st.pendingNewline = true;
-    buffer_.push_back(t);
+    const Token tok = scanOne(state);
+    if (state.index >= state.line.size()) {
+      state.pendingNewline = true;
+    }
+    buffer_.push_back(tok);
     return true;
   }
 }
 
-bool Lexer::ensure(size_t k) {
-  while (buffer_.size() <= k) {
-    if (!refill()) break;
+bool Lexer::ensure(size_t lookahead) {
+  while (buffer_.size() <= lookahead) {
+    if (!refill()) { break; }
   }
-  return buffer_.size() > k;
+  return buffer_.size() > lookahead;
 }
 
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 void Lexer::buildAll() {
-  if (finalized_) return;
+  if (finalized_) { return; }
   finalized_ = true;
   // Process stack in LIFO order
   while (!stack_.empty()) {
-    State st = std::move(stack_.back());
+    State state = std::move(stack_.back());
     stack_.pop_back();
-    st.indentStack = {0}; st.line.clear(); st.index = 0; st.lineNo = 0; st.needIndentCheck = true; st.pendingNewline = false;
+    state.indentStack = {0}; state.line.clear(); state.index = 0; state.lineNo = 0; state.needIndentCheck = true; state.pendingNewline = false;
     // Read each line
-    while (readNextLine(st)) {
+    while (readNextLine(state)) {
       // Handle indent/dedent and skip empty/comment lines
       std::vector<Token> indents;
-      if (emitIndentTokens(st, indents, 1)) {
+      if (emitIndentTokens(state, indents, 1)) {
         tokens_.push_back(indents.front());
         continue;
       }
       for (auto& t : indents) tokens_.push_back(t);
 
       // Tokenize rest of the line
-      while (st.index < st.line.size()) {
-        Token t = scanOne(st);
+      while (state.index < state.line.size()) {
+        const Token tok = scanOne(state);
         // scanOne may return newline for comments/empty trailing
-        if (t.kind == TokenKind::Newline) { tokens_.push_back(t); break; }
-        tokens_.push_back(t);
+        if (tok.kind == TokenKind::Newline) { tokens_.push_back(tok); break; }
+        tokens_.push_back(tok);
       }
-      if (st.index >= st.line.size()) {
-        Token nl; nl.kind = TokenKind::Newline; nl.text = "\n"; nl.file = st.src->name(); nl.line = st.lineNo; nl.col = static_cast<int>(st.line.size() + 1);
-        tokens_.push_back(nl);
+      if (state.index >= state.line.size()) {
+        Token newlineTok; newlineTok.kind = TokenKind::Newline; newlineTok.text = "\n"; newlineTok.file = state.src->name(); newlineTok.line = state.lineNo; newlineTok.col = static_cast<int>(state.line.size() + 1);
+        tokens_.push_back(newlineTok);
       }
     }
     // flush dedents
-    while (st.indentStack.size() > 1) {
-      st.indentStack.pop_back();
-      Token t; t.kind = TokenKind::Dedent; t.text = "<DEDENT>"; t.file = st.src->name(); t.line = st.lineNo + 1; t.col = 1;
-      tokens_.push_back(t);
+    while (state.indentStack.size() > 1) {
+      state.indentStack.pop_back();
+      Token ded; ded.kind = TokenKind::Dedent; ded.text = "<DEDENT>"; ded.file = state.src->name(); ded.line = state.lineNo + 1; ded.col = 1;
+      tokens_.push_back(ded);
     }
   }
   // Final EOF
   Token eof; eof.kind = TokenKind::End; eof.text = "<EOF>"; eof.file = ""; eof.line = 0; eof.col = 1; tokens_.push_back(eof);
 }
 
-const Token& Lexer::peek(size_t k) {
-  if (!finalized_) buildAll();
-  if (pos_ + k < tokens_.size()) return tokens_[pos_ + k];
+const Token& Lexer::peek(size_t lookahead) {
+  if (!finalized_) { buildAll(); }
+  if (pos_ + lookahead < tokens_.size()) return tokens_[pos_ + lookahead];
   return tokens_.back();
 }
 
 Token Lexer::next() {
-  if (!finalized_) buildAll();
+  if (!finalized_) { buildAll(); }
   if (pos_ < tokens_.size()) return tokens_[pos_++];
   return tokens_.back();
 }
 
 std::vector<Token> Lexer::tokens() {
-  if (!finalized_) buildAll();
+  if (!finalized_) { buildAll(); }
   return tokens_;
 }
 

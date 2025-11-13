@@ -22,6 +22,7 @@
 #include "ast/Unary.h"
 #include "ast/TupleLiteral.h"
 #include "ast/ListLiteral.h"
+#include "ast/ObjectLiteral.h"
 #include "ast/ExprStmt.h"
 #include "ast/ReturnStmt.h"
 #include "ast/AssignStmt.h"

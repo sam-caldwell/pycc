@@ -9,29 +9,27 @@ namespace pycc::opt {
 
 using namespace pycc::ast;
 
-namespace {
-
 template <typename T>
-static bool isLit(const Expr* /*e*/) { return false; }
+inline bool isLit(const Expr* /*e*/) { return false; }
 
 template <>
-inline bool isLit<IntLiteral>(const Expr* e) { return e && e->kind == NodeKind::IntLiteral; }
+bool isLit<IntLiteral>(const Expr* expr) { return expr != nullptr && expr->kind == NodeKind::IntLiteral; }
 // Silence unused function warning for BoolLiteral specialization by using it
 template <>
-inline bool isLit<FloatLiteral>(const Expr* e) { return e && e->kind == NodeKind::FloatLiteral; }
+bool isLit<FloatLiteral>(const Expr* expr) { return expr != nullptr && expr->kind == NodeKind::FloatLiteral; }
 
-static bool foldExpr(std::unique_ptr<Expr>& e, size_t& changes, std::unordered_map<std::string,uint64_t>& stats);
+static bool foldExpr(std::unique_ptr<Expr>& expr, size_t& changes, std::unordered_map<std::string,uint64_t>& stats);
 
-static bool foldUnary(Unary& u, std::unique_ptr<Expr>& holder, size_t& changes, std::unordered_map<std::string,uint64_t>& stats) {
-  if (u.operand) foldExpr(u.operand, changes, stats);
-  if (u.op == UnaryOperator::Neg) {
-    if (isLit<IntLiteral>(u.operand.get())) {
-      auto* lit = static_cast<IntLiteral*>(u.operand.get());
+static bool foldUnary(Unary& unary, std::unique_ptr<Expr>& holder, size_t& changes, std::unordered_map<std::string,uint64_t>& stats) {
+  if (unary.operand) { foldExpr(unary.operand, changes, stats); }
+  if (unary.op == UnaryOperator::Neg) {
+    if (isLit<IntLiteral>(unary.operand.get())) {
+      auto* lit = static_cast<IntLiteral*>(unary.operand.get());
       holder = std::make_unique<IntLiteral>(-lit->value);
       ++changes; stats["unary"]++; return true;
     }
-    if (isLit<FloatLiteral>(u.operand.get())) {
-      auto* lit = static_cast<FloatLiteral*>(u.operand.get());
+    if (isLit<FloatLiteral>(unary.operand.get())) {
+      auto* lit = static_cast<FloatLiteral*>(unary.operand.get());
       holder = std::make_unique<FloatLiteral>(-lit->value);
       ++changes; stats["unary"]++; return true;
     }
@@ -39,76 +37,94 @@ static bool foldUnary(Unary& u, std::unique_ptr<Expr>& holder, size_t& changes, 
   return false;
 }
 
-static bool foldBinary(Binary& b, std::unique_ptr<Expr>& holder, size_t& changes, std::unordered_map<std::string,uint64_t>& stats) {
-  if (b.lhs) foldExpr(b.lhs, changes, stats);
-  if (b.rhs) foldExpr(b.rhs, changes, stats);
-  auto* L = b.lhs.get();
-  auto* R = b.rhs.get();
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
+static bool foldBinary(Binary& binary, std::unique_ptr<Expr>& holder, size_t& changes, std::unordered_map<std::string,uint64_t>& stats) {
+  if (binary.lhs) { foldExpr(binary.lhs, changes, stats); }
+  if (binary.rhs) { foldExpr(binary.rhs, changes, stats); }
+  auto* left = binary.lhs.get();
+  auto* right = binary.rhs.get();
   // int ops
-  if (isLit<IntLiteral>(L) && isLit<IntLiteral>(R)) {
-    auto* li = static_cast<IntLiteral*>(L);
-    auto* ri = static_cast<IntLiteral*>(R);
-    long long v = 0;
-    switch (b.op) {
-      case BinaryOperator::Add: v = li->value + ri->value; break;
-      case BinaryOperator::Sub: v = li->value - ri->value; break;
-      case BinaryOperator::Mul: v = li->value * ri->value; break;
-      case BinaryOperator::Div: if (ri->value == 0) return false; v = li->value / ri->value; break;
-      case BinaryOperator::Mod: if (ri->value == 0) return false; v = li->value % ri->value; break;
-      case BinaryOperator::Eq: holder = std::make_unique<BoolLiteral>(li->value == ri->value); ++changes; stats["compare_int"]++; return true;
-      case BinaryOperator::Ne: holder = std::make_unique<BoolLiteral>(li->value != ri->value); ++changes; stats["compare_int"]++; return true;
-      case BinaryOperator::Lt: holder = std::make_unique<BoolLiteral>(li->value < ri->value); ++changes; stats["compare_int"]++; return true;
-      case BinaryOperator::Le: holder = std::make_unique<BoolLiteral>(li->value <= ri->value); ++changes; stats["compare_int"]++; return true;
-      case BinaryOperator::Gt: holder = std::make_unique<BoolLiteral>(li->value > ri->value); ++changes; stats["compare_int"]++; return true;
-      case BinaryOperator::Ge: holder = std::make_unique<BoolLiteral>(li->value >= ri->value); ++changes; stats["compare_int"]++; return true;
+  if (isLit<IntLiteral>(left) && isLit<IntLiteral>(right)) {
+    auto* leftInt = static_cast<IntLiteral*>(left);
+    auto* rightInt = static_cast<IntLiteral*>(right);
+    long long resultInt = 0;
+    switch (binary.op) {
+      case BinaryOperator::Add: resultInt = leftInt->value + rightInt->value; break;
+      case BinaryOperator::Sub: resultInt = leftInt->value - rightInt->value; break;
+      case BinaryOperator::Mul: resultInt = leftInt->value * rightInt->value; break;
+      case BinaryOperator::Div: {
+        if (rightInt->value == 0) { return false; }
+        resultInt = leftInt->value / rightInt->value;
+        break;
+      }
+      case BinaryOperator::Mod: {
+        if (rightInt->value == 0) { return false; }
+        resultInt = leftInt->value % rightInt->value;
+        break;
+      }
+      case BinaryOperator::Eq: holder = std::make_unique<BoolLiteral>(leftInt->value == rightInt->value); ++changes; stats["compare_int"]++; return true;
+      case BinaryOperator::Ne: holder = std::make_unique<BoolLiteral>(leftInt->value != rightInt->value); ++changes; stats["compare_int"]++; return true;
+      case BinaryOperator::Lt: holder = std::make_unique<BoolLiteral>(leftInt->value < rightInt->value); ++changes; stats["compare_int"]++; return true;
+      case BinaryOperator::Le: holder = std::make_unique<BoolLiteral>(leftInt->value <= rightInt->value); ++changes; stats["compare_int"]++; return true;
+      case BinaryOperator::Gt: holder = std::make_unique<BoolLiteral>(leftInt->value > rightInt->value); ++changes; stats["compare_int"]++; return true;
+      case BinaryOperator::Ge: holder = std::make_unique<BoolLiteral>(leftInt->value >= rightInt->value); ++changes; stats["compare_int"]++; return true;
       default: return false;
     }
-    holder = std::make_unique<IntLiteral>(v);
+    holder = std::make_unique<IntLiteral>(resultInt);
     ++changes; stats["binary_int"]++; return true;
   }
   // float ops
-  if (isLit<FloatLiteral>(L) && isLit<FloatLiteral>(R)) {
-    auto* lf = static_cast<FloatLiteral*>(L);
-    auto* rf = static_cast<FloatLiteral*>(R);
-    double v = 0.0;
-    switch (b.op) {
-      case BinaryOperator::Add: v = lf->value + rf->value; break;
-      case BinaryOperator::Sub: v = lf->value - rf->value; break;
-      case BinaryOperator::Mul: v = lf->value * rf->value; break;
-      case BinaryOperator::Div: if (rf->value == 0.0) return false; v = lf->value / rf->value; break;
-      case BinaryOperator::Eq: holder = std::make_unique<BoolLiteral>(lf->value == rf->value); ++changes; stats["compare_float"]++; return true;
-      case BinaryOperator::Ne: holder = std::make_unique<BoolLiteral>(lf->value != rf->value); ++changes; stats["compare_float"]++; return true;
-      case BinaryOperator::Lt: holder = std::make_unique<BoolLiteral>(lf->value < rf->value); ++changes; stats["compare_float"]++; return true;
-      case BinaryOperator::Le: holder = std::make_unique<BoolLiteral>(lf->value <= rf->value); ++changes; stats["compare_float"]++; return true;
-      case BinaryOperator::Gt: holder = std::make_unique<BoolLiteral>(lf->value > rf->value); ++changes; stats["compare_float"]++; return true;
-      case BinaryOperator::Ge: holder = std::make_unique<BoolLiteral>(lf->value >= rf->value); ++changes; stats["compare_float"]++; return true;
+  if (isLit<FloatLiteral>(left) && isLit<FloatLiteral>(right)) {
+    auto* leftFloat = static_cast<FloatLiteral*>(left);
+    auto* rightFloat = static_cast<FloatLiteral*>(right);
+    double result = 0.0;
+    switch (binary.op) {
+      case BinaryOperator::Add: result = leftFloat->value + rightFloat->value; break;
+      case BinaryOperator::Sub: result = leftFloat->value - rightFloat->value; break;
+      case BinaryOperator::Mul: result = leftFloat->value * rightFloat->value; break;
+      case BinaryOperator::Div: {
+        if (rightFloat->value == 0.0) { return false; }
+        result = leftFloat->value / rightFloat->value;
+        break;
+      }
+      case BinaryOperator::Eq: holder = std::make_unique<BoolLiteral>(leftFloat->value == rightFloat->value); ++changes; stats["compare_float"]++; return true;
+      case BinaryOperator::Ne: holder = std::make_unique<BoolLiteral>(leftFloat->value != rightFloat->value); ++changes; stats["compare_float"]++; return true;
+      case BinaryOperator::Lt: holder = std::make_unique<BoolLiteral>(leftFloat->value < rightFloat->value); ++changes; stats["compare_float"]++; return true;
+      case BinaryOperator::Le: holder = std::make_unique<BoolLiteral>(leftFloat->value <= rightFloat->value); ++changes; stats["compare_float"]++; return true;
+      case BinaryOperator::Gt: holder = std::make_unique<BoolLiteral>(leftFloat->value > rightFloat->value); ++changes; stats["compare_float"]++; return true;
+      case BinaryOperator::Ge: holder = std::make_unique<BoolLiteral>(leftFloat->value >= rightFloat->value); ++changes; stats["compare_float"]++; return true;
       default: return false;
     }
-    holder = std::make_unique<FloatLiteral>(v);
+    holder = std::make_unique<FloatLiteral>(result);
     ++changes; stats["binary_float"]++; return true;
   }
   return false;
 }
 
-static bool foldExpr(std::unique_ptr<Expr>& e, size_t& changes, std::unordered_map<std::string,uint64_t>& stats) {
-  if (!e) return false;
-  switch (e->kind) {
+// NOLINTNEXTLINE(readability-function-size)
+static bool foldExpr(std::unique_ptr<Expr>& expr, size_t& changes, std::unordered_map<std::string,uint64_t>& stats) {
+  if (!expr) { return false; }
+  switch (expr->kind) {
     case NodeKind::UnaryExpr: {
-      auto* u = static_cast<Unary*>(e.get());
+      auto* unExpr = static_cast<Unary*>(expr.get());
       std::unique_ptr<Expr> rep;
-      if (foldUnary(*u, rep, changes, stats)) { rep->file = e->file; rep->line = e->line; rep->col = e->col; e = std::move(rep); return true; }
+      if (foldUnary(*unExpr, rep, changes, stats)) {
+        rep->file = expr->file; rep->line = expr->line; rep->col = expr->col; expr = std::move(rep); return true;
+      }
       return false;
     }
     case NodeKind::BinaryExpr: {
-      auto* b = static_cast<Binary*>(e.get());
+      auto* binExpr = static_cast<Binary*>(expr.get());
       std::unique_ptr<Expr> rep;
-      if (foldBinary(*b, rep, changes, stats)) { rep->file = e->file; rep->line = e->line; rep->col = e->col; e = std::move(rep); return true; }
+      if (foldBinary(*binExpr, rep, changes, stats)) {
+        rep->file = expr->file; rep->line = expr->line; rep->col = expr->col; expr = std::move(rep); return true;
+      }
       return false;
     }
     case NodeKind::Call: {
-      auto* c = static_cast<Call*>(e.get());
-      if (c->callee) foldExpr(c->callee, changes, stats);
-      for (auto& a : c->args) foldExpr(a, changes, stats);
+      auto* callExpr = static_cast<Call*>(expr.get());
+      if (callExpr->callee) { foldExpr(callExpr->callee, changes, stats); }
+      for (auto& argExpr : callExpr->args) { foldExpr(argExpr, changes, stats); }
       return false;
     }
     default:
@@ -116,39 +132,44 @@ static bool foldExpr(std::unique_ptr<Expr>& e, size_t& changes, std::unordered_m
   }
 }
 
-} // namespace
+// end local helpers
 
-size_t ConstantFold::run(Module& m) {
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+size_t ConstantFold::run(Module& module) {
   size_t changes = 0;
   stats_.clear();
-  for (auto& fn : m.functions) {
-    for (auto& st : fn->body) {
-      switch (st->kind) {
+  for (auto& func : module.functions) {
+    for (auto& stmt : func->body) {
+      switch (stmt->kind) {
         case NodeKind::AssignStmt: {
-          auto* a = static_cast<AssignStmt*>(st.get());
-          foldExpr(a->value, changes, stats_);
+          auto* assignStmt = static_cast<AssignStmt*>(stmt.get());
+          foldExpr(assignStmt->value, changes, stats_);
           break;
         }
         case NodeKind::ReturnStmt: {
-          auto* r = static_cast<ReturnStmt*>(st.get());
-          foldExpr(r->value, changes, stats_);
+          auto* retStmt = static_cast<ReturnStmt*>(stmt.get());
+          foldExpr(retStmt->value, changes, stats_);
           break;
         }
         case NodeKind::IfStmt: {
-          auto* i = static_cast<IfStmt*>(st.get());
-          foldExpr(i->cond, changes, stats_);
-          for (auto& s2 : i->thenBody) {
-            if (s2->kind == NodeKind::AssignStmt) {
-              auto* a2 = static_cast<AssignStmt*>(s2.get()); foldExpr(a2->value, changes, stats_);
-            } else if (s2->kind == NodeKind::ReturnStmt) {
-              auto* r2 = static_cast<ReturnStmt*>(s2.get()); foldExpr(r2->value, changes, stats_);
+          auto* ifStmt = static_cast<IfStmt*>(stmt.get());
+          foldExpr(ifStmt->cond, changes, stats_);
+          for (auto& thenStmt : ifStmt->thenBody) {
+            if (thenStmt->kind == NodeKind::AssignStmt) {
+              auto* assignThen = static_cast<AssignStmt*>(thenStmt.get());
+              foldExpr(assignThen->value, changes, stats_);
+            } else if (thenStmt->kind == NodeKind::ReturnStmt) {
+              auto* retThen = static_cast<ReturnStmt*>(thenStmt.get());
+              foldExpr(retThen->value, changes, stats_);
             }
           }
-          for (auto& s3 : i->elseBody) {
-            if (s3->kind == NodeKind::AssignStmt) {
-              auto* a3 = static_cast<AssignStmt*>(s3.get()); foldExpr(a3->value, changes, stats_);
-            } else if (s3->kind == NodeKind::ReturnStmt) {
-              auto* r3 = static_cast<ReturnStmt*>(s3.get()); foldExpr(r3->value, changes, stats_);
+          for (auto& elseStmt : ifStmt->elseBody) {
+            if (elseStmt->kind == NodeKind::AssignStmt) {
+              auto* assignElse = static_cast<AssignStmt*>(elseStmt.get());
+              foldExpr(assignElse->value, changes, stats_);
+            } else if (elseStmt->kind == NodeKind::ReturnStmt) {
+              auto* retElse = static_cast<ReturnStmt*>(elseStmt.get());
+              foldExpr(retElse->value, changes, stats_);
             }
           }
           break;

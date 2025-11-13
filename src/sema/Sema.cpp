@@ -93,6 +93,20 @@ struct ExpressionTyper : public ast::VisitorBase {
     mutableString.setType(out);
     mutableString.setCanonicalKey(std::string("s:") + std::to_string(n.value.size()));
   }
+  void visit(const ast::ObjectLiteral& obj) override {
+    out = Type::NoneType;
+    for (const auto& f : obj.fields) {
+      if (f) {
+        ExpressionTyper sub{*env, *sigs, *diags};
+        f->accept(sub);
+        if (!sub.ok) { ok = false; return; }
+      }
+    }
+    // Treat object as opaque pointer; no concrete type mapping yet
+    auto& m = const_cast<ast::ObjectLiteral&>(obj); // NOLINT
+    m.setType(Type::NoneType);
+    m.setCanonicalKey("obj");
+  }
   void visit(const ast::Name& n) override {
     auto resolvedType = env->get(n.id);
     if (!resolvedType) { addDiag(*diags, std::string("undefined name: ") + n.id, &n); ok = false; return; }
@@ -234,6 +248,14 @@ struct ExpressionTyper : public ast::VisitorBase {
       out = Type::Int; const_cast<ast::Call&>(callNode).setType(out); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       return;
     }
+    if (nameNode->id == "obj_get") {
+      if (callNode.args.size() != 2) { addDiag(*diags, "obj_get() takes two arguments", &callNode); ok = false; return; }
+      // First arg is an object pointer (opaque), second must be int index
+      ExpressionTyper idxTyper{*env, *sigs, *diags}; callNode.args[1]->accept(idxTyper); if (!idxTyper.ok) { ok = false; return; }
+      if (!typeIsInt(idxTyper.out)) { addDiag(*diags, "obj_get index must be int", callNode.args[1].get()); ok = false; return; }
+      out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); // treat as string pointer result
+      return;
+    }
     if (nameNode->id == "isinstance") {
       if (callNode.args.size() != 2) { addDiag(*diags, "isinstance() takes two arguments", &callNode); ok = false; return; }
       // We don't deeply validate type arg here; return bool
@@ -251,11 +273,11 @@ struct ExpressionTyper : public ast::VisitorBase {
     out = sig.ret; const_cast<ast::Call&>(callNode).setType(out); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     // do not set canonical for calls (unknown side-effects)
   }
-  void visit(const ast::ReturnStmt& returnStmt) override { addDiag(diags, "internal error: return is not expression", &returnStmt); ok = false; }
-  void visit(const ast::AssignStmt& assignStmt) override { addDiag(diags, "internal error: assign is not expression", &assignStmt); ok = false; }
-  void visit(const ast::IfStmt& ifStmt) override { addDiag(diags, "internal error: if is not expression", &ifStmt); ok = false; }
-  void visit(const ast::FunctionDef& functionDef) override { addDiag(diags, "internal error: function is not expression", &functionDef); ok = false; }
-  void visit(const ast::Module& module) override { addDiag(diags, "internal error: module is not expression", &module); ok = false; }
+  void visit(const ast::ReturnStmt& returnStmt) override { addDiag(*diags, "internal error: return is not expression", &returnStmt); ok = false; }
+  void visit(const ast::AssignStmt& assignStmt) override { addDiag(*diags, "internal error: assign is not expression", &assignStmt); ok = false; }
+  void visit(const ast::IfStmt& ifStmt) override { addDiag(*diags, "internal error: if is not expression", &ifStmt); ok = false; }
+  void visit(const ast::FunctionDef& functionDef) override { addDiag(*diags, "internal error: function is not expression", &functionDef); ok = false; }
+  void visit(const ast::Module& module) override { addDiag(*diags, "internal error: module is not expression", &module); ok = false; }
 };
 
 static bool inferExprType(const ast::Expr* expr,
@@ -303,7 +325,10 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
 
       void visit(const ast::AssignStmt& a) override {
         Type t{}; if (!infer(a.value.get(), t)) { ok = false; return; }
-        if (!(typeIsInt(t) || typeIsBool(t) || typeIsFloat(t) || typeIsStr(t))) { addDiag(diags, "only int/bool/float/str variables supported", &a); ok = false; return; }
+        // Allow pointer-typed aggregates like list as variables
+        if (!(typeIsInt(t) || typeIsBool(t) || typeIsFloat(t) || typeIsStr(t) || t == Type::List)) {
+          addDiag(diags, "only int/bool/float/str/list variables supported", &a); ok = false; return;
+        }
         auto existing = env.get(a.target);
         if (!existing) env.define(a.target, t, {a.file, a.line, a.col});
         else if (*existing != t) { addDiag(diags, std::string("type mismatch on assignment: ") + a.target, &a); ok = false; }
@@ -392,6 +417,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
       void visit(const ast::StringLiteral&) override {}
       void visit(const ast::TupleLiteral&) override {}
       void visit(const ast::ListLiteral&) override {}
+      void visit(const ast::ObjectLiteral&) override {}
       void visit(const ast::NoneLiteral&) override {}
     };
 

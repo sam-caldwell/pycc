@@ -13,6 +13,7 @@
 #include "ast/IfStmt.h"
 #include "ast/IntLiteral.h"
 #include "ast/ListLiteral.h"
+#include "ast/ObjectLiteral.h"
 #include "ast/Module.h"
 #include "ast/Name.h"
 #include "ast/NodeKind.h"
@@ -53,7 +54,7 @@ std::string Codegen::emit(const ast::Module& mod, const std::string& outBase,
   std::string irText;
   try {
     irText = generateIR(mod);
-  } catch (const std::exception& ex) {
+  } catch (const std::exception& ex) { // NOLINT(bugprone-empty-catch)
     return std::string("codegen: ") + ex.what();
   }
   result.llPath = emitLL_ ? changeExt(outBase, ".ll") : std::string();
@@ -90,11 +91,15 @@ std::string Codegen::emit(const ast::Module& mod, const std::string& outBase,
     return {};
   }
 
-  // Link to binary
+  // Link to binary (use C++ linker to satisfy runtime deps)
   result.binPath = outBase; // user chose exact file
   {
     std::ostringstream cmd;
-    cmd << "clang " << result.objPath << " -o " << result.binPath;
+    cmd << "clang++ " << result.objPath << ' ';
+#ifdef PYCC_RUNTIME_LIB_PATH
+    cmd << PYCC_RUNTIME_LIB_PATH << ' ';
+#endif
+    cmd << "-pthread -o " << result.binPath;
     if (!runCmd(cmd.str(), err)) { return err; }
   }
 
@@ -115,6 +120,19 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   std::ostringstream irStream;
   irStream << "; ModuleID = 'pycc_module'\n";
   irStream << "source_filename = \"pycc\"\n\n";
+  // GC barrier declaration for pointer writes (C ABI)
+  irStream << "declare void @pycc_gc_write_barrier(ptr, ptr)\n";
+  // Future aggregate runtime calls (scaffold)
+  irStream << "declare ptr @pycc_list_new(i64)\n";
+  irStream << "declare void @pycc_list_push(ptr, ptr)\n";
+  irStream << "declare i64 @pycc_list_len(ptr)\n";
+  irStream << "declare ptr @pycc_object_new(i64)\n";
+  irStream << "declare void @pycc_object_set(ptr, i64, ptr)\n";
+  irStream << "declare ptr @pycc_object_get(ptr, i64)\n\n";
+  // Boxing wrappers for primitives
+  irStream << "declare ptr @pycc_box_int(i64)\n";
+  irStream << "declare ptr @pycc_box_float(double)\n";
+  irStream << "declare ptr @pycc_box_bool(i1)\n\n";
 
   // Pre-scan functions to gather signatures
   struct Sig { ast::TypeKind ret{ast::TypeKind::NoneType}; std::vector<ast::TypeKind> params; };
@@ -195,6 +213,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     void visit(const ast::Unary& unary) override { if (unary.operand) { unary.operand->accept(*this); } }
     void visit(const ast::TupleLiteral& tuple) override { for (const auto& elem : tuple.elements) { if (elem) { elem->accept(*this); } } }
     void visit(const ast::ListLiteral& list) override { for (const auto& elem : list.elements) { if (elem) { elem->accept(*this); } } }
+    void visit(const ast::ObjectLiteral& obj) override { for (const auto& fld : obj.fields) { if (fld) { fld->accept(*this); } } }
   };
 
   {
@@ -208,10 +227,9 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     irStream << "@" << name << " = private unnamed_addr constant [" << count << " x i8] c\"" << escapeIR(content) << "\\00\", align 1\n";
   }
 
-  // Declare strlen for len(str) lowering
-  if (!strGlobals.empty()) {
-    irStream << "declare i64 @strlen(ptr)\n\n";
-  }
+  // Declare runtime helpers and C interop
+  irStream << "declare i64 @strlen(ptr)\n";
+  irStream << "declare i64 @pycc_string_len(ptr)\n\n";
 
   for (const auto& func : mod.functions) {
     auto typeStr = [&](ast::TypeKind t) -> const char* {
@@ -266,7 +284,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     irStream << "entry:\n";
 
     enum class ValKind : std::uint8_t { I32, I1, F64, Ptr };
-    struct Slot { std::string ptr; ValKind kind{}; };
+    enum class PtrTag : std::uint8_t { Unknown, Str, List, Object };
+    struct Slot { std::string ptr; ValKind kind{}; PtrTag tag{PtrTag::Unknown}; };
     std::unordered_map<std::string, Slot> slots; // var -> slot
     int temp = 0;
 
@@ -288,7 +307,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       } else if (param.type == ast::TypeKind::Str) {
         irStream << "  " << ptr << " = alloca ptr\n";
         irStream << "  store ptr %" << param.name << ", ptr " << ptr << "\n";
-        slots[param.name] = Slot{ptr, ValKind::Ptr};
+        irStream << "  call void @pycc_gc_write_barrier(ptr " << ptr << ", ptr %" << param.name << ")\n";
+        Slot s{ptr, ValKind::Ptr}; s.tag = PtrTag::Str; slots[param.name] = s;
       } else {
         throw std::runtime_error("unsupported param type");
       }
@@ -339,8 +359,86 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         std::ostringstream gname; gname << ".str_" << std::hex << h;
         const size_t n = s.value.size() + 1; // include NUL
         std::ostringstream reg; reg << "%t" << temp++;
+        // Allow toggling between opaque-pointer and typed-pointer GEP styles
+#ifdef PYCC_USE_OPAQUE_PTR_GEP
         ir << "  " << reg.str() << " = getelementptr inbounds ([" << n << " x i8], ptr @" << gname.str() << ", i64 0, i64 0)\n";
+#else
+        // Typed-pointer form for broad clang compatibility
+        ir << "  " << reg.str() << " = getelementptr inbounds [" << n << " x i8], [" << n << " x i8]* @" << gname.str() << ", i64 0, i64 0\n";
+#endif
         out = Value{reg.str(), ValKind::Ptr};
+      }
+      void visit(const ast::ObjectLiteral& obj) override { // NOLINT(readability-function-cognitive-complexity)
+        const std::size_t n = obj.fields.size();
+        std::ostringstream regObj, nfields;
+        regObj << "%t" << temp++;
+        nfields << n;
+        ir << "  " << regObj.str() << " = call ptr @pycc_object_new(i64 " << nfields.str() << ")\n";
+        for (std::size_t i = 0; i < n; ++i) {
+          const auto& f = obj.fields[i];
+          if (!f) { continue; }
+          auto v = run(*f);
+          std::string valPtr;
+          if (v.k == ValKind::Ptr) {
+            valPtr = v.s;
+          } else if (v.k == ValKind::I32) {
+            std::ostringstream w, w2; w << "%t" << temp++; w2 << "%t" << temp++;
+            ir << "  " << w.str() << " = sext i32 " << v.s << " to i64\n";
+            ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")\n";
+            valPtr = w2.str();
+          } else if (v.k == ValKind::F64) {
+            std::ostringstream w; w << "%t" << temp++;
+            ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << v.s << ")\n";
+            valPtr = w.str();
+          } else if (v.k == ValKind::I1) {
+            std::ostringstream w; w << "%t" << temp++;
+            ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << v.s << ")\n";
+            valPtr = w.str();
+          } else {
+            throw std::runtime_error("unsupported field kind in object literal");
+          }
+          std::ostringstream idx; idx << static_cast<long long>(i);
+          ir << "  call void @pycc_object_set(ptr " << regObj.str() << ", i64 " << idx.str() << ", ptr " << valPtr << ")\n";
+        }
+        out = Value{regObj.str(), ValKind::Ptr};
+      }
+      void visit(const ast::ListLiteral& list) override { // NOLINT(readability-function-cognitive-complexity)
+        const std::size_t n = list.elements.size();
+        std::ostringstream slot, lst, cap;
+        slot << "%t" << temp++;
+        lst << "%t" << temp++;
+        cap << n;
+        ir << "  " << slot.str() << " = alloca ptr\n";
+        ir << "  " << lst.str() << " = call ptr @pycc_list_new(i64 " << cap.str() << ")\n";
+        ir << "  store ptr " << lst.str() << ", ptr " << slot.str() << "\n";
+        ir << "  call void @pycc_gc_write_barrier(ptr " << slot.str() << ", ptr " << lst.str() << ")\n";
+        for (const auto& el : list.elements) {
+          if (!el) { continue; }
+          auto v = run(*el);
+          std::string elemPtr;
+          if (v.k == ValKind::Ptr) {
+            elemPtr = v.s;
+          } else if (v.k == ValKind::I32) {
+            std::ostringstream w, w2; w << "%t" << temp++; w2 << "%t" << temp++;
+            ir << "  " << w.str() << " = sext i32 " << v.s << " to i64\n";
+            ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")\n";
+            elemPtr = w2.str();
+          } else if (v.k == ValKind::F64) {
+            std::ostringstream w; w << "%t" << temp++;
+            ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << v.s << ")\n";
+            elemPtr = w.str();
+          } else if (v.k == ValKind::I1) {
+            std::ostringstream w; w << "%t" << temp++;
+            ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << v.s << ")\n";
+            elemPtr = w.str();
+          } else {
+            throw std::runtime_error("unsupported element kind in list literal");
+          }
+          ir << "  call void @pycc_list_push(ptr " << slot.str() << ", ptr " << elemPtr << ")\n";
+        }
+        std::ostringstream outReg; outReg << "%t" << temp++;
+        ir << "  " << outReg.str() << " = load ptr, ptr " << slot.str() << "\n";
+        out = Value{outReg.str(), ValKind::Ptr};
       }
       void visit(const ast::Name& nm) override {
         auto it = slots.find(nm.id);
@@ -380,10 +478,59 @@ std::string Codegen::generateIR(const ast::Module& mod) {
             out = Value{std::to_string(static_cast<int>(strLit->value.size())), ValKind::I32};
             return;
           }
-          // Fallback: evaluate expression then currently unsupported (no runtime), return 0 as conservative
-          auto v = run(*arg0);
-          (void)v; // value ignored
+          if (arg0->kind == ast::NodeKind::Call) {
+            const auto* c = dynamic_cast<const ast::Call*>(arg0);
+            if (c && c->callee && c->callee->kind == ast::NodeKind::Name) {
+              const auto* cname = dynamic_cast<const ast::Name*>(c->callee.get());
+              if (cname != nullptr) {
+                // Evaluate the call to get a pointer result
+                auto v = run(*arg0);
+                if (v.k != ValKind::Ptr) throw std::runtime_error("len(call): callee did not return pointer");
+                std::ostringstream r64, r32; r64 << "%t" << temp++; r32 << "%t" << temp++;
+                auto itSig = sigs.find(cname->id);
+                const bool isList = (itSig != sigs.end() && itSig->second.ret == ast::TypeKind::List);
+                if (isList) {
+                  ir << "  " << r64.str() << " = call i64 @pycc_list_len(ptr " << v.s << ")\n";
+                } else {
+                  ir << "  " << r64.str() << " = call i64 @strlen(ptr " << v.s << ")\n";
+                }
+                ir << "  " << r32.str() << " = trunc i64 " << r64.str() << " to i32\n";
+                out = Value{r32.str(), ValKind::I32};
+                return;
+              }
+            }
+          }
+          if (arg0->kind == ast::NodeKind::Name) {
+            const auto* nmArg = dynamic_cast<const ast::Name*>(arg0);
+            auto itn = slots.find(nmArg->id);
+            if (itn == slots.end()) throw std::runtime_error(std::string("undefined name: ") + nmArg->id);
+            // Load pointer
+            std::ostringstream regPtr; regPtr << "%t" << temp++;
+            ir << "  " << regPtr.str() << " = load ptr, ptr " << itn->second.ptr << "\n";
+            std::ostringstream r64, r32; r64 << "%t" << temp++; r32 << "%t" << temp++;
+            if (itn->second.tag == PtrTag::Str || itn->second.tag == PtrTag::Unknown) {
+              ir << "  " << r64.str() << " = call i64 @strlen(ptr " << regPtr.str() << ")\n";
+            } else {
+              ir << "  " << r64.str() << " = call i64 @pycc_list_len(ptr " << regPtr.str() << ")\n";
+            }
+            ir << "  " << r32.str() << " = trunc i64 " << r64.str() << " to i32\n";
+            out = Value{r32.str(), ValKind::I32};
+            return;
+          }
+          // Fallback: unsupported target type
           out = Value{"0", ValKind::I32};
+          return;
+        }
+        if (nmCall->id == "obj_get") {
+          if (call.args.size() != 2) { throw std::runtime_error("obj_get() takes exactly two arguments"); }
+          auto vObj = run(*call.args[0]);
+          auto vIdx = run(*call.args[1]);
+          if (vObj.k != ValKind::Ptr) throw std::runtime_error("obj_get: first arg must be object pointer");
+          if (vIdx.k != ValKind::I32) throw std::runtime_error("obj_get: index must be int");
+          std::ostringstream idx64, reg; idx64 << "%t" << temp++; reg << "%t" << temp++;
+          ir << "  " << idx64.str() << " = sext i32 " << vIdx.s << " to i64\n";
+          ir << "  " << reg.str() << " = call ptr @pycc_object_get(ptr " << vObj.s << ", i64 " << idx64.str() << ")\n";
+          out = Value{reg.str(), ValKind::Ptr};
           return;
         }
         // Builtin: isinstance(x, T) -> i1 const for basic T in {int,bool,float}
@@ -586,7 +733,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       void visit(const ast::IfStmt&) override { throw std::runtime_error("internal: if not expr"); }
       void visit(const ast::ExprStmt&) override { throw std::runtime_error("internal: exprstmt not expr"); }
       void visit(const ast::TupleLiteral&) override { throw std::runtime_error("internal: tuple not expr"); }
-      void visit(const ast::ListLiteral&) override { throw std::runtime_error("internal: list not expr"); }
+      // handled above
       void visit(const ast::FunctionDef&) override { throw std::runtime_error("internal: fn not expr"); }
       void visit(const ast::Module&) override { throw std::runtime_error("internal: mod not expr"); }
     }; // struct ExpressionLowerer
@@ -602,8 +749,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     int ifCounter = 0;
 
     struct StmtEmitter : public ast::VisitorBase {
-      StmtEmitter(std::ostringstream& ir_, int& temp_, int& ifCounter_, std::unordered_map<std::string, Slot>& slots_, const ast::FunctionDef& fn_, std::function<Value(const ast::Expr*)> eval_, std::string& retStructTy_, std::vector<std::string>& tupleElemTys_)
-        : ir(ir_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_), eval(std::move(eval_)), retStructTyRef(retStructTy_), tupleElemTysRef(tupleElemTys_) {}
+      StmtEmitter(std::ostringstream& ir_, int& temp_, int& ifCounter_, std::unordered_map<std::string, Slot>& slots_, const ast::FunctionDef& fn_, std::function<Value(const ast::Expr*)> eval_, std::string& retStructTy_, std::vector<std::string>& tupleElemTys_, const std::unordered_map<std::string, Sig>& sigs_)
+        : ir(ir_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_), eval(std::move(eval_)), retStructTyRef(retStructTy_), tupleElemTysRef(tupleElemTys_), sigs(sigs_) {}
       std::ostringstream& ir;
       int& temp;
       int& ifCounter;
@@ -613,6 +760,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       bool returned{false};
       std::string& retStructTyRef;
       std::vector<std::string>& tupleElemTysRef;
+      const std::unordered_map<std::string, Sig>& sigs;
 
       void visit(const ast::AssignStmt& asg) override {
         auto val = eval(asg.value.get());
@@ -630,7 +778,39 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         if (val.k == ValKind::I32) ir << "  store i32 " << val.s << ", ptr " << it->second.ptr << "\n";
         else if (val.k == ValKind::I1) ir << "  store i1 " << val.s << ", ptr " << it->second.ptr << "\n";
         else if (val.k == ValKind::F64) ir << "  store double " << val.s << ", ptr " << it->second.ptr << "\n";
-        else ir << "  store ptr " << val.s << ", ptr " << it->second.ptr << "\n";
+        else {
+          ir << "  store ptr " << val.s << ", ptr " << it->second.ptr << "\n";
+          ir << "  call void @pycc_gc_write_barrier(ptr " << it->second.ptr << ", ptr " << val.s << ")\n";
+        }
+        if (val.k == ValKind::Ptr && asg.value) {
+          // Tag from literal kinds
+          if (asg.value->kind == ast::NodeKind::ListLiteral) { it->second.tag = PtrTag::List; }
+          else if (asg.value->kind == ast::NodeKind::StringLiteral) { it->second.tag = PtrTag::Str; }
+          else if (asg.value->kind == ast::NodeKind::ObjectLiteral) { it->second.tag = PtrTag::Object; }
+          // Propagate tag from name-to-name assignments
+          else if (asg.value->kind == ast::NodeKind::Name) {
+            const auto* rhsName = dynamic_cast<const ast::Name*>(asg.value.get());
+            if (rhsName != nullptr) {
+              auto itSrc = slots.find(rhsName->id);
+              if (itSrc != slots.end()) { it->second.tag = itSrc->second.tag; }
+            }
+          }
+          // Simple function-return tag inference based on signature
+          else if (asg.value->kind == ast::NodeKind::Call) {
+            const auto* c = dynamic_cast<const ast::Call*>(asg.value.get());
+            if (c && c->callee && c->callee->kind == ast::NodeKind::Name) {
+              const auto* cname = dynamic_cast<const ast::Name*>(c->callee.get());
+              if (cname != nullptr) {
+                auto itSig = sigs.find(cname->id);
+                if (itSig != sigs.end()) {
+                  if (itSig->second.ret == ast::TypeKind::Str) { it->second.tag = PtrTag::Str; }
+                  else if (itSig->second.ret == ast::TypeKind::List) { it->second.tag = PtrTag::List; }
+                  else if (itSig->second.ret == ast::TypeKind::Dict) { it->second.tag = PtrTag::Object; }
+                }
+              }
+            }
+          }
+        }
       }
 
       void visit(const ast::ReturnStmt& r) override {
@@ -710,11 +890,12 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       void visit(const ast::ExprStmt&) override {}
       void visit(const ast::TupleLiteral&) override {}
       void visit(const ast::ListLiteral&) override {}
+      void visit(const ast::ObjectLiteral&) override {}
 
       bool emitStmtList(const std::vector<std::unique_ptr<ast::Stmt>>& stmts) {
         bool brReturned = false;
         for (const auto& st : stmts) {
-          StmtEmitter child{ir, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef};
+          StmtEmitter child{ir, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef, sigs};
           st->accept(child);
           if (child.returned) brReturned = true;
         }
@@ -722,7 +903,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
     };
 
-    StmtEmitter root{irStream, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys};
+    StmtEmitter root{irStream, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs};
     returned = root.emitStmtList(func->body);
     if (!returned) {
       // default return based on function type
@@ -754,6 +935,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   return irStream.str();
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 bool Codegen::runCmd(const std::string& cmd, std::string& outErr) { // NOLINT(concurrency-mt-unsafe)
   // Simple wrapper around std::system; capture only exit code.
   // For Milestone 1 simplicity, we don't capture stdout/stderr streams.
