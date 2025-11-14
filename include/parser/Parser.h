@@ -47,7 +47,7 @@ class Parser {
   std::unique_ptr<ast::Expr> parseUnary();
   std::unique_ptr<ast::Expr> parsePrimary();
   std::unique_ptr<ast::Expr> parsePostfix(std::unique_ptr<ast::Expr> base);
-  static ast::TypeKind toTypeKind(const std::string& s);
+  static ast::TypeKind toTypeKind(const std::string& typeName);
 };
 
 } // namespace pycc::parse

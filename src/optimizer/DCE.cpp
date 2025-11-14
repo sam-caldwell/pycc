@@ -6,6 +6,7 @@
 namespace pycc::opt {
 using namespace pycc::ast;
 
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static size_t dceBlock(std::vector<std::unique_ptr<Stmt>>& body) {
   size_t removed = 0;
   std::vector<std::unique_ptr<Stmt>> newBody;

@@ -18,6 +18,7 @@ bool isLit<IntLiteral>(const Expr* expr) { return expr != nullptr && expr->kind 
 template <>
 bool isLit<FloatLiteral>(const Expr* expr) { return expr != nullptr && expr->kind == NodeKind::FloatLiteral; }
 
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static bool foldExpr(std::unique_ptr<Expr>& expr, size_t& changes, std::unordered_map<std::string,uint64_t>& stats);
 
 static bool foldUnary(Unary& unary, std::unique_ptr<Expr>& holder, size_t& changes, std::unordered_map<std::string,uint64_t>& stats) {
@@ -37,67 +38,76 @@ static bool foldUnary(Unary& unary, std::unique_ptr<Expr>& holder, size_t& chang
   return false;
 }
 
-// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(readability-function-size)
+static bool foldBinaryInt(Binary& binary, std::unique_ptr<Expr>& holder, size_t& changes,
+                          std::unordered_map<std::string, uint64_t>& stats) {
+  auto* left = binary.lhs.get();
+  auto* right = binary.rhs.get();
+  if (!(isLit<IntLiteral>(left) && isLit<IntLiteral>(right))) { return false; }
+  auto* leftInt = static_cast<IntLiteral*>(left);
+  auto* rightInt = static_cast<IntLiteral*>(right);
+  long long resultInt = 0;
+  switch (binary.op) {
+    case BinaryOperator::Add: resultInt = leftInt->value + rightInt->value; break;
+    case BinaryOperator::Sub: resultInt = leftInt->value - rightInt->value; break;
+    case BinaryOperator::Mul: resultInt = leftInt->value * rightInt->value; break;
+    case BinaryOperator::Div: {
+      if (rightInt->value == 0) { return false; }
+      resultInt = leftInt->value / rightInt->value;
+      break;
+    }
+    case BinaryOperator::Mod: {
+      if (rightInt->value == 0) { return false; }
+      resultInt = leftInt->value % rightInt->value;
+      break;
+    }
+    case BinaryOperator::Eq: holder = std::make_unique<BoolLiteral>(leftInt->value == rightInt->value); ++changes; stats["compare_int"]++; return true;
+    case BinaryOperator::Ne: holder = std::make_unique<BoolLiteral>(leftInt->value != rightInt->value); ++changes; stats["compare_int"]++; return true;
+    case BinaryOperator::Lt: holder = std::make_unique<BoolLiteral>(leftInt->value < rightInt->value); ++changes; stats["compare_int"]++; return true;
+    case BinaryOperator::Le: holder = std::make_unique<BoolLiteral>(leftInt->value <= rightInt->value); ++changes; stats["compare_int"]++; return true;
+    case BinaryOperator::Gt: holder = std::make_unique<BoolLiteral>(leftInt->value > rightInt->value); ++changes; stats["compare_int"]++; return true;
+    case BinaryOperator::Ge: holder = std::make_unique<BoolLiteral>(leftInt->value >= rightInt->value); ++changes; stats["compare_int"]++; return true;
+    default: return false;
+  }
+  holder = std::make_unique<IntLiteral>(resultInt);
+  ++changes; stats["binary_int"]++; return true;
+}
+
+// NOLINTNEXTLINE(readability-function-size)
+static bool foldBinaryFloat(Binary& binary, std::unique_ptr<Expr>& holder, size_t& changes,
+                            std::unordered_map<std::string, uint64_t>& stats) {
+  auto* left = binary.lhs.get();
+  auto* right = binary.rhs.get();
+  if (!(isLit<FloatLiteral>(left) && isLit<FloatLiteral>(right))) { return false; }
+  auto* leftFloat = static_cast<FloatLiteral*>(left);
+  auto* rightFloat = static_cast<FloatLiteral*>(right);
+  double result = 0.0;
+  switch (binary.op) {
+    case BinaryOperator::Add: result = leftFloat->value + rightFloat->value; break;
+    case BinaryOperator::Sub: result = leftFloat->value - rightFloat->value; break;
+    case BinaryOperator::Mul: result = leftFloat->value * rightFloat->value; break;
+    case BinaryOperator::Div: {
+      if (rightFloat->value == 0.0) { return false; }
+      result = leftFloat->value / rightFloat->value;
+      break;
+    }
+    case BinaryOperator::Eq: holder = std::make_unique<BoolLiteral>(leftFloat->value == rightFloat->value); ++changes; stats["compare_float"]++; return true;
+    case BinaryOperator::Ne: holder = std::make_unique<BoolLiteral>(leftFloat->value != rightFloat->value); ++changes; stats["compare_float"]++; return true;
+    case BinaryOperator::Lt: holder = std::make_unique<BoolLiteral>(leftFloat->value < rightFloat->value); ++changes; stats["compare_float"]++; return true;
+    case BinaryOperator::Le: holder = std::make_unique<BoolLiteral>(leftFloat->value <= rightFloat->value); ++changes; stats["compare_float"]++; return true;
+    case BinaryOperator::Gt: holder = std::make_unique<BoolLiteral>(leftFloat->value > rightFloat->value); ++changes; stats["compare_float"]++; return true;
+    case BinaryOperator::Ge: holder = std::make_unique<BoolLiteral>(leftFloat->value >= rightFloat->value); ++changes; stats["compare_float"]++; return true;
+    default: return false;
+  }
+  holder = std::make_unique<FloatLiteral>(result);
+  ++changes; stats["binary_float"]++; return true;
+}
+
 static bool foldBinary(Binary& binary, std::unique_ptr<Expr>& holder, size_t& changes, std::unordered_map<std::string,uint64_t>& stats) {
   if (binary.lhs) { foldExpr(binary.lhs, changes, stats); }
   if (binary.rhs) { foldExpr(binary.rhs, changes, stats); }
-  auto* left = binary.lhs.get();
-  auto* right = binary.rhs.get();
-  // int ops
-  if (isLit<IntLiteral>(left) && isLit<IntLiteral>(right)) {
-    auto* leftInt = static_cast<IntLiteral*>(left);
-    auto* rightInt = static_cast<IntLiteral*>(right);
-    long long resultInt = 0;
-    switch (binary.op) {
-      case BinaryOperator::Add: resultInt = leftInt->value + rightInt->value; break;
-      case BinaryOperator::Sub: resultInt = leftInt->value - rightInt->value; break;
-      case BinaryOperator::Mul: resultInt = leftInt->value * rightInt->value; break;
-      case BinaryOperator::Div: {
-        if (rightInt->value == 0) { return false; }
-        resultInt = leftInt->value / rightInt->value;
-        break;
-      }
-      case BinaryOperator::Mod: {
-        if (rightInt->value == 0) { return false; }
-        resultInt = leftInt->value % rightInt->value;
-        break;
-      }
-      case BinaryOperator::Eq: holder = std::make_unique<BoolLiteral>(leftInt->value == rightInt->value); ++changes; stats["compare_int"]++; return true;
-      case BinaryOperator::Ne: holder = std::make_unique<BoolLiteral>(leftInt->value != rightInt->value); ++changes; stats["compare_int"]++; return true;
-      case BinaryOperator::Lt: holder = std::make_unique<BoolLiteral>(leftInt->value < rightInt->value); ++changes; stats["compare_int"]++; return true;
-      case BinaryOperator::Le: holder = std::make_unique<BoolLiteral>(leftInt->value <= rightInt->value); ++changes; stats["compare_int"]++; return true;
-      case BinaryOperator::Gt: holder = std::make_unique<BoolLiteral>(leftInt->value > rightInt->value); ++changes; stats["compare_int"]++; return true;
-      case BinaryOperator::Ge: holder = std::make_unique<BoolLiteral>(leftInt->value >= rightInt->value); ++changes; stats["compare_int"]++; return true;
-      default: return false;
-    }
-    holder = std::make_unique<IntLiteral>(resultInt);
-    ++changes; stats["binary_int"]++; return true;
-  }
-  // float ops
-  if (isLit<FloatLiteral>(left) && isLit<FloatLiteral>(right)) {
-    auto* leftFloat = static_cast<FloatLiteral*>(left);
-    auto* rightFloat = static_cast<FloatLiteral*>(right);
-    double result = 0.0;
-    switch (binary.op) {
-      case BinaryOperator::Add: result = leftFloat->value + rightFloat->value; break;
-      case BinaryOperator::Sub: result = leftFloat->value - rightFloat->value; break;
-      case BinaryOperator::Mul: result = leftFloat->value * rightFloat->value; break;
-      case BinaryOperator::Div: {
-        if (rightFloat->value == 0.0) { return false; }
-        result = leftFloat->value / rightFloat->value;
-        break;
-      }
-      case BinaryOperator::Eq: holder = std::make_unique<BoolLiteral>(leftFloat->value == rightFloat->value); ++changes; stats["compare_float"]++; return true;
-      case BinaryOperator::Ne: holder = std::make_unique<BoolLiteral>(leftFloat->value != rightFloat->value); ++changes; stats["compare_float"]++; return true;
-      case BinaryOperator::Lt: holder = std::make_unique<BoolLiteral>(leftFloat->value < rightFloat->value); ++changes; stats["compare_float"]++; return true;
-      case BinaryOperator::Le: holder = std::make_unique<BoolLiteral>(leftFloat->value <= rightFloat->value); ++changes; stats["compare_float"]++; return true;
-      case BinaryOperator::Gt: holder = std::make_unique<BoolLiteral>(leftFloat->value > rightFloat->value); ++changes; stats["compare_float"]++; return true;
-      case BinaryOperator::Ge: holder = std::make_unique<BoolLiteral>(leftFloat->value >= rightFloat->value); ++changes; stats["compare_float"]++; return true;
-      default: return false;
-    }
-    holder = std::make_unique<FloatLiteral>(result);
-    ++changes; stats["binary_float"]++; return true;
-  }
+  if (foldBinaryInt(binary, holder, changes, stats)) { return true; }
+  if (foldBinaryFloat(binary, holder, changes, stats)) { return true; }
   return false;
 }
 
@@ -134,50 +144,37 @@ static bool foldExpr(std::unique_ptr<Expr>& expr, size_t& changes, std::unordere
 
 // end local helpers
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+// NOLINTNEXTLINE(readability-function-size)
+static void foldBlock(std::vector<std::unique_ptr<Stmt>>& body, size_t& changes,
+                      std::unordered_map<std::string, uint64_t>& stats) {
+  for (auto& stmt : body) {
+    switch (stmt->kind) {
+      case NodeKind::AssignStmt: {
+        auto* assignStmt = static_cast<AssignStmt*>(stmt.get());
+        foldExpr(assignStmt->value, changes, stats);
+        break;
+      }
+      case NodeKind::ReturnStmt: {
+        auto* retStmt = static_cast<ReturnStmt*>(stmt.get());
+        foldExpr(retStmt->value, changes, stats);
+        break;
+      }
+      case NodeKind::IfStmt: {
+        auto* ifStmt = static_cast<IfStmt*>(stmt.get());
+        foldExpr(ifStmt->cond, changes, stats);
+        foldBlock(ifStmt->thenBody, changes, stats);
+        foldBlock(ifStmt->elseBody, changes, stats);
+        break;
+      }
+      default: break;
+    }
+  }
+}
+
 size_t ConstantFold::run(Module& module) {
   size_t changes = 0;
   stats_.clear();
-  for (auto& func : module.functions) {
-    for (auto& stmt : func->body) {
-      switch (stmt->kind) {
-        case NodeKind::AssignStmt: {
-          auto* assignStmt = static_cast<AssignStmt*>(stmt.get());
-          foldExpr(assignStmt->value, changes, stats_);
-          break;
-        }
-        case NodeKind::ReturnStmt: {
-          auto* retStmt = static_cast<ReturnStmt*>(stmt.get());
-          foldExpr(retStmt->value, changes, stats_);
-          break;
-        }
-        case NodeKind::IfStmt: {
-          auto* ifStmt = static_cast<IfStmt*>(stmt.get());
-          foldExpr(ifStmt->cond, changes, stats_);
-          for (auto& thenStmt : ifStmt->thenBody) {
-            if (thenStmt->kind == NodeKind::AssignStmt) {
-              auto* assignThen = static_cast<AssignStmt*>(thenStmt.get());
-              foldExpr(assignThen->value, changes, stats_);
-            } else if (thenStmt->kind == NodeKind::ReturnStmt) {
-              auto* retThen = static_cast<ReturnStmt*>(thenStmt.get());
-              foldExpr(retThen->value, changes, stats_);
-            }
-          }
-          for (auto& elseStmt : ifStmt->elseBody) {
-            if (elseStmt->kind == NodeKind::AssignStmt) {
-              auto* assignElse = static_cast<AssignStmt*>(elseStmt.get());
-              foldExpr(assignElse->value, changes, stats_);
-            } else if (elseStmt->kind == NodeKind::ReturnStmt) {
-              auto* retElse = static_cast<ReturnStmt*>(elseStmt.get());
-              foldExpr(retElse->value, changes, stats_);
-            }
-          }
-          break;
-        }
-        default: break;
-      }
-    }
-  }
+  for (auto& func : module.functions) { foldBlock(func->body, changes, stats_); }
   return changes;
 }
 

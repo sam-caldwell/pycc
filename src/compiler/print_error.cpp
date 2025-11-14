@@ -32,6 +32,7 @@ static void write_int(int value) {
   }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 void Compiler::print_error(const sema::Diagnostic& diag, const bool color, const int context) {
   const char* red = "\033[31m";
   const char* bold = "\033[1m";

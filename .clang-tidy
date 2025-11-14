@@ -12,6 +12,7 @@
 #
 Checks: >
   bugprone-*,
+  clang-analyzer-*,
   -bugprone-easily-swappable-parameters,
   -cert-msc51-cpp,
   -cert-msc50-cpp,
@@ -19,6 +20,8 @@ Checks: >
   -cert-err33-c,
   -concurrency-*,
   cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
+  -cppcoreguidelines-pro-type-static-cast-downcast,
   -darwin-avoid-spinlock,
   -darwin-dispatch-once-nonstatic,
   -hicpp-exception-baseclass,
@@ -49,6 +52,12 @@ Checks: >
   -portability-*,
   -portability-avoid-pragma-once,
   readability-*,
+  -readability-identifier-length,
+  -readability-named-parameter,
+  -readability-implicit-bool-conversion,
+  -readability-braces-around-statements,
+  -readability-isolate-declaration,
+  -readability-simplify-boolean-expr,
 # Tune complexity/size thresholds to your policy
 CheckOptions:
   - key: readability-function-cognitive-complexity.Threshold

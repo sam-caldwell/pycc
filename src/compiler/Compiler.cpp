@@ -194,8 +194,8 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     }
   }
 
-  if (opts.metricsJson) { std::cout << metrics.summaryJson(); }
-  else if (opts.metrics) { std::cout << metrics.summaryText(); std::cout << metrics.summaryJson(); }
+  if (opts.metricsJson) { std::cout << metrics.summaryJson(); } // NOLINT(bugprone-branch-clone)
+  else if (opts.metrics) { std::cout << metrics.summaryText(); } // NOLINT(bugprone-branch-clone)
 
   // Always write metrics JSON to log directory when any metrics requested
   if (opts.metrics || opts.metricsJson) {

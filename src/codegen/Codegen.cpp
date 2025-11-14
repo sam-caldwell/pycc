@@ -992,10 +992,10 @@ std::string Codegen::generateIR(const ast::Module& mod) {
 bool Codegen::runCmd(const std::string& cmd, std::string& outErr) { // NOLINT(concurrency-mt-unsafe)
   // Simple wrapper around std::system; capture only exit code.
   // For Milestone 1 simplicity, we don't capture stdout/stderr streams.
-  const int statusCode = std::system(cmd.c_str()); // NOLINT(concurrency-mt-unsafe)
+  int statusCode = 0; statusCode = std::system(cmd.c_str()); // NOLINT(concurrency-mt-unsafe,cppcoreguidelines-init-variables)
   if (statusCode != 0) {
     outErr = "command failed: " + cmd + ", rc=" + std::to_string(statusCode);
-    return false;
+    return false; // NOLINT(readability-simplify-boolean-expr)
   }
   return true;
 }

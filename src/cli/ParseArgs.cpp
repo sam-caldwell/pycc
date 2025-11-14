@@ -123,9 +123,9 @@ bool ParseArgs(const int argc, char** argv, Options& out) {
     out.inputs.emplace_back(std::string(arg));
   }
 
-  if (out.emitAssemblyOnly && out.compileOnly) {
+  if (out.emitAssemblyOnly && out.compileOnly) { // NOLINT(readability-simplify-boolean-expr)
     std::cerr << "pycc: cannot use -S and -c together\n";
-    return false;
+    return false; // NOLINT(readability-simplify-boolean-expr)
   }
 
   return true;

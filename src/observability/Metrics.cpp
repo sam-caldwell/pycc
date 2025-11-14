@@ -8,6 +8,67 @@
 
 namespace pycc::obs {
 
+namespace {
+constexpr double kUsPerMs = 1000.0;
+constexpr int kIndent4 = 4;
+constexpr int kIndent6 = 6;
+
+void appendDurations(std::ostringstream& oss,
+                     const std::map<std::string, uint64_t>& durations) {
+  oss << "  \"durations_ms\": {";
+  bool first = true;
+  for (const auto& [k, v] : durations) {
+    if (!first) { oss << ","; }
+    first = false;
+    const double ms = static_cast<double>(v) / kUsPerMs;
+    oss << "\n    \"" << k << "\": " << std::fixed << std::setprecision(3) << ms;
+  }
+  oss << "\n  }";
+}
+
+void appendAst(std::ostringstream& oss, const std::optional<AstGeometry>& geom) {
+  if (!geom) { return; }
+  oss << ",\n  \"ast\": { \"nodes\": " << geom->nodes
+      << ", \"max_depth\": " << geom->maxDepth << " }";
+}
+
+void appendKeyValueObject(std::ostringstream& oss,
+                          const std::unordered_map<std::string, uint64_t>& m,
+                          int indent) {
+  const std::string pad(indent, ' ');
+  bool first = true;
+  for (const auto& [k, v] : m) {
+    if (!first) { oss << ","; }
+    first = false;
+    oss << "\n" << pad << "\"" << k << "\": " << v;
+  }
+}
+
+void appendOptimizer(std::ostringstream& oss,
+                     const std::unordered_map<std::string, uint64_t>& stats) {
+  if (stats.empty()) { return; }
+  oss << ",\n  \"optimizer\": {";
+  appendKeyValueObject(oss, stats, kIndent4);
+  oss << "\n  }";
+}
+
+void appendOptimizerBreakdown(
+    std::ostringstream& oss,
+    const std::unordered_map<std::string, std::unordered_map<std::string, uint64_t>>& breakdown) {
+  if (breakdown.empty()) { return; }
+  oss << ",\n  \"optimizer_breakdown\": {";
+  bool firstPass = true;
+  for (const auto& [pass, mp] : breakdown) {
+    if (!firstPass) { oss << ","; }
+    firstPass = false;
+    oss << "\n    \"" << pass << "\": {";
+    appendKeyValueObject(oss, mp, kIndent6);
+    oss << "\n    }";
+  }
+  oss << "\n  }";
+}
+} // namespace
+
 void Metrics::start(const std::string& name) {
   active_[name] = Clock::now();
 }
@@ -21,12 +82,11 @@ void Metrics::stop(const std::string& name) {
   active_.erase(iter);
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 std::string Metrics::summaryText() const {
   std::ostringstream oss;
   oss << "== Metrics ==\n";
   for (const auto& [k, v] : durations_us_) {
-    double ms = static_cast<double>(v) / 1000.0;
+    double ms = static_cast<double>(v) / kUsPerMs;
     oss << "  " << k << ": " << std::fixed << std::setprecision(3) << ms << " ms\n";
   }
   if (geom_) {
@@ -35,48 +95,13 @@ std::string Metrics::summaryText() const {
   return oss.str();
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 std::string Metrics::summaryJson() const {
   std::ostringstream oss;
-  oss << "{\n  \"durations_ms\": {";
-  bool first = true; // NOLINT(misc-const-correctness)
-  for (const auto& [k, v] : durations_us_) {
-    if (!first) oss << ",";
-    first = false;
-    double ms = static_cast<double>(v) / 1000.0;
-    oss << "\n    \"" << k << "\": " << std::fixed << std::setprecision(3) << ms;
-  }
-  oss << "\n  }";
-  if (geom_) {
-    oss << ",\n  \"ast\": { \"nodes\": " << geom_->nodes << ", \"max_depth\": " << geom_->maxDepth << " }";
-  }
-  if (!optimizerStats_.empty()) {
-    oss << ",\n  \"optimizer\": {";
-    bool first2 = true; // NOLINT(misc-const-correctness)
-    for (const auto& [k, v] : optimizerStats_) {
-      if (!first2) oss << ",";
-      first2 = false;
-      oss << "\n    \"" << k << "\": " << v;
-    }
-    oss << "\n  }";
-  }
-  if (!optimizerBreakdown_.empty()) {
-    oss << ",\n  \"optimizer_breakdown\": {";
-    bool firstPass = true; // NOLINT(misc-const-correctness)
-    for (const auto& [pass, mp] : optimizerBreakdown_) {
-      if (!firstPass) oss << ",";
-      firstPass = false;
-      oss << "\n    \"" << pass << "\": {";
-      bool firstK = true;
-      for (const auto& [k, v] : mp) {
-        if (!firstK) oss << ",";
-        firstK = false;
-        oss << "\n      \"" << k << "\": " << v;
-      }
-      oss << "\n    }";
-    }
-    oss << "\n  }";
-  }
+  oss << "{\n";
+  appendDurations(oss, durations_us_);
+  appendAst(oss, geom_);
+  appendOptimizer(oss, optimizerStats_);
+  appendOptimizerBreakdown(oss, optimizerBreakdown_);
   oss << "\n}\n";
   return oss.str();
 }

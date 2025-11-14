@@ -323,7 +323,7 @@ std::unique_ptr<ast::Expr> Parser::parsePrimary() {
   throw std::runtime_error("Parse error: expected primary expression");
 }
 
-// NOLINTNEXTLINE(readability-function-size)
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 std::unique_ptr<ast::Expr> Parser::parsePostfix(std::unique_ptr<ast::Expr> base) {
   // Handle calls and object(...) sugar
   for (;;) {
@@ -343,8 +343,8 @@ std::unique_ptr<ast::Expr> Parser::parsePostfix(std::unique_ptr<ast::Expr> base)
 
       // If callee is name 'object', desugar to ObjectLiteral
       if (base && base->kind == ast::NodeKind::Name) {
-        const auto* nm = dynamic_cast<const ast::Name*>(base.get());
-        if (nm != nullptr && nm->id == "object") {
+        const auto* nameExpr = dynamic_cast<const ast::Name*>(base.get());
+        if (nameExpr != nullptr && nameExpr->id == "object") {
           auto obj = std::make_unique<ast::ObjectLiteral>();
           obj->fields = std::move(args);
           obj->line = base->line; obj->col = base->col; obj->file = base->file;

@@ -163,7 +163,7 @@ class Lexer : public ITokenStream {
   void pushString(const std::string& text, const std::string& name);
 
   // ITokenStream
-  const Token& peek(size_t k = 0) override;
+  const Token& peek(size_t lookahead = 0) override;
   Token next() override;
   std::vector<Token> tokens();
 
@@ -187,7 +187,7 @@ class Lexer : public ITokenStream {
   std::deque<Token> buffer_{};   // lookahead buffer
 
   // helpers
-  bool ensure(size_t k);            // ensure buffer has at least k+1 tokens
+  bool ensure(size_t lookahead);            // ensure buffer has at least k+1 tokens
   bool refill();                    // append next token to buffer
   bool readNextLine(State& st);     // load next line into state
   bool atEOF() const;               // no more inputs

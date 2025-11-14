@@ -36,14 +36,14 @@ namespace pycc::sema {
 
 using Type = ast::TypeKind;
 
-struct Sig { Type ret; std::vector<Type> params; };
+struct Sig { Type ret{Type::NoneType}; std::vector<Type> params; };
 
 static bool typeIsInt(Type typeVal) { return typeVal == Type::Int; }
 static bool typeIsBool(Type typeVal) { return typeVal == Type::Bool; }
 static bool typeIsFloat(Type typeVal) { return typeVal == Type::Float; }
 static bool typeIsStr(Type typeVal) { return typeVal == Type::Str; }
 
-static void addDiag(std::vector<Diagnostic>& diags, const std::string& msg, const ast::Node* n) {
+static void addDiag(std::vector<Diagnostic>& diags, const std::string& msg, const ast::Node* n) { // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
   Diagnostic diag;
   diag.message = msg;
   if (n != nullptr) { diag.file = n->file; diag.line = n->line; diag.col = n->col; }
@@ -97,6 +97,7 @@ struct ExpressionTyper : public ast::VisitorBase {
     mutableString.setType(out);
     mutableString.setCanonicalKey(std::string("s:") + std::to_string(n.value.size()));
   }
+  // NOLINTNEXTLINE(readability-function-size)
   void visit(const ast::ObjectLiteral& obj) override {
     out = Type::NoneType;
     for (const auto& f : obj.fields) {
@@ -117,6 +118,7 @@ struct ExpressionTyper : public ast::VisitorBase {
     out = *resolvedType; auto& mutableName = const_cast<ast::Name&>(n); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     mutableName.setType(out); mutableName.setCanonicalKey(std::string("n:") + n.id);
   }
+  // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
   void visit(const ast::Unary& unaryNode) override {
     ast::Expr* operandExpr = unaryNode.operand.get();
     if (operandExpr == nullptr) { addDiag(*diags, "null operand", &unaryNode); ok = false; return; }
@@ -126,12 +128,12 @@ struct ExpressionTyper : public ast::VisitorBase {
       if (!typeIsInt(sub.out)) { addDiag(*diags, "unary '-' requires int", &unaryNode); ok = false; return; }
       out = Type::Int; auto& mutableUnary = const_cast<ast::Unary&>(unaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       mutableUnary.setType(out);
-      if (unaryNode.operand && unaryNode.operand->canonical()) { mutableUnary.setCanonicalKey("u:neg:(" + *unaryNode.operand->canonical() + ")"); }
+      if (unaryNode.operand) { const auto& can = unaryNode.operand->canonical(); if (can) { mutableUnary.setCanonicalKey("u:neg:(" + *can + ")"); } }
     } else {
       if (!typeIsBool(sub.out)) { addDiag(*diags, "'not' requires bool", &unaryNode); ok = false; return; }
       out = Type::Bool; auto& mutableUnary2 = const_cast<ast::Unary&>(unaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       mutableUnary2.setType(out);
-      if (unaryNode.operand && unaryNode.operand->canonical()) { mutableUnary2.setCanonicalKey("u:not:(" + *unaryNode.operand->canonical() + ")"); }
+      if (unaryNode.operand) { const auto& can2 = unaryNode.operand->canonical(); if (can2) { mutableUnary2.setCanonicalKey("u:not:(" + *can2 + ")"); } }
     }
   }
   // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
@@ -155,8 +157,10 @@ struct ExpressionTyper : public ast::VisitorBase {
           (binaryNode.lhs->kind == ast::NodeKind::NoneLiteral || binaryNode.rhs->kind == ast::NodeKind::NoneLiteral)) {
         out = Type::Bool; auto& mutableBinary = const_cast<ast::Binary&>(binaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
         mutableBinary.setType(out);
-        if (binaryNode.lhs && binaryNode.rhs && binaryNode.lhs->canonical() && binaryNode.rhs->canonical()) {
-          mutableBinary.setCanonicalKey("cmp_none:(" + *binaryNode.lhs->canonical() + "," + *binaryNode.rhs->canonical() + ")");
+        if (binaryNode.lhs && binaryNode.rhs) {
+          const auto& lcan = binaryNode.lhs->canonical();
+          const auto& rcan = binaryNode.rhs->canonical();
+          if (lcan && rcan) { mutableBinary.setCanonicalKey("cmp_none:(" + *lcan + "," + *rcan + ")"); }
         }
         return;
       }
@@ -165,8 +169,10 @@ struct ExpressionTyper : public ast::VisitorBase {
       if (!(bothInt || bothFloat)) { addDiag(*diags, "comparison operands must both be int or both be float", &binaryNode); ok = false; return; }
       out = Type::Bool; auto& mutableBinary = const_cast<ast::Binary&>(binaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       mutableBinary.setType(out);
-      if (binaryNode.lhs && binaryNode.rhs && binaryNode.lhs->canonical() && binaryNode.rhs->canonical()) {
-        mutableBinary.setCanonicalKey("cmp:(" + *binaryNode.lhs->canonical() + "," + *binaryNode.rhs->canonical() + ")");
+      if (binaryNode.lhs && binaryNode.rhs) {
+        const auto& lcan = binaryNode.lhs->canonical();
+        const auto& rcan = binaryNode.rhs->canonical();
+        if (lcan && rcan) { mutableBinary.setCanonicalKey("cmp:(" + *lcan + "," + *rcan + ")"); }
       }
       return;
     }
@@ -175,8 +181,10 @@ struct ExpressionTyper : public ast::VisitorBase {
       if (!typeIsBool(lhsTyper.out) || !typeIsBool(rhsTyper.out)) { addDiag(*diags, "logical operands must be bool", &binaryNode); ok = false; return; }
       out = Type::Bool; auto& mutableBinary2 = const_cast<ast::Binary&>(binaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       mutableBinary2.setType(out);
-      if (binaryNode.lhs && binaryNode.rhs && binaryNode.lhs->canonical() && binaryNode.rhs->canonical()) {
-        mutableBinary2.setCanonicalKey("log:(" + *binaryNode.lhs->canonical() + "," + *binaryNode.rhs->canonical() + ")");
+      if (binaryNode.lhs && binaryNode.rhs) {
+        const auto& lcan = binaryNode.lhs->canonical();
+        const auto& rcan = binaryNode.rhs->canonical();
+        if (lcan && rcan) { mutableBinary2.setCanonicalKey("log:(" + *lcan + "," + *rcan + ")"); }
       }
       return;
     }
@@ -184,17 +192,21 @@ struct ExpressionTyper : public ast::VisitorBase {
     if ((binaryNode.op == ast::BinaryOperator::Add || binaryNode.op == ast::BinaryOperator::Sub || binaryNode.op == ast::BinaryOperator::Mul || binaryNode.op == ast::BinaryOperator::Div || binaryNode.op == ast::BinaryOperator::Mod) && ( (typeIsInt(lhsTyper.out)&&typeIsInt(rhsTyper.out)) || (typeIsFloat(lhsTyper.out)&&typeIsFloat(rhsTyper.out)) )) {
       auto& mutableBinary3 = const_cast<ast::Binary&>(binaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       mutableBinary3.setType(typeIsInt(lhsTyper.out) ? Type::Int : Type::Float);
-      if (binaryNode.lhs && binaryNode.rhs && binaryNode.lhs->canonical() && binaryNode.rhs->canonical()) {
-        const char* opStr = "?";
-        switch (binaryNode.op) {
-          case ast::BinaryOperator::Add: opStr = "+"; break;
-          case ast::BinaryOperator::Sub: opStr = "-"; break;
-          case ast::BinaryOperator::Mul: opStr = "*"; break;
-          case ast::BinaryOperator::Div: opStr = "/"; break;
-          case ast::BinaryOperator::Mod: opStr = "%"; break;
-          default: break;
+      if (binaryNode.lhs && binaryNode.rhs) {
+        const auto& lcan = binaryNode.lhs->canonical();
+        const auto& rcan = binaryNode.rhs->canonical();
+        if (lcan && rcan) {
+          const char* opStr = "?";
+          switch (binaryNode.op) {
+            case ast::BinaryOperator::Add: opStr = "+"; break;
+            case ast::BinaryOperator::Sub: opStr = "-"; break;
+            case ast::BinaryOperator::Mul: opStr = "*"; break;
+            case ast::BinaryOperator::Div: opStr = "/"; break;
+            case ast::BinaryOperator::Mod: opStr = "%"; break;
+            default: break;
+          }
+          mutableBinary3.setCanonicalKey(std::string("bin:") + opStr + ":(" + *lcan + "," + *rcan + ")");
         }
-        mutableBinary3.setCanonicalKey(std::string("bin:") + opStr + ":(" + *binaryNode.lhs->canonical() + "," + *binaryNode.rhs->canonical() + ")");
       }
       return;
     }
@@ -240,10 +252,10 @@ struct ExpressionTyper : public ast::VisitorBase {
     key += ")";
     mutableList.setCanonicalKey(key);
   }
-  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+  // NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
   void visit(const ast::Call& callNode) override {
     if (!callNode.callee || callNode.callee->kind != ast::NodeKind::Name) { addDiag(*diags, "unsupported callee expression", &callNode); ok = false; return; }
-    auto* nameNode = static_cast<const ast::Name*>(callNode.callee.get());
+    const auto* nameNode = static_cast<const ast::Name*>(callNode.callee.get());
     // Builtins: len(x) -> int; isinstance(x, T) -> bool
     if (nameNode->id == "len") {
       if (callNode.args.size() != 1) { addDiag(*diags, "len() takes exactly one argument", &callNode); ok = false; return; }
@@ -257,7 +269,7 @@ struct ExpressionTyper : public ast::VisitorBase {
       // First arg is an object pointer (opaque), second must be int index
       ExpressionTyper idxTyper{*env, *sigs, *retParamIdxs, *diags}; callNode.args[1]->accept(idxTyper); if (!idxTyper.ok) { ok = false; return; }
       if (!typeIsInt(idxTyper.out)) { addDiag(*diags, "obj_get index must be int", callNode.args[1].get()); ok = false; return; }
-      out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); // treat as string pointer result
+      out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); // NOLINT(cppcoreguidelines-pro-type-const-cast) treat as string pointer result
       return;
     }
     if (nameNode->id == "isinstance") {
@@ -279,12 +291,12 @@ struct ExpressionTyper : public ast::VisitorBase {
     // Interprocedural canonical propagation for trivial forwarders: f(x, ...) -> x
     if (callNode.callee && callNode.callee->kind == ast::NodeKind::Name) {
       const auto* cname = static_cast<const ast::Name*>(callNode.callee.get());
-      auto it = retParamIdxs->find(cname->id);
-      if (it != retParamIdxs->end()) {
-        const int idx = it->second;
+      auto retIdxIt = retParamIdxs->find(cname->id);
+      if (retIdxIt != retParamIdxs->end()) {
+        const int idx = retIdxIt->second;
         if (idx >= 0 && static_cast<size_t>(idx) < callNode.args.size()) {
           const auto& arg = callNode.args[idx];
-          if (arg && arg->canonical()) { mutableCall.setCanonicalKey(*arg->canonical()); }
+          if (arg) { const auto& can = arg->canonical(); if (can) { mutableCall.setCanonicalKey(*can); } }
         }
       }
     }
@@ -311,7 +323,7 @@ static bool inferExprType(const ast::Expr* expr,
   return true;
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static,readability-function-size)
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static,readability-function-size,readability-function-cognitive-complexity)
 bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
   std::unordered_map<std::string, Sig> sigs;
   for (const auto& fn : mod.functions) {
@@ -324,23 +336,27 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
   for (const auto& fn : mod.functions) {
     int retIdx = -1; bool hasReturn = false; bool consistent = true;
     std::function<void(const ast::Stmt&)> walk;
+    // NOLINTNEXTLINE(readability-function-cognitive-complexity)
     walk = [&](const ast::Stmt& st) {
       if (!consistent) return;
       if (st.kind == ast::NodeKind::ReturnStmt) {
         hasReturn = true;
-        const auto* r = static_cast<const ast::ReturnStmt*>(&st);
-        if (!(r->value && r->value->kind == ast::NodeKind::Name)) { consistent = false; return; }
-        const auto* n = static_cast<const ast::Name*>(r->value.get());
+        const auto* retStmt = dynamic_cast<const ast::ReturnStmt*>(&st); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+        if (!(retStmt && retStmt->value && retStmt->value->kind == ast::NodeKind::Name)) { consistent = false; return; }
+        const auto* nameNode = dynamic_cast<const ast::Name*>(retStmt->value.get()); // NOLINT
         int idxFound = -1;
-        for (size_t i = 0; i < fn->params.size(); ++i) { if (fn->params[i].name == n->id) { idxFound = static_cast<int>(i); break; } }
+        for (size_t i = 0; i < fn->params.size(); ++i) {
+          if (fn->params[i].name == nameNode->id) { idxFound = static_cast<int>(i); break; }
+        }
         if (idxFound < 0) { consistent = false; return; }
-        if (retIdx < 0) retIdx = idxFound; else if (retIdx != idxFound) { consistent = false; }
+        if (retIdx < 0) { retIdx = idxFound; }
+        else if (retIdx != idxFound) { consistent = false; }
         return;
       }
       if (st.kind == ast::NodeKind::IfStmt) {
-        const auto* iff = static_cast<const ast::IfStmt*>(&st);
-        for (const auto& s2 : iff->thenBody) { if (s2) walk(*s2); }
-        for (const auto& s3 : iff->elseBody) { if (s3) walk(*s3); }
+        const auto* iff = dynamic_cast<const ast::IfStmt*>(&st); // NOLINT
+        for (const auto& sThen : iff->thenBody) { if (sThen) { walk(*sThen); } }
+        for (const auto& sElse : iff->elseBody) { if (sElse) { walk(*sElse); } }
         return;
       }
     };
@@ -349,127 +365,137 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
   }
 
   for (const auto& fn : mod.functions) {
-    if (!(typeIsInt(fn->returnType) || typeIsBool(fn->returnType) || typeIsFloat(fn->returnType) || typeIsStr(fn->returnType) || fn->returnType == Type::Tuple)) { Diagnostic d; d.message = "only int/bool/float/str/tuple returns supported"; diags.push_back(std::move(d)); return false; }
+    if (!(typeIsInt(fn->returnType) || typeIsBool(fn->returnType) || typeIsFloat(fn->returnType) || typeIsStr(fn->returnType) || fn->returnType == Type::Tuple)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/tuple returns supported"; diags.push_back(std::move(diagVar)); return false; }
     TypeEnv env;
-    for (const auto& p : fn->params) {
-      if (!(typeIsInt(p.type) || typeIsBool(p.type) || typeIsFloat(p.type) || typeIsStr(p.type))) { Diagnostic d; d.message = "only int/bool/float/str params supported"; diags.push_back(std::move(d)); return false; }
-      env.define(p.name, p.type, {fn->name, 0, 0});
+    for (const auto& param : fn->params) {
+      if (!(typeIsInt(param.type) || typeIsBool(param.type) || typeIsFloat(param.type) || typeIsStr(param.type))) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str params supported"; diags.push_back(std::move(diagVar)); return false; }
+      env.define(param.name, param.type, {fn->name, 0, 0});
     }
     struct StmtChecker : public ast::VisitorBase {
       StmtChecker(const ast::FunctionDef& fn_, const std::unordered_map<std::string, Sig>& sigs_,
                   const std::unordered_map<std::string, int>& retParamIdxs_, TypeEnv& env_, std::vector<Diagnostic>& diags_)
         : fn(fn_), sigs(sigs_), retParamIdxs(retParamIdxs_), env(env_), diags(diags_) {}
-      const ast::FunctionDef& fn;
-      const std::unordered_map<std::string, Sig>& sigs;
-      const std::unordered_map<std::string, int>& retParamIdxs;
-      TypeEnv& env;
-      std::vector<Diagnostic>& diags;
+      const ast::FunctionDef& fn; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+      const std::unordered_map<std::string, Sig>& sigs; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+      const std::unordered_map<std::string, int>& retParamIdxs; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+      TypeEnv& env; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+      std::vector<Diagnostic>& diags; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
       bool ok{true};
 
-      bool infer(const ast::Expr* e, Type& out) { return inferExprType(e, env, sigs, retParamIdxs, out, diags); }
+      bool infer(const ast::Expr* expr, Type& out) { return inferExprType(expr, env, sigs, retParamIdxs, out, diags); }
 
-      void visit(const ast::AssignStmt& a) override {
-        Type t{}; if (!infer(a.value.get(), t)) { ok = false; return; }
+      void visit(const ast::AssignStmt& assignStmt) override {
+        Type typeOut{}; if (!infer(assignStmt.value.get(), typeOut)) { ok = false; return; }
         // Allow pointer-typed aggregates like list as variables
-        if (!(typeIsInt(t) || typeIsBool(t) || typeIsFloat(t) || typeIsStr(t) || t == Type::List)) {
-          addDiag(diags, "only int/bool/float/str/list variables supported", &a); ok = false; return;
+        const bool allowed = typeIsInt(typeOut) || typeIsBool(typeOut) || typeIsFloat(typeOut) || typeIsStr(typeOut) || typeOut == Type::List;
+        if (!allowed) {
+          addDiag(diags, "only int/bool/float/str/list variables supported", &assignStmt); ok = false; return;
         }
-        auto existing = env.get(a.target);
-        if (!existing) env.define(a.target, t, {a.file, a.line, a.col});
-        else if (*existing != t) { addDiag(diags, std::string("type mismatch on assignment: ") + a.target, &a); ok = false; }
+        auto existing = env.get(assignStmt.target);
+        if (!existing) { env.define(assignStmt.target, typeOut, {assignStmt.file, assignStmt.line, assignStmt.col}); }
+        else if (*existing != typeOut) { addDiag(diags, std::string("type mismatch on assignment: ") + assignStmt.target, &assignStmt); ok = false; }
       }
 
+      // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
       void visit(const ast::IfStmt& iff) override {
-        Type ct{}; if (!infer(iff.cond.get(), ct)) { ok = false; return; }
-        if (!typeIsBool(ct)) { addDiag(diags, "if condition must be bool", &iff); ok = false; return; }
-        TypeEnv thenL = env, elseL = env;
+        Type condType{}; if (!infer(iff.cond.get(), condType)) { ok = false; return; }
+        if (!typeIsBool(condType)) { addDiag(diags, "if condition must be bool", &iff); ok = false; return; }
+        TypeEnv thenL = env;
+        TypeEnv elseL = env;
         // Flow refinement for isinstance(x, T)
         if (iff.cond && iff.cond->kind == ast::NodeKind::Call) {
-          auto* call = static_cast<const ast::Call*>(iff.cond.get());
-          if (call->callee && call->callee->kind == ast::NodeKind::Name) {
-            auto* cname = static_cast<const ast::Name*>(call->callee.get());
-            if (cname->id == "isinstance" && call->args.size() == 2) {
+          const auto* call = dynamic_cast<const ast::Call*>(iff.cond.get()); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+          if ((call != nullptr) && (call->callee != nullptr) && call->callee->kind == ast::NodeKind::Name) {
+            const auto* calleeName = dynamic_cast<const ast::Name*>(call->callee.get()); // NOLINT
+            if ((calleeName != nullptr) && calleeName->id == "isinstance" && call->args.size() == 2) {
               if (call->args[0] && call->args[0]->kind == ast::NodeKind::Name && call->args[1] && call->args[1]->kind == ast::NodeKind::Name) {
-                auto* v = static_cast<const ast::Name*>(call->args[0].get());
-                auto* tname = static_cast<const ast::Name*>(call->args[1].get());
+                const auto* nameVar = dynamic_cast<const ast::Name*>(call->args[0].get()); // NOLINT
+                const auto* tname = dynamic_cast<const ast::Name*>(call->args[1].get());   // NOLINT
                 Type newT = Type::NoneType;
-                if (tname->id == "int") newT = Type::Int;
-                else if (tname->id == "bool") newT = Type::Bool;
-                else if (tname->id == "float") newT = Type::Float;
-                else if (tname->id == "str") newT = Type::Str;
-                if (newT != Type::NoneType) thenL.define(v->id, newT, {v->file, v->line, v->col});
+                if ((tname != nullptr) && tname->id == "int") { newT = Type::Int; }
+                else if ((tname != nullptr) && tname->id == "bool") { newT = Type::Bool; }
+                else if ((tname != nullptr) && tname->id == "float") { newT = Type::Float; }
+                else if ((tname != nullptr) && tname->id == "str") { newT = Type::Str; }
+                if (newT != Type::NoneType && (nameVar != nullptr)) { thenL.define(nameVar->id, newT, {nameVar->file, nameVar->line, nameVar->col}); }
               }
             }
           }
         }
         // Flow refinement for eq/ne None in condition: if (x == None) or if (x != None)
         if (iff.cond && iff.cond->kind == ast::NodeKind::BinaryExpr) {
-          auto* b = static_cast<const ast::Binary*>(iff.cond.get());
-          bool eq = (b->op == ast::BinaryOperator::Eq);
-          bool ne = (b->op == ast::BinaryOperator::Ne);
-          auto refine = [&](const ast::Expr* e1, const ast::Expr* e2, bool setNone) {
-            if (e1 && e1->kind == ast::NodeKind::Name && e2 && e2->kind == ast::NodeKind::NoneLiteral) {
-              auto* n = static_cast<const ast::Name*>(e1);
-              if (setNone) thenL.define(n->id, Type::NoneType, {n->file, n->line, n->col});
+          const auto* condBin = dynamic_cast<const ast::Binary*>(iff.cond.get()); // NOLINT
+          const bool isEq = (condBin != nullptr) && (condBin->op == ast::BinaryOperator::Eq);
+          const bool isNe = (condBin != nullptr) && (condBin->op == ast::BinaryOperator::Ne);
+          auto refine = [&](const ast::Expr* expr1, const ast::Expr* expr2, bool setNone) {
+            if (expr1 && expr1->kind == ast::NodeKind::Name && expr2 && expr2->kind == ast::NodeKind::NoneLiteral) {
+              const auto* nameExpr = dynamic_cast<const ast::Name*>(expr1); // NOLINT
+              if ((nameExpr != nullptr) && setNone) { thenL.define(nameExpr->id, Type::NoneType, {nameExpr->file, nameExpr->line, nameExpr->col}); }
             }
           };
-          if (eq) { refine(b->lhs.get(), b->rhs.get(), true); refine(b->rhs.get(), b->lhs.get(), true); }
-          if (ne) { /* else branch remains original; no-op here */ }
+          if (isEq && (condBin != nullptr)) {
+            refine(condBin->lhs.get(), condBin->rhs.get(), true);
+            refine(condBin->rhs.get(), condBin->lhs.get(), true);
+          }
+          if (isNe) { /* else branch remains original; no-op here */ }
         }
         // then branch
-        for (const auto& s2 : iff.thenBody) {
-          if (s2->kind == ast::NodeKind::AssignStmt) {
-            auto* a2 = static_cast<const ast::AssignStmt*>(s2.get());
-            Type t2{}; if (!infer(a2->value.get(), t2)) { ok = false; return; }
-            thenL.define(a2->target, t2, {a2->file, a2->line, a2->col});
-          } else if (s2->kind == ast::NodeKind::ReturnStmt) {
-            auto* r2 = static_cast<const ast::ReturnStmt*>(s2.get());
-            Type rt{}; if (!infer(r2->value.get(), rt)) { ok = false; return; }
-            if (rt != fn.returnType) { addDiag(diags, "return type mismatch in then branch", r2); ok = false; return; }
+        for (const auto& thenStmt : iff.thenBody) {
+          if (thenStmt->kind == ast::NodeKind::AssignStmt) {
+            const auto* assign2 = dynamic_cast<const ast::AssignStmt*>(thenStmt.get()); // NOLINT
+            if (assign2 == nullptr) { ok = false; return; }
+            Type type2{}; if (!infer(assign2->value.get(), type2)) { ok = false; return; }
+            thenL.define(assign2->target, type2, {assign2->file, assign2->line, assign2->col});
+          } else if (thenStmt->kind == ast::NodeKind::ReturnStmt) {
+            const auto* ret2 = dynamic_cast<const ast::ReturnStmt*>(thenStmt.get()); // NOLINT
+            if (ret2 == nullptr) { ok = false; return; }
+            Type retType{}; if (!infer(ret2->value.get(), retType)) { ok = false; return; }
+            if (retType != fn.returnType) { addDiag(diags, "return type mismatch in then branch", ret2); ok = false; return; }
           }
         }
         // else branch
-        for (const auto& s3 : iff.elseBody) {
-          if (s3->kind == ast::NodeKind::AssignStmt) {
-            auto* a3 = static_cast<const ast::AssignStmt*>(s3.get());
-            Type t3{}; if (!infer(a3->value.get(), t3)) { ok = false; return; }
-            elseL.define(a3->target, t3, {a3->file, a3->line, a3->col});
-          } else if (s3->kind == ast::NodeKind::ReturnStmt) {
-            auto* r3 = static_cast<const ast::ReturnStmt*>(s3.get());
-            Type rt{}; if (!infer(r3->value.get(), rt)) { ok = false; return; }
-            if (rt != fn.returnType) { addDiag(diags, "return type mismatch in else branch", r3); ok = false; return; }
+        for (const auto& elseStmt : iff.elseBody) {
+          if (elseStmt->kind == ast::NodeKind::AssignStmt) {
+            const auto* assign3 = dynamic_cast<const ast::AssignStmt*>(elseStmt.get()); // NOLINT
+            if (assign3 == nullptr) { ok = false; return; }
+            Type type3{}; if (!infer(assign3->value.get(), type3)) { ok = false; return; }
+            elseL.define(assign3->target, type3, {assign3->file, assign3->line, assign3->col});
+          } else if (elseStmt->kind == ast::NodeKind::ReturnStmt) {
+            const auto* ret3 = dynamic_cast<const ast::ReturnStmt*>(elseStmt.get()); // NOLINT
+            if (ret3 == nullptr) { ok = false; return; }
+            Type retType{}; if (!infer(ret3->value.get(), retType)) { ok = false; return; }
+            if (retType != fn.returnType) { addDiag(diags, "return type mismatch in else branch", ret3); ok = false; return; }
           }
         }
       }
 
-      void visit(const ast::ReturnStmt& r) override {
-        Type t{}; if (!infer(r.value.get(), t)) { ok = false; return; }
-        if (t != fn.returnType) { addDiag(diags, std::string("return type mismatch in function: ") + fn.name, &r); ok = false; }
+      void visit(const ast::ReturnStmt& retStmt) override {
+        Type valueType{}; if (!infer(retStmt.value.get(), valueType)) { ok = false; return; }
+        if (valueType != fn.returnType) { addDiag(diags, std::string("return type mismatch in function: ") + fn.name, &retStmt); ok = false; }
       }
 
-      void visit(const ast::ExprStmt& s) override { if (s.value) { Type tmp{}; (void)infer(s.value.get(), tmp); } }
+      void visit(const ast::ExprStmt& stmt) override { if (stmt.value) { Type tmp{}; (void)infer(stmt.value.get(), tmp); } }
 
-      // Unused in stmt context
-      void visit(const ast::Module&) override {}
-      void visit(const ast::FunctionDef&) override {}
-      void visit(const ast::IntLiteral&) override {}
-      void visit(const ast::BoolLiteral&) override {}
-      void visit(const ast::FloatLiteral&) override {}
-      void visit(const ast::Name&) override {}
-      void visit(const ast::Call&) override {}
-      void visit(const ast::Binary&) override {}
-      void visit(const ast::Unary&) override {}
-      void visit(const ast::StringLiteral&) override {}
-      void visit(const ast::TupleLiteral&) override {}
-      void visit(const ast::ListLiteral&) override {}
-      void visit(const ast::ObjectLiteral&) override {}
-      void visit(const ast::NoneLiteral&) override {}
+      // Unused in stmt context; name parameters for readability
+      void visit(const ast::Module& moduleNode) override { (void)moduleNode; }
+      void visit(const ast::FunctionDef& functionNode) override { (void)functionNode; }
+      void visit(const ast::IntLiteral& intNode) override { (void)intNode; }
+      void visit(const ast::BoolLiteral& boolNode) override { (void)boolNode; }
+      void visit(const ast::FloatLiteral& floatNode) override { (void)floatNode; }
+      void visit(const ast::Name& nameNode) override { (void)nameNode; }
+      void visit(const ast::Call& callNode2) override { (void)callNode2; }
+      void visit(const ast::Binary& binaryNode2) override { (void)binaryNode2; }
+      void visit(const ast::Unary& unaryNode2) override { (void)unaryNode2; }
+      void visit(const ast::StringLiteral& strNode) override { (void)strNode; }
+      void visit(const ast::TupleLiteral& tupleNode) override { (void)tupleNode; }
+      void visit(const ast::ListLiteral& listNode) override { (void)listNode; }
+      void visit(const ast::ObjectLiteral& objNode) override { (void)objNode; }
+      void visit(const ast::NoneLiteral& noneNode) override { (void)noneNode; }
     };
 
-    StmtChecker C{*fn, sigs, retParamIdxs, env, diags};
-    for (const auto& st : fn->body) {
-      st->accept(C);
-      if (!C.ok) return false;
+    StmtChecker checker{*fn, sigs, retParamIdxs, env, diags};
+    for (const auto& stmt : fn->body) {
+      stmt->accept(checker);
+      if (!checker.ok) { return false; }
     }
   }
   return diags.empty();

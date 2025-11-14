@@ -62,6 +62,28 @@ if(NOT TARGET tidy)
     endforeach()
   endif()
 
+  # Provide minimal libc++ include path on Apple to locate standard headers
+  if(APPLE)
+    # Use the active SDK as sysroot + libc++ to ensure standard headers are found.
+    find_program(XCRUN_EXECUTABLE xcrun)
+    if(XCRUN_EXECUTABLE)
+      execute_process(COMMAND ${XCRUN_EXECUTABLE} --show-sdk-path OUTPUT_VARIABLE _SDK_PATH ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+    endif()
+    if(_SDK_PATH)
+      set(TIDY_EXTRA_ARGS "-extra-arg=-isysroot" "-extra-arg=${_SDK_PATH}" "-extra-arg=-stdlib=libc++")
+    else()
+      # Fallback: try common CLT SDK location
+      set(_SDK_PATH "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+      if(EXISTS "${_SDK_PATH}")
+        set(TIDY_EXTRA_ARGS "-extra-arg=-isysroot" "-extra-arg=${_SDK_PATH}" "-extra-arg=-stdlib=libc++")
+      else()
+        set(TIDY_EXTRA_ARGS "")
+      endif()
+    endif()
+  else()
+    set(TIDY_EXTRA_ARGS "")
+  endif()
+
   add_custom_target(tidy
     COMMAND ${CMAKE_COMMAND} -E echo "[tidy] Running clang-tidy (using .clang-tidy)"
     COMMAND clang-tidy -p ${CMAKE_BINARY_DIR} --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy ${TIDY_EXTRA_ARGS} ${TIDY_SOURCES}
