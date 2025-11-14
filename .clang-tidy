@@ -32,7 +32,6 @@ Checks: >
   -misc-coroutine-hostile-raii,
   -misc-definitions-in-headers,
   -misc-header-include-cycle,
-  # Disable include-cleaner; heavy forward-decls and aliases confuse it
   -misc-include-cleaner,
   -misc-misleading-bidirectional,
   -misc-misleading-identifier,
@@ -44,7 +43,7 @@ Checks: >
   -misc-throw-by-value-catch-by-reference,
   -misc-uniqueptr-reset-release,
   -misc-unused-alias-decls,
-  -misc-unused-parameters,  # we should be disabling this one on a line-by-line basis to be intentional.
+  -misc-unused-parameters,
   -misc-unused-using-decls,
   -misc-use-internal-linkage,
   -modernize-*,

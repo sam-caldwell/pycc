@@ -2,173 +2,177 @@
  * Name: pycc::opt::AlgebraicSimplify (impl)
  */
 #include "optimizer/AlgebraicSimplify.h"
+#include "ast/VisitorBase.h"
 #include <memory>
 
 namespace pycc::opt {
 using namespace pycc::ast;
 
-static bool isZero(const Expr* expr) {
+namespace {
+inline bool isZero(const Expr* expr) {
   if (expr == nullptr) { return false; }
   if (expr->kind == NodeKind::IntLiteral) { return static_cast<const IntLiteral*>(expr)->value == 0; }
   if (expr->kind == NodeKind::FloatLiteral) { return static_cast<const FloatLiteral*>(expr)->value == 0.0; }
   return false;
 }
-static bool isOne(const Expr* expr) {
+inline bool isOne(const Expr* expr) {
   if (expr == nullptr) { return false; }
   if (expr->kind == NodeKind::IntLiteral) { return static_cast<const IntLiteral*>(expr)->value == 1; }
   if (expr->kind == NodeKind::FloatLiteral) { return static_cast<const FloatLiteral*>(expr)->value == 1.0; }
   return false;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-static bool applyIntRules(Binary& bin, std::unique_ptr<Expr>& holder, size_t& changes,
-                          std::unordered_map<std::string, uint64_t>& stats) {
-  const Expr* left = bin.lhs.get();
-  const Expr* right = bin.rhs.get();
-  if (!(left && right)) { return false; }
-  if (left->kind != NodeKind::IntLiteral && right->kind != NodeKind::IntLiteral) { return false; }
-  switch (bin.op) {
-    case BinaryOperator::Add:
-      if (isZero(left)) { holder = std::move(bin.rhs); ++changes; stats["algebraic_int"]++; return true; }
-      if (isZero(right)) { holder = std::move(bin.lhs); ++changes; stats["algebraic_int"]++; return true; }
-      break;
-    case BinaryOperator::Sub:
-      if (isZero(right)) { holder = std::move(bin.lhs); ++changes; stats["algebraic_int"]++; return true; }
-      break;
-    case BinaryOperator::Mul:
-      if (isZero(left) || isZero(right)) { holder = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_int"]++; return true; }
-      if (isOne(left)) { holder = std::move(bin.rhs); ++changes; stats["algebraic_int"]++; return true; }
-      if (isOne(right)) { holder = std::move(bin.lhs); ++changes; stats["algebraic_int"]++; return true; }
-      break;
-    case BinaryOperator::Div:
-      if (isOne(right)) { holder = std::move(bin.lhs); ++changes; stats["algebraic_int"]++; return true; }
-      break;
-    default: break;
+struct SimplifyVisitor : public ast::VisitorBase {
+  std::unordered_map<std::string, uint64_t>& stats;
+  size_t& changes;
+  std::unique_ptr<Expr>* slot{nullptr};
+  std::unique_ptr<Stmt>* stmtSlot{nullptr};
+
+  explicit SimplifyVisitor(std::unordered_map<std::string, uint64_t>& s, size_t& c)
+      : stats(s), changes(c) {}
+
+  void rewrite(std::unique_ptr<Expr>& e) {
+    if (!e) { return; }
+    slot = &e;
+    e->accept(*this);
   }
-  return false;
-}
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-static bool applyFloatRules(Binary& bin, std::unique_ptr<Expr>& holder, size_t& changes,
-                            std::unordered_map<std::string, uint64_t>& stats) {
-  const Expr* left = bin.lhs.get();
-  const Expr* right = bin.rhs.get();
-  if (!(left && right)) { return false; }
-  if (left->kind != NodeKind::FloatLiteral && right->kind != NodeKind::FloatLiteral) { return false; }
-  switch (bin.op) {
-    case BinaryOperator::Add:
-      if (isZero(left)) { holder = std::move(bin.rhs); ++changes; stats["algebraic_float"]++; return true; }
-      if (isZero(right)) { holder = std::move(bin.lhs); ++changes; stats["algebraic_float"]++; return true; }
-      break;
-    case BinaryOperator::Sub:
-      if (isZero(right)) { holder = std::move(bin.lhs); ++changes; stats["algebraic_float"]++; return true; }
-      break;
-    case BinaryOperator::Mul:
-      if (isZero(left) || isZero(right)) { holder = std::make_unique<FloatLiteral>(0.0); ++changes; stats["algebraic_float"]++; return true; }
-      if (isOne(left)) { holder = std::move(bin.rhs); ++changes; stats["algebraic_float"]++; return true; }
-      if (isOne(right)) { holder = std::move(bin.lhs); ++changes; stats["algebraic_float"]++; return true; }
-      break;
-    case BinaryOperator::Div:
-      if (isOne(right)) { holder = std::move(bin.lhs); ++changes; stats["algebraic_float"]++; return true; }
-      break;
-    default: break;
+  void touch(std::unique_ptr<Stmt>& s) {
+    if (!s) { return; }
+    stmtSlot = &s;
+    s->accept(*this);
   }
-  return false;
-}
+  void walkBlock(std::vector<std::unique_ptr<Stmt>>& body) {
+    for (auto& st : body) { touch(st); }
+  }
 
-static bool applyCanonicalSub(Binary& bin, std::unique_ptr<Expr>& holder, size_t& changes,
-                              std::unordered_map<std::string, uint64_t>& stats) {
-  if (bin.op != BinaryOperator::Sub) { return false; }
-  if (!(bin.lhs && bin.rhs)) { return false; }
-  const auto& canLeft = bin.lhs->canonical();
-  const auto& canRight = bin.rhs->canonical();
-  if (!canLeft || !canRight) { return false; }
-  if (!(*canLeft == *canRight)) { return false; }
-  auto leftType = bin.lhs->type(); auto rightType = bin.rhs->type();
-  if (!(leftType && rightType) || !(*leftType == *rightType)) { return false; }
-  if (*leftType == TypeKind::Int) { holder = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_int"]++; return true; }
-  if (*leftType == TypeKind::Float) { holder = std::make_unique<FloatLiteral>(0.0); ++changes; stats["algebraic_float"]++; return true; }
-  return false;
-}
+  // Expr visitors
+  // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
+  void visit(const Binary&) override {
+    auto* bin = static_cast<Binary*>(slot->get());
+    rewrite(bin->lhs);
+    rewrite(bin->rhs);
 
-// Forward decl since simplifyBinary dispatches recursively
-static bool simplifyExpr(std::unique_ptr<Expr>& expr, size_t& changes,
-                         std::unordered_map<std::string, uint64_t>& stats);
-
-// NOLINTNEXTLINE(readability-function-size)
-static bool simplifyBinary(std::unique_ptr<Expr>& expr, size_t& changes,
-                           std::unordered_map<std::string, uint64_t>& stats) {
-  auto* bin = static_cast<Binary*>(expr.get());
-  simplifyExpr(bin->lhs, changes, stats);
-  simplifyExpr(bin->rhs, changes, stats);
-  std::unique_ptr<Expr> out;
-  if (applyIntRules(*bin, out, changes, stats)) { expr = std::move(out); return true; }
-  if (applyFloatRules(*bin, out, changes, stats)) { expr = std::move(out); return true; }
-  if (applyCanonicalSub(*bin, out, changes, stats)) { expr = std::move(out); return true; }
-  return false;
-}
-
-// NOLINTNEXTLINE(readability-function-size)
-static bool simplifyExpr(std::unique_ptr<Expr>& expr, size_t& changes, std::unordered_map<std::string,uint64_t>& stats) {
-  if (!expr) { return false; }
-  switch (expr->kind) {
-    case NodeKind::BinaryExpr:
-      return simplifyBinary(expr, changes, stats);
-    case NodeKind::UnaryExpr: {
-      auto* unaryExpr = static_cast<Unary*>(expr.get());
-      // Double negation: -(-x) => x
-      if (unaryExpr->op == UnaryOperator::Neg && unaryExpr->operand && unaryExpr->operand->kind == NodeKind::UnaryExpr) {
-        auto* inner = static_cast<Unary*>(unaryExpr->operand.get());
-        if (inner->op == UnaryOperator::Neg && inner->operand) {
-          expr = std::move(inner->operand);
-          ++changes; stats["double_neg"]++;
-          return true;
+    std::unique_ptr<Expr> replacement;
+    const Expr* left = bin->lhs.get();
+    const Expr* right = bin->rhs.get();
+    if (left && right) {
+      // Int rules
+      if (left->kind == NodeKind::IntLiteral || right->kind == NodeKind::IntLiteral) {
+        switch (bin->op) {
+          case BinaryOperator::Add:
+            if (isZero(left)) { replacement = std::move(bin->rhs); } else if (isZero(right)) { replacement = std::move(bin->lhs); }
+            if (replacement) { ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
+            break;
+          case BinaryOperator::Sub:
+            if (isZero(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
+            break;
+          case BinaryOperator::Mul:
+            if (isZero(left) || isZero(right)) { replacement = std::make_unique<IntLiteral>(0); }
+            else if (isOne(left)) { replacement = std::move(bin->rhs); }
+            else if (isOne(right)) { replacement = std::move(bin->lhs); }
+            if (replacement) { ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
+            break;
+          case BinaryOperator::Div:
+            if (isOne(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
+            break;
+          default: break;
         }
       }
-      return simplifyExpr(unaryExpr->operand, changes, stats);
+      // Float rules
+      if (left->kind == NodeKind::FloatLiteral || right->kind == NodeKind::FloatLiteral) {
+        switch (bin->op) {
+          case BinaryOperator::Add:
+            if (isZero(left)) { replacement = std::move(bin->rhs); } else if (isZero(right)) { replacement = std::move(bin->lhs); }
+            if (replacement) { ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+            break;
+          case BinaryOperator::Sub:
+            if (isZero(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+            break;
+          case BinaryOperator::Mul:
+            if (isZero(left) || isZero(right)) { replacement = std::make_unique<FloatLiteral>(0.0); }
+            else if (isOne(left)) { replacement = std::move(bin->rhs); }
+            else if (isOne(right)) { replacement = std::move(bin->lhs); }
+            if (replacement) { ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+            break;
+          case BinaryOperator::Div:
+            if (isOne(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+            break;
+          default: break;
+        }
+      }
+      // Canonical x - x -> 0 (typed)
+      if (bin->op == BinaryOperator::Sub) {
+        const auto& cl = bin->lhs->canonical();
+        const auto& cr = bin->rhs->canonical();
+        if (cl && cr && *cl == *cr) {
+          auto tl = bin->lhs->type(); auto tr = bin->rhs->type();
+          if (tl && tr && *tl == *tr) {
+            if (*tl == TypeKind::Int) { replacement = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
+            if (*tl == TypeKind::Float) { replacement = std::make_unique<FloatLiteral>(0.0); ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+          }
+        }
+      }
     }
-    case NodeKind::Call: {
-      auto* call = static_cast<Call*>(expr.get());
-      if (call->callee) { simplifyExpr(call->callee, changes, stats); }
-      for (auto& arg : call->args) { simplifyExpr(arg, changes, stats); }
-      return false;
-    }
-    default:
-      return false;
   }
-}
 
-// NOLINTNEXTLINE(readability-function-size)
-static void simplifyBlock(std::vector<std::unique_ptr<Stmt>>& body, size_t& changes,
-                          std::unordered_map<std::string, uint64_t>& stats) {
-  for (auto& stmt : body) {
-    switch (stmt->kind) {
-      case NodeKind::AssignStmt: {
-        auto* assign = static_cast<AssignStmt*>(stmt.get());
-        simplifyExpr(assign->value, changes, stats);
-        break;
+  void visit(const Unary&) override {
+    auto* un = static_cast<Unary*>(slot->get());
+    if (un->op == UnaryOperator::Neg && un->operand && un->operand->kind == NodeKind::UnaryExpr) {
+      auto* inner = static_cast<Unary*>(un->operand.get());
+      if (inner->op == UnaryOperator::Neg && inner->operand) {
+        *slot = std::move(inner->operand); ++changes; stats["double_neg"]++;
+        return;
       }
-      case NodeKind::ReturnStmt: {
-        auto* ret = static_cast<ReturnStmt*>(stmt.get());
-        simplifyExpr(ret->value, changes, stats);
-        break;
-      }
-      case NodeKind::IfStmt: {
-        auto* ifStmt = static_cast<IfStmt*>(stmt.get());
-        simplifyExpr(ifStmt->cond, changes, stats);
-        simplifyBlock(ifStmt->thenBody, changes, stats);
-        simplifyBlock(ifStmt->elseBody, changes, stats);
-        break;
-      }
-      default: break;
     }
+    rewrite(un->operand);
   }
-}
+
+  void visit(const Call&) override {
+    auto* call = static_cast<Call*>(slot->get());
+    if (call->callee) { rewrite(call->callee); }
+    for (auto& arg : call->args) { rewrite(arg); }
+  }
+
+  // Stmt visitors
+  void visit(const AssignStmt&) override {
+    auto* as = static_cast<AssignStmt*>(stmtSlot->get());
+    rewrite(as->value);
+  }
+  void visit(const ReturnStmt&) override {
+    auto* rs = static_cast<ReturnStmt*>(stmtSlot->get());
+    rewrite(rs->value);
+  }
+  void visit(const IfStmt&) override {
+    auto* ifs = static_cast<IfStmt*>(stmtSlot->get());
+    rewrite(ifs->cond);
+    walkBlock(ifs->thenBody);
+    walkBlock(ifs->elseBody);
+  }
+
+  // No-ops for other nodes
+  void visit(const Module&) override {}
+  void visit(const FunctionDef&) override {}
+  void visit(const ExprStmt&) override {}
+  void visit(const IntLiteral&) override {}
+  void visit(const BoolLiteral&) override {}
+  void visit(const FloatLiteral&) override {}
+  void visit(const StringLiteral&) override {}
+  void visit(const NoneLiteral&) override {}
+  void visit(const Name&) override {}
+  void visit(const TupleLiteral&) override {}
+  void visit(const ListLiteral&) override {}
+  void visit(const ObjectLiteral&) override {}
+};
+
+} // namespace
+
 
 size_t AlgebraicSimplify::run(Module& module) {
   size_t changes = 0;
   stats_.clear();
-  for (auto& func : module.functions) { simplifyBlock(func->body, changes, stats_); }
+  SimplifyVisitor vis(stats_, changes);
+  for (auto& func : module.functions) { vis.walkBlock(func->body); }
   return changes;
 }
 

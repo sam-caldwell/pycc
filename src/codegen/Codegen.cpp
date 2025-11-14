@@ -143,25 +143,44 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     sigs[funcSig->name] = std::move(sig);
   }
 
-  // Lightweight interprocedural summary: functions that consistently return the same parameter index
+  // Lightweight interprocedural summary: functions that consistently return the same parameter index (top-level only)
   std::unordered_map<std::string, int> retParamIdxs; // func -> param index
-  for (const auto& f : mod.functions) {
-    int retIdx = -1; bool hasReturn = false; bool consistent = true;
-    for (const auto& st : f->body) {
-      if (!consistent) break;
-      if (st->kind == ast::NodeKind::ReturnStmt) {
-        hasReturn = true;
-        const auto* r = dynamic_cast<const ast::ReturnStmt*>(st.get());
-        if (!(r && r->value && r->value->kind == ast::NodeKind::Name)) { consistent = false; break; }
-        const auto* n = dynamic_cast<const ast::Name*>(r->value.get());
-        if (!n) { consistent = false; break; }
-        int idxFound = -1;
-        for (size_t i = 0; i < f->params.size(); ++i) { if (f->params[i].name == n->id) { idxFound = static_cast<int>(i); break; } }
-        if (idxFound < 0) { consistent = false; break; }
-        if (retIdx < 0) retIdx = idxFound; else if (retIdx != idxFound) { consistent = false; break; }
-      }
+  struct ReturnParamIdxScan : public ast::VisitorBase {
+    const ast::FunctionDef* fn{nullptr};
+    int retIdx{-1}; bool hasReturn{false}; bool consistent{true};
+    void visit(const ast::ReturnStmt& r) override {
+      if (!consistent) { return; }
+      hasReturn = true;
+      if (!(r.value && r.value->kind == ast::NodeKind::Name)) { consistent = false; return; }
+      const auto* n = static_cast<const ast::Name*>(r.value.get());
+      int idxFound = -1;
+      for (size_t i = 0; i < fn->params.size(); ++i) { if (fn->params[i].name == n->id) { idxFound = static_cast<int>(i); break; } }
+      if (idxFound < 0) { consistent = false; return; }
+      if (retIdx < 0) retIdx = idxFound; else if (retIdx != idxFound) { consistent = false; }
     }
-    if (hasReturn && consistent && retIdx >= 0) { retParamIdxs[f->name] = retIdx; }
+    // No-op for other nodes (we only scan top-level statements)
+    void visit(const ast::Module&) override {}
+    void visit(const ast::FunctionDef&) override {}
+    void visit(const ast::AssignStmt&) override {}
+    void visit(const ast::IfStmt&) override {}
+    void visit(const ast::ExprStmt&) override {}
+    void visit(const ast::IntLiteral&) override {}
+    void visit(const ast::BoolLiteral&) override {}
+    void visit(const ast::FloatLiteral&) override {}
+    void visit(const ast::StringLiteral&) override {}
+    void visit(const ast::NoneLiteral&) override {}
+    void visit(const ast::Name&) override {}
+    void visit(const ast::Call&) override {}
+    void visit(const ast::Binary&) override {}
+    void visit(const ast::Unary&) override {}
+    void visit(const ast::TupleLiteral&) override {}
+    void visit(const ast::ListLiteral&) override {}
+    void visit(const ast::ObjectLiteral&) override {}
+  };
+  for (const auto& f : mod.functions) {
+    ReturnParamIdxScan scan; scan.fn = f.get();
+    for (const auto& st : f->body) { st->accept(scan); if (!scan.consistent) break; }
+    if (scan.hasReturn && scan.consistent && scan.retIdx >= 0) { retParamIdxs[f->name] = scan.retIdx; }
   }
 
   // Collect string literals to emit as global constants
@@ -267,23 +286,38 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     std::vector<std::string> tupleElemTys;
     if (retStr == nullptr) {
       if (func->returnType == ast::TypeKind::Tuple) {
-        // Analyze function body for a tuple literal return to infer element types
-        const ast::TupleLiteral* firstTup = nullptr;
-        for (const auto& st : func->body) {
-          if (st->kind == ast::NodeKind::ReturnStmt) {
-            const auto* r = dynamic_cast<const ast::ReturnStmt*>(st.get());
-            if ((r != nullptr) && r->value && r->value->kind == ast::NodeKind::TupleLiteral) {
-              firstTup = dynamic_cast<const ast::TupleLiteral*>(r->value.get());
-              break;
-            }
+        // Analyze function body for a tuple literal return to infer element types (top-level only)
+        struct TupleReturnFinder : public ast::VisitorBase {
+          const ast::TupleLiteral* found{nullptr};
+          void visit(const ast::ReturnStmt& r) override {
+            if (!found && r.value && r.value->kind == ast::NodeKind::TupleLiteral) { found = static_cast<const ast::TupleLiteral*>(r.value.get()); }
           }
-        }
-        size_t arity = (firstTup != nullptr) ? firstTup->elements.size() : 2;
+          // no-ops for other nodes
+          void visit(const ast::Module&) override {}
+          void visit(const ast::FunctionDef&) override {}
+          void visit(const ast::AssignStmt&) override {}
+          void visit(const ast::IfStmt&) override {}
+          void visit(const ast::ExprStmt&) override {}
+          void visit(const ast::IntLiteral&) override {}
+          void visit(const ast::BoolLiteral&) override {}
+          void visit(const ast::FloatLiteral&) override {}
+          void visit(const ast::StringLiteral&) override {}
+          void visit(const ast::NoneLiteral&) override {}
+          void visit(const ast::Name&) override {}
+          void visit(const ast::Call&) override {}
+          void visit(const ast::Binary&) override {}
+          void visit(const ast::Unary&) override {}
+          void visit(const ast::TupleLiteral&) override {}
+          void visit(const ast::ListLiteral&) override {}
+          void visit(const ast::ObjectLiteral&) override {}
+        } finder;
+        for (const auto& st : func->body) { st->accept(finder); if (finder.found) break; }
+        size_t arity = (finder.found != nullptr) ? finder.found->elements.size() : 2;
         if (arity == 0) { arity = 2; } // fallback
         for (size_t i = 0; i < arity; ++i) {
           std::string ty = "i32";
-          if (firstTup != nullptr) {
-            const auto* e = firstTup->elements[i].get();
+          if (finder.found != nullptr) {
+            const auto* e = finder.found->elements[i].get();
             if (e->kind == ast::NodeKind::FloatLiteral) { ty = "double"; }
             else if (e->kind == ast::NodeKind::BoolLiteral) { ty = "i1"; }
           }
