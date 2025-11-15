@@ -2,25 +2,43 @@
  * Name: pycc::opt::AlgebraicSimplify (impl)
  */
 #include "optimizer/AlgebraicSimplify.h"
+#include "ast/BinaryOperator.h"
+#include "ast/BoolLiteral.h"
+#include "ast/Expr.h"
+#include "ast/FloatLiteral.h"
+#include "ast/IntLiteral.h"
+#include "ast/NodeKind.h"
+#include "ast/Stmt.h"
+#include "ast/StringLiteral.h"
+#include "ast/TypeKind.h"
+#include "ast/UnaryOperator.h"
 #include "ast/VisitorBase.h"
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace pycc::opt {
 using namespace pycc::ast;
 
-namespace {
-inline bool isZero(const Expr* expr) {
+// Literal classification helpers at file scope
+static inline bool isZero(const Expr* expr) {
   if (expr == nullptr) { return false; }
   if (expr->kind == NodeKind::IntLiteral) { return static_cast<const IntLiteral*>(expr)->value == 0; }
   if (expr->kind == NodeKind::FloatLiteral) { return static_cast<const FloatLiteral*>(expr)->value == 0.0; }
   return false;
 }
-inline bool isOne(const Expr* expr) {
+static inline bool isOne(const Expr* expr) {
   if (expr == nullptr) { return false; }
   if (expr->kind == NodeKind::IntLiteral) { return static_cast<const IntLiteral*>(expr)->value == 1; }
   if (expr->kind == NodeKind::FloatLiteral) { return static_cast<const FloatLiteral*>(expr)->value == 1.0; }
   return false;
 }
+
+namespace {
 
 struct SimplifyVisitor : public ast::VisitorBase {
   std::unordered_map<std::string, uint64_t>& stats;
@@ -28,27 +46,28 @@ struct SimplifyVisitor : public ast::VisitorBase {
   std::unique_ptr<Expr>* slot{nullptr};
   std::unique_ptr<Stmt>* stmtSlot{nullptr};
 
-  explicit SimplifyVisitor(std::unordered_map<std::string, uint64_t>& s, size_t& c)
-      : stats(s), changes(c) {}
+  explicit SimplifyVisitor(std::unordered_map<std::string, uint64_t>& statsMap, size_t& changeCount)
+      : stats(statsMap), changes(changeCount) {}
 
-  void rewrite(std::unique_ptr<Expr>& e) {
-    if (!e) { return; }
-    slot = &e;
-    e->accept(*this);
+  void rewrite(std::unique_ptr<Expr>& expr) {
+    if (!expr) { return; }
+    slot = &expr;
+    expr->accept(*this);
   }
 
-  void touch(std::unique_ptr<Stmt>& s) {
-    if (!s) { return; }
-    stmtSlot = &s;
-    s->accept(*this);
+  void touch(std::unique_ptr<Stmt>& stmt) {
+    if (!stmt) { return; }
+    stmtSlot = &stmt;
+    stmt->accept(*this);
   }
   void walkBlock(std::vector<std::unique_ptr<Stmt>>& body) {
-    for (auto& st : body) { touch(st); }
+    for (auto& stmt : body) { touch(stmt); }
   }
 
   // Expr visitors
   // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
-  void visit(const Binary&) override {
+  void visit(const Binary& binary) override {
+    (void)binary;
     auto* bin = static_cast<Binary*>(slot->get());
     rewrite(bin->lhs);
     rewrite(bin->rhs);
@@ -103,66 +122,71 @@ struct SimplifyVisitor : public ast::VisitorBase {
       }
       // Canonical x - x -> 0 (typed)
       if (bin->op == BinaryOperator::Sub) {
-        const auto& cl = bin->lhs->canonical();
-        const auto& cr = bin->rhs->canonical();
-        if (cl && cr && *cl == *cr) {
-          auto tl = bin->lhs->type(); auto tr = bin->rhs->type();
-          if (tl && tr && *tl == *tr) {
-            if (*tl == TypeKind::Int) { replacement = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
-            if (*tl == TypeKind::Float) { replacement = std::make_unique<FloatLiteral>(0.0); ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+        const auto& canonLhs = bin->lhs->canonical();
+        const auto& canonRhs = bin->rhs->canonical();
+        if (canonLhs && canonRhs && *canonLhs == *canonRhs) {
+          auto typeL = bin->lhs->type(); auto typeR = bin->rhs->type();
+          if (typeL && typeR && *typeL == *typeR) {
+            if (*typeL == TypeKind::Int) { replacement = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
+            if (*typeL == TypeKind::Float) { replacement = std::make_unique<FloatLiteral>(0.0); ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
           }
         }
       }
     }
   }
 
-  void visit(const Unary&) override {
-    auto* un = static_cast<Unary*>(slot->get());
-    if (un->op == UnaryOperator::Neg && un->operand && un->operand->kind == NodeKind::UnaryExpr) {
-      auto* inner = static_cast<Unary*>(un->operand.get());
+  void visit(const Unary& unary) override {
+    (void)unary;
+    auto* unaryNode = static_cast<Unary*>(slot->get());
+    if (unaryNode->op == UnaryOperator::Neg && unaryNode->operand && unaryNode->operand->kind == NodeKind::UnaryExpr) {
+      auto* inner = static_cast<Unary*>(unaryNode->operand.get());
       if (inner->op == UnaryOperator::Neg && inner->operand) {
         *slot = std::move(inner->operand); ++changes; stats["double_neg"]++;
         return;
       }
     }
-    rewrite(un->operand);
+    rewrite(unaryNode->operand);
   }
 
-  void visit(const Call&) override {
+  void visit(const Call& callExpr) override {
+    (void)callExpr;
     auto* call = static_cast<Call*>(slot->get());
     if (call->callee) { rewrite(call->callee); }
     for (auto& arg : call->args) { rewrite(arg); }
   }
 
   // Stmt visitors
-  void visit(const AssignStmt&) override {
-    auto* as = static_cast<AssignStmt*>(stmtSlot->get());
-    rewrite(as->value);
+  void visit(const AssignStmt& assignStmt) override {
+    (void)assignStmt;
+    auto* assignNode = static_cast<AssignStmt*>(stmtSlot->get());
+    rewrite(assignNode->value);
   }
-  void visit(const ReturnStmt&) override {
-    auto* rs = static_cast<ReturnStmt*>(stmtSlot->get());
-    rewrite(rs->value);
+  void visit(const ReturnStmt& retStmt) override {
+    (void)retStmt;
+    auto* retNode = static_cast<ReturnStmt*>(stmtSlot->get());
+    rewrite(retNode->value);
   }
-  void visit(const IfStmt&) override {
-    auto* ifs = static_cast<IfStmt*>(stmtSlot->get());
-    rewrite(ifs->cond);
-    walkBlock(ifs->thenBody);
-    walkBlock(ifs->elseBody);
+  void visit(const IfStmt& ifStmt) override {
+    (void)ifStmt;
+    auto* ifNode = static_cast<IfStmt*>(stmtSlot->get());
+    rewrite(ifNode->cond);
+    walkBlock(ifNode->thenBody);
+    walkBlock(ifNode->elseBody);
   }
 
   // No-ops for other nodes
-  void visit(const Module&) override {}
-  void visit(const FunctionDef&) override {}
-  void visit(const ExprStmt&) override {}
-  void visit(const IntLiteral&) override {}
-  void visit(const BoolLiteral&) override {}
-  void visit(const FloatLiteral&) override {}
-  void visit(const StringLiteral&) override {}
-  void visit(const NoneLiteral&) override {}
-  void visit(const Name&) override {}
-  void visit(const TupleLiteral&) override {}
-  void visit(const ListLiteral&) override {}
-  void visit(const ObjectLiteral&) override {}
+  void visit(const Module& module) override { (void)module; }
+  void visit(const FunctionDef& functionDef) override { (void)functionDef; }
+  void visit(const ExprStmt& exprStmt) override { (void)exprStmt; }
+  void visit(const IntLiteral& intLiteral) override { (void)intLiteral; }
+  void visit(const BoolLiteral& boolLiteral) override { (void)boolLiteral; }
+  void visit(const FloatLiteral& floatLiteral) override { (void)floatLiteral; }
+  void visit(const StringLiteral& stringLiteral) override { (void)stringLiteral; }
+  void visit(const NoneLiteral& noneLiteral) override { (void)noneLiteral; }
+  void visit(const Name& name) override { (void)name; }
+  void visit(const TupleLiteral& tupleLiteral) override { (void)tupleLiteral; }
+  void visit(const ListLiteral& listLiteral) override { (void)listLiteral; }
+  void visit(const ObjectLiteral& objectLiteral) override { (void)objectLiteral; }
 };
 
 } // namespace

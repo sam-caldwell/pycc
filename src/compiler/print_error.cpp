@@ -1,7 +1,7 @@
 #include "compiler/Compiler.h"
 #include "sema/Sema.h"
-#include <fstream>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <string_view>
 
@@ -15,13 +15,13 @@ static void write_str(const char* str) {
   (void)write(2, str, static_cast<unsigned long>(len));
 }
 
-static void write_str(std::string_view sv) {
-  (void)write(2, sv.data(), static_cast<unsigned long>(sv.size()));
+static void write_str(std::string_view strView) {
+  (void)write(2, strView.data(), static_cast<unsigned long>(strView.size()));
 }
 
 static void write_int(int value) {
-  const auto s = std::to_string(value);
-  (void)write(2, s.c_str(), static_cast<unsigned long>(s.size()));
+  const auto str = std::to_string(value);
+  (void)write(2, str.c_str(), static_cast<unsigned long>(str.size()));
 }
 
 // ANSI fragments
@@ -46,12 +46,12 @@ static void print_label(bool color) {
 
 static void print_source_with_caret(const sema::Diagnostic& diag) {
   if (diag.file.empty() || diag.line <= 0 || diag.col <= 0) { return; }
-  std::ifstream in(diag.file);
-  if (!in) { return; }
+  std::ifstream input(diag.file);
+  if (!input) { return; }
   std::string lineStr;
   int curLine = 1;
-  while (curLine < diag.line && std::getline(in, lineStr)) { ++curLine; }
-  if (curLine != diag.line || !std::getline(in, lineStr)) { return; }
+  while (curLine < diag.line && std::getline(input, lineStr)) { ++curLine; }
+  if (curLine != diag.line || !std::getline(input, lineStr)) { return; }
   write_str("  "); write_str(lineStr.c_str()); write_str("\n");
   write_str("  ");
   for (int i = 1; i < diag.col; ++i) { write_str(" "); }

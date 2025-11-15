@@ -4,8 +4,13 @@
  */
 #include "lexer/Lexer.h"
 #include <cctype>
+#include <cstddef>
 #include <fstream>
+#include <memory>
 #include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace pycc::lex {
 
@@ -80,8 +85,8 @@ bool Lexer::emitIndentTokens(State& state, std::vector<Token>& out, const int ba
   size_t idx = 0; size_t spaces = 0;
   while (idx < state.line.size() && state.line[idx] == ' ') { ++idx; ++spaces; }
   // Empty or comment line: emit Newline and skip indent changes
-  bool allSpace = (idx >= state.line.size());
-  bool comment = (!allSpace && state.line[idx] == '#');
+  const bool allSpace = (idx >= state.line.size());
+  const bool comment = (!allSpace && state.line[idx] == '#');
   if (allSpace || comment) {
     Token tok; tok.kind = TokenKind::Newline; tok.text = "\n"; tok.file = state.src->name(); tok.line = state.lineNo; tok.col = 1;
     out.push_back(std::move(tok));
@@ -129,7 +134,7 @@ Token Lexer::scanOne(State& state) {
     return tok;
   };
 
-  char chr = line[idx];
+  const char chr = line[idx];
   if (chr == ' ' || chr == '\t') { ++idx; return scanOne(state); }
   if (chr == '#') {
     state.index = line.size();
@@ -149,11 +154,11 @@ Token Lexer::scanOne(State& state) {
   if (chr == ',') { ++idx; return makeTok(TokenKind::Comma, idx-1, idx); }
   if (chr == '+') { ++idx; return makeTok(TokenKind::Plus, idx-1, idx); }
   if (chr == '"' || chr == '\'') {
-    char quote = chr;
+    const char quote = chr;
     size_t jpos = idx + 1;
     while (jpos < line.size() && line[jpos] != quote) { ++jpos; }
     // consume closing quote if present
-    size_t endPos = (jpos < line.size() && line[jpos] == quote) ? (jpos + 1) : jpos;
+    const size_t endPos = (jpos < line.size() && line[jpos] == quote) ? (jpos + 1) : jpos;
     const Token tok = makeTok(TokenKind::String, idx, endPos);
     idx = endPos;
     return tok;
@@ -176,7 +181,7 @@ Token Lexer::scanOne(State& state) {
     if (idx < line.size() && (line[idx] == 'e' || line[idx] == 'E')) {
       ++idx;
       if (idx < line.size() && (line[idx] == '+' || line[idx] == '-')) { ++idx; }
-      size_t startIdx = idx;
+      const size_t startIdx = idx;
       while (idx < line.size() && std::isdigit(static_cast<unsigned char>(line[idx])) != 0) { ++idx; }
       if (idx == startIdx) { return pos; } // back out if no digits
       return idx;
@@ -187,22 +192,22 @@ Token Lexer::scanOne(State& state) {
   if (std::isdigit(static_cast<unsigned char>(chr)) != 0) {
     size_t jpos = idx;
     while (jpos < line.size() && std::isdigit(static_cast<unsigned char>(line[jpos])) != 0) { ++jpos; }
-    size_t kpos = jpos;
+    const size_t kpos = jpos;
     if (kpos < line.size() && line[kpos] == '.') {
       size_t mpos = kpos + 1;
       if (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) {
         while (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) { ++mpos; }
-        size_t epos = scanExponent(mpos);
+        const size_t epos = scanExponent(mpos);
         const Token tok = makeTok(TokenKind::Float, idx, epos);
         idx = epos;
         return tok;
       }
-      size_t epos = scanExponent(kpos + 1);
+      const size_t epos = scanExponent(kpos + 1);
       const Token tok = makeTok(TokenKind::Float, idx, epos);
       idx = epos;
       return tok;
     }
-    size_t epos = scanExponent(kpos);
+    const size_t epos = scanExponent(kpos);
     if (epos != kpos) {
       const Token tok = makeTok(TokenKind::Float, idx, epos);
       idx = epos;
@@ -215,7 +220,7 @@ Token Lexer::scanOne(State& state) {
   if (chr == '.' && idx + 1 < line.size() && std::isdigit(static_cast<unsigned char>(line[idx+1])) != 0) {
     size_t mpos = idx + 1;
     while (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) { ++mpos; }
-    size_t epos = scanExponent(mpos);
+    const size_t epos = scanExponent(mpos);
     const Token tok = makeTok(TokenKind::Float, idx, epos);
     idx = epos;
     return tok;
@@ -224,7 +229,7 @@ Token Lexer::scanOne(State& state) {
   if (isIdentStart(chr)) {
     size_t jpos = idx + 1;
     while (jpos < line.size() && isIdentChar(line[jpos])) { ++jpos; }
-    std::string ident = line.substr(idx, jpos - idx);
+    const std::string ident = line.substr(idx, jpos - idx);
     TokenKind kind = TokenKind::Ident;
     if (ident == "def") { kind = TokenKind::Def; }
     else if (ident == "return") { kind = TokenKind::Return; }
@@ -335,7 +340,7 @@ void Lexer::buildAll() {
         tokens_.push_back(indents.front());
         continue;
       }
-      for (auto& t : indents) tokens_.push_back(t);
+      for (auto& tok : indents) { tokens_.push_back(tok); }
 
       // Tokenize rest of the line
       while (state.index < state.line.size()) {
@@ -362,13 +367,17 @@ void Lexer::buildAll() {
 
 const Token& Lexer::peek(size_t lookahead) {
   if (!finalized_) { buildAll(); }
-  if (pos_ + lookahead < tokens_.size()) return tokens_[pos_ + lookahead];
+  if (pos_ + lookahead < tokens_.size()) {
+    return tokens_[pos_ + lookahead];
+  }
   return tokens_.back();
 }
 
 Token Lexer::next() {
   if (!finalized_) { buildAll(); }
-  if (pos_ < tokens_.size()) return tokens_[pos_++];
+  if (pos_ < tokens_.size()) {
+    return tokens_[pos_++];
+  }
   return tokens_.back();
 }
 

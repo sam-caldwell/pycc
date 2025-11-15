@@ -3,9 +3,12 @@
  * Purpose: Minimal GCC-like CLI argument parser for pycc.
  */
 #include "cli/ParseArgs.h"
+#include "cli/ColorMode.h"
 #include "cli/Options.h"
+#include <algorithm>
 #include <cstddef>
 #include <iostream>
+#include <string>
 #include <string_view>
 
 namespace pycc::cli {
@@ -26,8 +29,8 @@ static inline ColorMode parseColorValue(std::string_view value) {
   return Auto;
 }
 
-static inline void collectRemainingAsInputs(int startIndex, int argc, char** argv, Options& out) {
-  for (int j = startIndex; j < argc; ++j) {
+static inline void collectRemainingAsInputs(std::size_t startIndex, int argc, char** argv, Options& out) {
+  for (int j = static_cast<int>(startIndex); j < argc; ++j) {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     out.inputs.emplace_back(argv[j]);
   }
@@ -35,7 +38,7 @@ static inline void collectRemainingAsInputs(int startIndex, int argc, char** arg
 
 static inline bool isUnknownOptionArg(std::string_view arg) { return !arg.empty() && arg[0] == '-'; }
 
-static inline bool hasConflictingModes(const Options& o) { return o.emitAssemblyOnly && o.compileOnly; }
+static inline bool hasConflictingModes(const Options& opts) { return opts.emitAssemblyOnly && opts.compileOnly; }
 
 static bool applySimpleBoolFlags(std::string_view arg, Options& out) {
   if (isFlag(arg, "-h")) { out.showHelp = true; return true; }
@@ -76,14 +79,14 @@ static bool applyPrefixedOptions(std::string_view arg, Options& out) {
   return false;
 }
 
-static bool handleOutputFileFlag(int& i, int argc, char** argv, Options& out) {
+static bool handleOutputFileFlag(int& idx, int argc, char** argv, Options& out) {
   // -o <file>
   // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  const std::string_view arg{argv[i]};
+  const std::string_view arg{argv[idx]};
   if (!isFlag(arg, "-o")) { return false; }
-  if (i + 1 >= argc) { return false; }
+  if (idx + 1 >= argc) { return false; }
   // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  out.outputFile = argv[++i];
+  out.outputFile = argv[++idx];
   return true;
 }
 

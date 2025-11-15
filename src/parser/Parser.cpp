@@ -3,8 +3,38 @@
  * Purpose: Minimal parser for Milestone 1.
  */
 #include "parser/Parser.h"
+#include "ast/AssignStmt.h"
+#include "ast/Binary.h"
+#include "ast/BinaryOperator.h"
+#include "ast/BoolLiteral.h"
+#include "ast/Call.h"
+#include "ast/Expr.h"
+#include "ast/ExprStmt.h"
+#include "ast/FloatLiteral.h"
+#include "ast/FunctionDef.h"
+#include "ast/IfStmt.h"
+#include "ast/IntLiteral.h"
+#include "ast/ListLiteral.h"
+#include "ast/Module.h"
+#include "ast/Name.h"
+#include "ast/NodeKind.h"
+#include "ast/NoneLiteral.h"
+#include "ast/ObjectLiteral.h"
+#include "ast/Param.h"
+#include "ast/ReturnStmt.h"
+#include "ast/Stmt.h"
+#include "ast/StringLiteral.h"
+#include "ast/TupleLiteral.h"
+#include "ast/TypeKind.h"
+#include "ast/Unary.h"
+#include "ast/UnaryOperator.h"
+#include "lexer/Lexer.h"
 #include <cstddef>
+#include <memory>
 #include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace pycc::parse {
 
@@ -78,7 +108,7 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
   }
   if (peek().kind == TK::If) { return parseIfStmt(); }
   if (peek().kind == TK::Ident && peekNext().kind == TK::Equal) {
-    std::string name = get().text; // ident
+    const std::string name = get().text; // ident
     expect(TK::Equal, "'='");
     auto rhs = parseExpr();
     return std::make_unique<ast::AssignStmt>(name, std::move(rhs));
@@ -207,8 +237,8 @@ std::unique_ptr<ast::Expr> Parser::parseMultiplicative() {
   // Allow postfix on unary (calls) before binding operators
   auto lhs = parsePostfix(parseUnary());
   for (;;) {
-    const auto k = peek().kind;
-    if (!(k == TK::Star || k == TK::Slash || k == TK::Percent)) { break; }
+    const auto kind = peek().kind;
+    if (!(kind == TK::Star || kind == TK::Slash || kind == TK::Percent)) { break; }
     auto opTok = get();
     auto rhs = parsePostfix(parseUnary());
     const auto binOp = mulOpFor(opTok.kind);
@@ -247,11 +277,11 @@ std::unique_ptr<ast::Expr> Parser::parseUnary() {
 
 std::unique_ptr<ast::Expr> Parser::parsePrimary() {
   const auto& tok = get();
-  if (tok.kind == TK::Int) { auto n = std::make_unique<ast::IntLiteral>(std::stoll(tok.text)); n->line = tok.line; n->col = tok.col; n->file = tok.file; return n; }
-  if (tok.kind == TK::Float) { auto n = std::make_unique<ast::FloatLiteral>(std::stod(tok.text)); n->line = tok.line; n->col = tok.col; n->file = tok.file; return n; }
-  if (tok.kind == TK::String) { auto n = std::make_unique<ast::StringLiteral>(unquoteString(tok.text)); n->line = tok.line; n->col = tok.col; n->file = tok.file; return n; }
+  if (tok.kind == TK::Int) { auto node = std::make_unique<ast::IntLiteral>(std::stoll(tok.text)); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node; }
+  if (tok.kind == TK::Float) { auto node = std::make_unique<ast::FloatLiteral>(std::stod(tok.text)); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node; }
+  if (tok.kind == TK::String) { auto node = std::make_unique<ast::StringLiteral>(unquoteString(tok.text)); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node; }
   if (tok.kind == TK::Ident || tok.kind == TK::TypeIdent) { return parseNameOrNone(tok); }
-  if (tok.kind == TK::BoolLit) { bool v = (tok.text == "True"); auto n = std::make_unique<ast::BoolLiteral>(v); n->line = tok.line; n->col = tok.col; n->file = tok.file; return n; }
+  if (tok.kind == TK::BoolLit) { const bool isTrue = (tok.text == "True"); auto node = std::make_unique<ast::BoolLiteral>(isTrue); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node; }
   if (tok.kind == TK::LBracket) { return parseListLiteral(tok); }
   if (tok.kind == TK::LParen) { return parseTupleOrParen(tok); }
   throw std::runtime_error("Parse error: expected primary expression");
@@ -305,13 +335,13 @@ std::unique_ptr<ast::Expr> Parser::parseTupleOrParen(const lex::Token& openTok) 
 
 std::unique_ptr<ast::Expr> Parser::parseNameOrNone(const lex::Token& tok) {
   if (tok.kind == TK::TypeIdent && tok.text == "None") {
-    auto n = std::make_unique<ast::NoneLiteral>();
-    n->line = tok.line; n->col = tok.col; n->file = tok.file;
-    return n;
+    auto node = std::make_unique<ast::NoneLiteral>();
+    node->line = tok.line; node->col = tok.col; node->file = tok.file;
+    return node;
   }
-  auto n = std::make_unique<ast::Name>(tok.text);
-  n->line = tok.line; n->col = tok.col; n->file = tok.file;
-  return n;
+  auto node = std::make_unique<ast::Name>(tok.text);
+  node->line = tok.line; node->col = tok.col; node->file = tok.file;
+  return node;
 }
 
 std::vector<std::unique_ptr<ast::Expr>> Parser::parseArgList() {

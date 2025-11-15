@@ -3,8 +3,15 @@
  * Purpose: Implement simple timing and formatting.
  */
 #include "observability/Metrics.h"
+#include <chrono>
+#include <cstdint>
 #include <iomanip>
+#include <ios>
+#include <map>
+#include <optional>
 #include <sstream>
+#include <string>
+#include <unordered_map>
 
 namespace pycc::obs {
 
@@ -12,62 +19,62 @@ namespace {
 constexpr double kUsPerMs = 1000.0;
 constexpr int kIndent4 = 4;
 constexpr int kIndent6 = 6;
+} // namespace
 
-void appendDurations(std::ostringstream& oss,
-                     const std::map<std::string, uint64_t>& durations) {
+static void appendDurations(std::ostringstream& oss,
+                            const std::map<std::string, uint64_t>& durations) {
   oss << "  \"durations_ms\": {";
   bool first = true;
-  for (const auto& [k, v] : durations) {
+  for (const auto& [key, val] : durations) {
     if (!first) { oss << ","; }
     first = false;
-    const double ms = static_cast<double>(v) / kUsPerMs;
-    oss << "\n    \"" << k << "\": " << std::fixed << std::setprecision(3) << ms;
+    const double millis = static_cast<double>(val) / kUsPerMs;
+    oss << "\n    \"" << key << "\": " << std::fixed << std::setprecision(3) << millis;
   }
   oss << "\n  }";
 }
 
-void appendAst(std::ostringstream& oss, const std::optional<AstGeometry>& geom) {
+static void appendAst(std::ostringstream& oss, const std::optional<AstGeometry>& geom) {
   if (!geom) { return; }
   oss << ",\n  \"ast\": { \"nodes\": " << geom->nodes
       << ", \"max_depth\": " << geom->maxDepth << " }";
 }
 
-void appendKeyValueObject(std::ostringstream& oss,
-                          const std::unordered_map<std::string, uint64_t>& m,
-                          int indent) {
+static void appendKeyValueObject(std::ostringstream& oss,
+                                 const std::unordered_map<std::string, uint64_t>& values,
+                                 int indent) {
   const std::string pad(indent, ' ');
   bool first = true;
-  for (const auto& [k, v] : m) {
+  for (const auto& [key, val] : values) {
     if (!first) { oss << ","; }
     first = false;
-    oss << "\n" << pad << "\"" << k << "\": " << v;
+    oss << "\n" << pad << "\"" << key << "\": " << val;
   }
 }
 
-void appendOptimizer(std::ostringstream& oss,
-                     const std::unordered_map<std::string, uint64_t>& stats) {
+static void appendOptimizer(std::ostringstream& oss,
+                            const std::unordered_map<std::string, uint64_t>& stats) {
   if (stats.empty()) { return; }
   oss << ",\n  \"optimizer\": {";
   appendKeyValueObject(oss, stats, kIndent4);
   oss << "\n  }";
 }
 
-void appendOptimizerBreakdown(
+static void appendOptimizerBreakdown(
     std::ostringstream& oss,
     const std::unordered_map<std::string, std::unordered_map<std::string, uint64_t>>& breakdown) {
   if (breakdown.empty()) { return; }
   oss << ",\n  \"optimizer_breakdown\": {";
   bool firstPass = true;
-  for (const auto& [pass, mp] : breakdown) {
+  for (const auto& [pass, passMap] : breakdown) {
     if (!firstPass) { oss << ","; }
     firstPass = false;
     oss << "\n    \"" << pass << "\": {";
-    appendKeyValueObject(oss, mp, kIndent6);
+    appendKeyValueObject(oss, passMap, kIndent6);
     oss << "\n    }";
   }
   oss << "\n  }";
 }
-} // namespace
 
 void Metrics::start(const std::string& name) {
   active_[name] = Clock::now();
@@ -85,9 +92,9 @@ void Metrics::stop(const std::string& name) {
 std::string Metrics::summaryText() const {
   std::ostringstream oss;
   oss << "== Metrics ==\n";
-  for (const auto& [k, v] : durations_us_) {
-    double ms = static_cast<double>(v) / kUsPerMs;
-    oss << "  " << k << ": " << std::fixed << std::setprecision(3) << ms << " ms\n";
+  for (const auto& [key, val] : durations_us_) {
+    const double millis = static_cast<double>(val) / kUsPerMs;
+    oss << "  " << key << ": " << std::fixed << std::setprecision(3) << millis << " ms\n";
   }
   if (geom_) {
     oss << "  AST: nodes=" << geom_->nodes << ", max_depth=" << geom_->maxDepth << "\n";

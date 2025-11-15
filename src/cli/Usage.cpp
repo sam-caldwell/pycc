@@ -1,6 +1,6 @@
+#include "cli/Usage.h"
 #include <string>
 #include <string_view>
-#include "cli/Usage.h"
 namespace pycc::cli {
 
 namespace {

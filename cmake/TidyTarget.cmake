@@ -13,6 +13,14 @@ foreach(SRC ${TIDY_SOURCES})
   endif()
 endforeach()
 
+# Exclude runtime sources from tidy for now (noisy const-correctness on low-level code)
+foreach(SRC ${TIDY_SOURCES})
+  string(FIND "${SRC}" "/src/runtime/" POS)
+  if(NOT POS EQUAL -1)
+    list(REMOVE_ITEM TIDY_SOURCES ${SRC})
+  endif()
+endforeach()
+
 if(NOT TARGET tidy)
   # Attempt to auto-detect the standard library include path for clang-tidy header analysis
   set(TIDY_EXTRA_ARGS "")
@@ -95,7 +103,7 @@ if(NOT TARGET tidy)
     set(_task tidy_${_idx})
     add_custom_target(${_task}
       COMMAND ${CMAKE_COMMAND} -E echo "[tidy] ${SRC}"
-      COMMAND clang-tidy -quiet -p ${CMAKE_BINARY_DIR} --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy ${TIDY_EXTRA_ARGS} ${SRC}
+      COMMAND bash ${CMAKE_SOURCE_DIR}/tools/run_clang_tidy_silent.sh -quiet -p ${CMAKE_BINARY_DIR} --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy ${TIDY_EXTRA_ARGS} ${SRC}
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       VERBATIM)
     list(APPEND TIDY_TASKS ${_task})

@@ -4,17 +4,18 @@
  */
 #include "runtime/Runtime.h"
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cinttypes>
+#include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
-#include <vector>
+#include <optional>
 #include <pthread.h>
-#include <cstddef>
-#include <cinttypes>
 #include <thread>
-#include <condition_variable>
-#include <atomic>
-#include <chrono>
+#include <vector>
 
 namespace pycc::rt {
 
@@ -86,7 +87,7 @@ static inline void maybe_request_bg_gc_unlocked() {
   if (g_stats.bytesLive <= g_threshold) { return; }
   if (!g_bg_enabled.load(std::memory_order_relaxed)) { return; }
   g_bg_requested.store(true, std::memory_order_relaxed);
-  std::lock_guard<std::mutex> nlk(g_bg_mu);
+  const std::lock_guard<std::mutex> nlk(g_bg_mu);
   g_bg_cv.notify_one();
 }
 
@@ -116,6 +117,9 @@ static void free_obj(ObjectHeader* header) {
 // Forward declaration for interior marking
 static ObjectHeader* find_object_for_pointer(const void* ptr);
 
+// Convenience wrapper returning stack bounds as an optional pair
+// (removed obsolete wrapper)
+
 // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 static void mark(ObjectHeader* header) {
   if (header == nullptr || header->mark != 0U) { return; }
@@ -133,9 +137,9 @@ static void mark(ObjectHeader* header) {
       auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader)); // len, cap, then items[]
       const std::size_t len = payload[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
       // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-type-reinterpret-cast)
-      auto** items = reinterpret_cast<void**>(payload + 2);
+      auto* const* items = reinterpret_cast<void* const*>(payload + 2);
       for (std::size_t i = 0; i < len; ++i) {
-        void* valuePtr = items[i]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        const void* valuePtr = items[i]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
         if (valuePtr == nullptr) { continue; }
         if (ObjectHeader* headerPtr = find_object_for_pointer(valuePtr)) { mark(headerPtr); }
       }
@@ -147,9 +151,9 @@ static void mark(ObjectHeader* header) {
       auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader)); // fields, then values[]
       const std::size_t fields = payload[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
       // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-type-reinterpret-cast)
-      auto** values = reinterpret_cast<void**>(payload + 1);
+      auto* const* values = reinterpret_cast<void* const*>(payload + 1);
       for (std::size_t i = 0; i < fields; ++i) {
-        void* valuePtr = values[i]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        const void* valuePtr = values[i]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
         if (valuePtr == nullptr) { continue; }
         if (ObjectHeader* headerPtr = find_object_for_pointer(valuePtr)) { mark(headerPtr); }
       }
@@ -159,11 +163,11 @@ static void mark(ObjectHeader* header) {
 }
 
 static void mark_from_roots() {
-  for (void** slot : g_roots) {
-    void* p = *slot;
-    if (p == nullptr) { continue; }
-    auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(p) - sizeof(ObjectHeader)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast,cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    mark(h);
+  for (void* const* slot : g_roots) {
+    void* const ptr = *slot;
+    if (ptr == nullptr) { continue; }
+    auto* hdr = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(ptr) - sizeof(ObjectHeader)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast,cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    mark(hdr);
   }
 }
 
@@ -185,65 +189,62 @@ static void mark_from_remembered_locked() {
   // g_mu must be held by caller when calling this
   std::vector<void*> tmp;
   {
-    std::lock_guard<std::mutex> lockGuard(g_rem_mu);
+    const std::lock_guard<std::mutex> lockGuard(g_rem_mu);
     tmp.swap(g_remembered);
   }
-  for (void* valuePtr : tmp) {
+  for (const void* valuePtr : tmp) {
     if (valuePtr == nullptr) { continue; }
     if (ObjectHeader* header = find_object_for_pointer(valuePtr)) { mark(header); }
   }
 }
 
-static bool get_stack_bounds(void*& low, void*& high) {
-  low = nullptr; high = nullptr;
+static std::optional<std::pair<void*, void*>> get_stack_bounds_pair() {
   // Current thread only
 #ifdef __APPLE__
   pthread_t self = pthread_self();
   void* stackaddr = pthread_get_stackaddr_np(self);
-  size_t stacksize = pthread_get_stacksize_np(self);
+  const size_t stacksize = pthread_get_stacksize_np(self);
   if (stackaddr != nullptr && stacksize > 0U) {
     // On macOS, stackaddr is the HIGH address, stack grows down
-    high = stackaddr;
+    const std::uintptr_t highAddr = reinterpret_cast<std::uintptr_t>(stackaddr);
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    low = static_cast<unsigned char*>(stackaddr) - stacksize;
-    return true;
+    const std::uintptr_t lowAddr = reinterpret_cast<std::uintptr_t>(static_cast<unsigned char*>(stackaddr) - stacksize);
+    return std::make_pair(reinterpret_cast<void*>(lowAddr), reinterpret_cast<void*>(highAddr));
   }
-  return false;
-#else
-#ifdef __linux__
+  return std::nullopt;
+#elifdef __linux__
   pthread_attr_t attr;
-  if (pthread_getattr_np(pthread_self(), &attr) != 0) { return false; }
+  if (pthread_getattr_np(pthread_self(), &attr) != 0) { return std::nullopt; }
   void* stackaddr = nullptr; size_t stacksize = 0;
-  if (pthread_attr_getstack(&attr, &stackaddr, &stacksize) != 0) { pthread_attr_destroy(&attr); return false; }
+  if (pthread_attr_getstack(&attr, &stackaddr, &stacksize) != 0) { pthread_attr_destroy(&attr); return std::nullopt; }
   pthread_attr_destroy(&attr);
-  low = stackaddr;
+  const std::uintptr_t lowAddr = reinterpret_cast<std::uintptr_t>(stackaddr);
   // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  high = static_cast<unsigned char*>(stackaddr) + stacksize;
-  return true;
+  const std::uintptr_t highAddr = reinterpret_cast<std::uintptr_t>(static_cast<unsigned char*>(stackaddr) + stacksize);
+  return std::make_pair(reinterpret_cast<void*>(lowAddr), reinterpret_cast<void*>(highAddr));
 #else
   // Fallback: approximate using address of local variable as low bound and assume 8MB stack
   unsigned char local{};
-  low = &local;
+  const std::uintptr_t lowAddr = reinterpret_cast<std::uintptr_t>(&local);
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  high = static_cast<unsigned char*>(low) + (8U << 20U);
-  return true;
-#endif
+  const std::uintptr_t highAddr = lowAddr + (8U << 20U);
+  return std::make_pair(reinterpret_cast<void*>(lowAddr), reinterpret_cast<void*>(highAddr));
 #endif
 }
 
 // NOLINTNEXTLINE(readability-function-size)
 static void mark_from_stack() {
-  void* low = nullptr; void* high = nullptr;
-  if (!get_stack_bounds(low, high)) { return; }
+  const auto bounds = get_stack_bounds_pair();
+  if (!bounds) { return; }
   // Align low up to word alignment
-  std::uintptr_t lowAddr = reinterpret_cast<std::uintptr_t>(low); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+  std::uintptr_t lowAddr = reinterpret_cast<std::uintptr_t>(bounds->first); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
   const std::size_t align = alignof(std::uintptr_t);
   lowAddr = (lowAddr + (align - 1U)) & ~(static_cast<std::uintptr_t>(align) - 1U);
   auto* scanPtr = reinterpret_cast<std::uintptr_t*>(lowAddr); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-  auto* end = reinterpret_cast<std::uintptr_t*>(high);        // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+  auto* end = reinterpret_cast<std::uintptr_t*>(bounds->second);        // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
   // Iterate word-sized chunks across the stack region
   while (scanPtr < end) {
-    void* candidate = nullptr; candidate = reinterpret_cast<void*>(*scanPtr); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    const void* candidate = reinterpret_cast<void*>(*scanPtr); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
     if (candidate != nullptr) {
       if (ObjectHeader* header = find_object_for_pointer(candidate)) { mark(header); }
     }
@@ -254,17 +255,17 @@ static void mark_from_stack() {
 // NOLINTNEXTLINE(readability-function-size)
 static bool mark_from_stack_slice(std::size_t words_budget) {
   if (g_stack_scan_cur == nullptr || g_stack_scan_end == nullptr) {
-    void* low = nullptr; void* high = nullptr;
-    if (!get_stack_bounds(low, high)) { return true; }
-    std::uintptr_t lowAddr = reinterpret_cast<std::uintptr_t>(low); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    const auto bounds = get_stack_bounds_pair();
+    if (!bounds) { return true; }
+    std::uintptr_t lowAddr = reinterpret_cast<std::uintptr_t>(bounds->first); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
     const std::size_t align = alignof(std::uintptr_t);
     lowAddr = (lowAddr + (align - 1U)) & ~(static_cast<std::uintptr_t>(align) - 1U);
     g_stack_scan_cur = reinterpret_cast<std::uintptr_t*>(lowAddr); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-    g_stack_scan_end = reinterpret_cast<std::uintptr_t*>(high);    // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    g_stack_scan_end = reinterpret_cast<std::uintptr_t*>(bounds->second);    // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
   }
   std::size_t wordsScanned = 0;
   while (g_stack_scan_cur < g_stack_scan_end && wordsScanned < words_budget) {
-    void* candidate = reinterpret_cast<void*>(*g_stack_scan_cur); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    const void* candidate = reinterpret_cast<void*>(*g_stack_scan_cur); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
     if (candidate != nullptr) {
       if (ObjectHeader* header = find_object_for_pointer(candidate)) { mark(header); }
     }
@@ -296,10 +297,10 @@ static void sweep() {
 }
 
 void gc_collect() {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   if (g_bg_enabled.load(std::memory_order_relaxed)) {
     g_bg_requested.store(true, std::memory_order_relaxed);
-    std::lock_guard<std::mutex> lock2(g_bg_mu);
+    const std::lock_guard<std::mutex> lock2(g_bg_mu);
     g_bg_cv.notify_one();
     return; // quick return; background will service GC
   }
@@ -311,12 +312,12 @@ void gc_collect() {
 }
 
 void gc_set_threshold(std::size_t bytes) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   g_threshold = bytes;
 }
 
 void gc_set_conservative(bool enabled) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   g_conservative = enabled;
 }
 
@@ -336,7 +337,7 @@ static void start_bg_thread_if_needed() {
       auto slice_budget = std::chrono::microseconds(static_cast<long long>(g_slice_us.load(std::memory_order_relaxed)));
       // Marking
       {
-        std::lock_guard<std::mutex> lock2(g_mu);
+        const std::lock_guard<std::mutex> lock2(g_mu);
         g_stats.numCollections++;
         mark_from_roots();
         mark_from_remembered_locked();
@@ -344,14 +345,14 @@ static void start_bg_thread_if_needed() {
       if (g_conservative) {
         auto tStart = std::chrono::steady_clock::now();
         while (true) {
-          bool done = mark_from_stack_slice(kStackSliceWords);
+          const bool done = mark_from_stack_slice(kStackSliceWords);
           if (done) { break; }
           if (std::chrono::steady_clock::now() - tStart > slice_budget) { std::this_thread::yield(); tStart = std::chrono::steady_clock::now(); }
         }
         // Reset scan pointers
         g_stack_scan_cur = nullptr; g_stack_scan_end = nullptr;
         // Finalize with any remembered writes while marking
-        std::lock_guard<std::mutex> lock2(g_mu);
+        const std::lock_guard<std::mutex> lock2(g_mu);
         mark_from_remembered_locked();
       }
       // Sweeping in slices while holding g_mu briefly
@@ -360,7 +361,7 @@ static void start_bg_thread_if_needed() {
         auto t_lock_start = std::chrono::steady_clock::now();
         std::size_t reclaimed = 0;
         {
-          std::lock_guard<std::mutex> lock3(g_mu);
+          const std::lock_guard<std::mutex> lock3(g_mu);
           if (g_sweep_cur == nullptr) { g_sweep_prev = nullptr; g_sweep_cur = g_head; }
           std::size_t steps = 0;
           const std::size_t batchSz = g_sweep_batch.load(std::memory_order_relaxed);
@@ -392,7 +393,7 @@ static void start_bg_thread_if_needed() {
 }
 
 void gc_set_background(bool enabled) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   g_bg_enabled.store(enabled, std::memory_order_relaxed);
   if (enabled) { start_bg_thread_if_needed(); }
 }
@@ -405,7 +406,7 @@ void gc_write_barrier(void** /*slot*/, void* value) {
   if (!g_bg_enabled.load(std::memory_order_relaxed)) { return; }
   if (value == nullptr) { return; }
   // Record the new value for later marking; avoid heavy locking
-  std::lock_guard<std::mutex> lockGuard(g_rem_mu);
+  const std::lock_guard<std::mutex> lockGuard(g_rem_mu);
   g_remembered.push_back(value);
 }
 
@@ -417,9 +418,10 @@ void gc_pre_barrier(void** slot) {
   // in some callers (e.g., appending to a freshly grown list). That's fine for
   // SATB barriers: we treat unknown as not needing recording. Suppress the
   // analyzer's false positive on reading an indeterminate slot here.
-  void* old = *slot; // NOLINT(clang-analyzer-core.uninitialized.Assign)
+  void* old = nullptr;
+  std::memcpy(&old, slot, sizeof(void*)); // suppress analyzer false-positive for uninitialized read
   if (old == nullptr) { return; }
-  std::lock_guard<std::mutex> lockGuard(g_rem_mu);
+  const std::lock_guard<std::mutex> lockGuard(g_rem_mu);
   g_remembered.push_back(old);
 }
 
@@ -441,23 +443,23 @@ extern "C" void* pycc_string_new(const char* data, size_t length) { return strin
 extern "C" uint64_t pycc_string_len(void* str) { return static_cast<uint64_t>(string_len(str)); }
 
 void gc_register_root(void** addr) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   g_roots.push_back(addr);
 }
 
 void gc_unregister_root(void** addr) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   auto iter = std::find(g_roots.begin(), g_roots.end(), addr);
   if (iter != g_roots.end()) { g_roots.erase(iter); }
 }
 
 RuntimeStats gc_stats() {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   return g_stats;
 }
 
 void gc_reset_for_tests() {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   // free all
   ObjectHeader* cur = g_head; g_head = nullptr;
   while (cur != nullptr) { ObjectHeader* nextHeader = cur->next; ::operator delete(cur); cur = nextHeader; }
@@ -472,7 +474,7 @@ void gc_reset_for_tests() {
 }
 
 void* string_new(const char* data, std::size_t len) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   const std::size_t payloadSize = sizeof(StringPayload) + len + 1; // include NUL
   auto* payloadBytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::String));
   void* payloadVoid = static_cast<void*>(payloadBytes);
@@ -496,7 +498,7 @@ std::size_t string_len(void* str) {
 
 // Boxed primitives
 void* box_int(int64_t value) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   const std::size_t payloadSize = sizeof(int64_t);
   auto* bytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::Int));
   std::memcpy(bytes, &value, sizeof(value));
@@ -510,7 +512,7 @@ int64_t box_int_value(void* obj) {
 }
 
 void* box_float(double value) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   const std::size_t payloadSize = sizeof(double);
   auto* bytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::Float));
   std::memcpy(bytes, &value, sizeof(value));
@@ -524,7 +526,7 @@ double box_float_value(void* obj) {
 }
 
 void* box_bool(bool value) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   const std::size_t payloadSize = sizeof(uint8_t);
   auto* bytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::Bool));
   uint8_t byteVal = value ? 1U : 0U;
@@ -540,7 +542,7 @@ bool box_bool_value(void* obj) {
 
 // Lists
 void* list_new(std::size_t capacity) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   const std::size_t payloadSize = (sizeof(std::size_t) * 2) + (capacity * sizeof(void*)); // len, cap, items[]
   auto* bytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::List));
   auto* meta = reinterpret_cast<std::size_t*>(bytes); // NOLINT
@@ -553,7 +555,7 @@ void* list_new(std::size_t capacity) {
 
 void list_push_slot(void** list_slot, void* elem) {
   if (list_slot == nullptr) { return; }
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   auto* list = *list_slot;
   if (list == nullptr) {
     list = list_new(kDefaultListCapacity);
@@ -563,11 +565,11 @@ void list_push_slot(void** list_slot, void* elem) {
     *list_slot = list;
   }
   auto* meta = reinterpret_cast<std::size_t*>(list); // NOLINT
-  std::size_t len = meta[0];  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  std::size_t cap = meta[1];  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  const std::size_t len = meta[0];  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  const std::size_t cap = meta[1];  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   auto** items = reinterpret_cast<void**>(meta + 2); // NOLINT
   if (len >= cap) {
-    std::size_t newCap = (cap == 0U) ? kDefaultListCapacity : (cap * 2U);
+    const std::size_t newCap = (cap == 0U) ? kDefaultListCapacity : (cap * 2U);
     const std::size_t payloadSize = (sizeof(std::size_t) * 2) + (newCap * sizeof(void*));
     auto* bytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::List));
     auto* newMeta = reinterpret_cast<std::size_t*>(bytes); // NOLINT
@@ -591,13 +593,13 @@ void list_push_slot(void** list_slot, void* elem) {
 
 std::size_t list_len(void* list) {
   if (list == nullptr) { return 0; }
-  auto* meta = reinterpret_cast<std::size_t*>(list); // NOLINT
+  const auto* meta = reinterpret_cast<const std::size_t*>(list); // NOLINT
   return meta[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
 }
 
 // Objects (fixed-size field table)
 void* object_new(std::size_t field_count) {
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   const std::size_t payloadSize = sizeof(std::size_t) + (field_count * sizeof(void*)); // fields, values[]
   auto* bytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::Object));
   auto* meta = reinterpret_cast<std::size_t*>(bytes); // NOLINT
@@ -610,7 +612,7 @@ void* object_new(std::size_t field_count) {
 
 void object_set(void* obj, std::size_t index, void* value) {
   if (obj == nullptr) { return; }
-  std::lock_guard<std::mutex> lock(g_mu);
+  const std::lock_guard<std::mutex> lock(g_mu);
   auto* meta = reinterpret_cast<std::size_t*>(obj); // NOLINT
   const std::size_t fields = meta[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   if (index >= fields) { return; }
@@ -625,19 +627,19 @@ void* object_get(void* obj, std::size_t index) {
   auto* meta = reinterpret_cast<std::size_t*>(obj); // NOLINT
   const std::size_t fields = meta[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   if (index >= fields) { return nullptr; }
-  auto** vals = reinterpret_cast<void**>(meta + 1); // NOLINT
+  auto* const* vals = reinterpret_cast<void* const*>(meta + 1); // NOLINT
   return vals[index]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
 }
 
 std::size_t object_field_count(void* obj) {
   if (obj == nullptr) { return 0; }
-  auto* meta = reinterpret_cast<std::size_t*>(obj); // NOLINT
+  const auto* meta = reinterpret_cast<const std::size_t*>(obj); // NOLINT
   return meta[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
 }
 GcTelemetry gc_telemetry() {
   uint64_t live_now = 0; std::size_t thr = 0;
   {
-    std::lock_guard<std::mutex> lock(g_mu);
+    const std::lock_guard<std::mutex> lock(g_mu);
     live_now = g_stats.bytesLive;
     thr = g_threshold;
   }
@@ -656,7 +658,7 @@ static void adapt_controller() {
   const uint64_t last_alloc = g_last_bytes_alloc.load(std::memory_order_relaxed);
   uint64_t alloc_now = 0;
   {
-    std::lock_guard<std::mutex> lock(g_mu);
+    const std::lock_guard<std::mutex> lock(g_mu);
     alloc_now = g_stats.bytesAllocated;
   }
   const uint64_t delta_alloc = (alloc_now > last_alloc) ? (alloc_now - last_alloc) : 0U;
@@ -665,7 +667,7 @@ static void adapt_controller() {
   const double alloc_rate = static_cast<double>(delta_alloc) / static_cast<double>(delta_ms + 1U); // bytes/ms
   double pressure = 0.0;
   {
-    std::lock_guard<std::mutex> lock(g_mu);
+    const std::lock_guard<std::mutex> lock(g_mu);
     pressure = (g_threshold != 0U) ? (static_cast<double>(g_stats.bytesLive) / static_cast<double>(g_threshold)) : 0.0;
   }
   // EWMA smoothing to avoid oscillations

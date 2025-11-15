@@ -2,7 +2,31 @@
  * Name: pycc::opt::DCE (impl)
  */
 #include "optimizer/DCE.h"
+#include "ast/AssignStmt.h"
+#include "ast/Binary.h"
+#include "ast/BoolLiteral.h"
+#include "ast/Call.h"
+#include "ast/ExprStmt.h"
+#include "ast/FloatLiteral.h"
+#include "ast/FunctionDef.h"
+#include "ast/IfStmt.h"
+#include "ast/IntLiteral.h"
+#include "ast/ListLiteral.h"
+#include "ast/Module.h"
+#include "ast/Name.h"
+#include "ast/NodeKind.h"
+#include "ast/NoneLiteral.h"
+#include "ast/ObjectLiteral.h"
+#include "ast/ReturnStmt.h"
+#include "ast/Stmt.h"
+#include "ast/StringLiteral.h"
+#include "ast/TupleLiteral.h"
+#include "ast/Unary.h"
 #include "ast/VisitorBase.h"
+#include <cstddef>
+#include <memory>
+#include <utility>
+#include <vector>
 
 namespace pycc::opt {
 using pycc::ast::Module;
@@ -15,49 +39,50 @@ struct DceVisitor : public ast::VisitorBase {
   size_t removed{0};
   std::unique_ptr<Stmt>* stmtSlot{nullptr};
 
-  void touch(std::unique_ptr<Stmt>& s) {
-    if (!s) { return; }
-    stmtSlot = &s; s->accept(*this);
+  void touch(std::unique_ptr<Stmt>& stmt) {
+    if (!stmt) { return; }
+    stmtSlot = &stmt; stmt->accept(*this);
   }
 
-  void visit(const ast::IfStmt&) override {
+  void visit(const ast::IfStmt& ifStmt) override {
+    (void)ifStmt;
     auto* ifs = static_cast<IfStmt*>(stmtSlot->get());
     pruneBlock(ifs->thenBody);
     pruneBlock(ifs->elseBody);
   }
 
   // No-ops for other nodes
-  void visit(const ast::Module&) override {}
-  void visit(const ast::FunctionDef&) override {}
-  void visit(const ast::ReturnStmt&) override {}
-  void visit(const ast::AssignStmt&) override {}
-  void visit(const ast::ExprStmt&) override {}
-  void visit(const ast::IntLiteral&) override {}
-  void visit(const ast::BoolLiteral&) override {}
-  void visit(const ast::FloatLiteral&) override {}
-  void visit(const ast::StringLiteral&) override {}
-  void visit(const ast::NoneLiteral&) override {}
-  void visit(const ast::Name&) override {}
-  void visit(const ast::Call&) override {}
-  void visit(const ast::Binary&) override {}
-  void visit(const ast::Unary&) override {}
-  void visit(const ast::TupleLiteral&) override {}
-  void visit(const ast::ListLiteral&) override {}
-  void visit(const ast::ObjectLiteral&) override {}
+  void visit(const ast::Module& module) override { (void)module; }
+  void visit(const ast::FunctionDef& functionDef) override { (void)functionDef; }
+  void visit(const ast::ReturnStmt& ret) override { (void)ret; }
+  void visit(const ast::AssignStmt& assign) override { (void)assign; }
+  void visit(const ast::ExprStmt& exprStmt) override { (void)exprStmt; }
+  void visit(const ast::IntLiteral& intLiteral) override { (void)intLiteral; }
+  void visit(const ast::BoolLiteral& boolLiteral) override { (void)boolLiteral; }
+  void visit(const ast::FloatLiteral& floatLiteral) override { (void)floatLiteral; }
+  void visit(const ast::StringLiteral& stringLiteral) override { (void)stringLiteral; }
+  void visit(const ast::NoneLiteral& noneLiteral) override { (void)noneLiteral; }
+  void visit(const ast::Name& name) override { (void)name; }
+  void visit(const ast::Call& call) override { (void)call; }
+  void visit(const ast::Binary& binary) override { (void)binary; }
+  void visit(const ast::Unary& unary) override { (void)unary; }
+  void visit(const ast::TupleLiteral& tupleLiteral) override { (void)tupleLiteral; }
+  void visit(const ast::ListLiteral& listLiteral) override { (void)listLiteral; }
+  void visit(const ast::ObjectLiteral& objectLiteral) override { (void)objectLiteral; }
 
   // Block pruning driver
   void pruneBlock(std::vector<std::unique_ptr<Stmt>>& body) {
     std::vector<std::unique_ptr<Stmt>> newBody;
     bool seenReturn = false;
-    for (auto& st : body) {
+    for (auto& stmt : body) {
       if (seenReturn) { ++removed; continue; }
-      if (st->kind == NodeKind::ReturnStmt) {
+      if (stmt->kind == NodeKind::ReturnStmt) {
         seenReturn = true;
-        newBody.emplace_back(std::move(st));
+        newBody.emplace_back(std::move(stmt));
         continue;
       }
-      if (st->kind == NodeKind::IfStmt) { touch(st); }
-      newBody.emplace_back(std::move(st));
+      if (stmt->kind == NodeKind::IfStmt) { touch(stmt); }
+      newBody.emplace_back(std::move(stmt));
     }
     body = std::move(newBody);
   }

@@ -3,8 +3,37 @@
  * Purpose: Fold constant expressions via AST mutation using a visitor.
  */
 #include "optimizer/ConstantFold.h"
+#include "ast/AssignStmt.h"
+#include "ast/Binary.h"
+#include "ast/BinaryOperator.h"
+#include "ast/BoolLiteral.h"
+#include "ast/Call.h"
+#include "ast/Expr.h"
+#include "ast/ExprStmt.h"
+#include "ast/FloatLiteral.h"
+#include "ast/FunctionDef.h"
+#include "ast/IfStmt.h"
+#include "ast/IntLiteral.h"
+#include "ast/ListLiteral.h"
+#include "ast/Module.h"
+#include "ast/Name.h"
+#include "ast/NodeKind.h"
+#include "ast/NoneLiteral.h"
+#include "ast/ObjectLiteral.h"
+#include "ast/ReturnStmt.h"
+#include "ast/Stmt.h"
+#include "ast/StringLiteral.h"
+#include "ast/TupleLiteral.h"
+#include "ast/Unary.h"
+#include "ast/UnaryOperator.h"
 #include "ast/VisitorBase.h"
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace pycc::opt {
 
@@ -20,19 +49,15 @@ using pycc::ast::IfStmt;
 using pycc::ast::IntLiteral;
 using pycc::ast::FloatLiteral;
 using pycc::ast::BoolLiteral;
-using pycc::ast::Name;
-using pycc::ast::TupleLiteral;
-using pycc::ast::ListLiteral;
-using pycc::ast::ObjectLiteral;
-using pycc::ast::ExprStmt;
-using pycc::ast::FunctionDef;
 using pycc::ast::NodeKind;
 using pycc::ast::UnaryOperator;
 using pycc::ast::BinaryOperator;
 
+// Simple helpers to classify constant literal nodes
+static inline bool isInt(const Expr* expr) { return expr != nullptr && expr->kind == NodeKind::IntLiteral; }
+static inline bool isFloat(const Expr* expr) { return expr != nullptr && expr->kind == NodeKind::FloatLiteral; }
+
 namespace {
-inline bool isInt(const Expr* e) { return e != nullptr && e->kind == NodeKind::IntLiteral; }
-inline bool isFloat(const Expr* e) { return e != nullptr && e->kind == NodeKind::FloatLiteral; }
 
 struct FoldVisitor : public ast::VisitorBase {
   std::unordered_map<std::string, uint64_t>& stats;
@@ -40,7 +65,8 @@ struct FoldVisitor : public ast::VisitorBase {
   std::unique_ptr<Expr>* slot{nullptr};
   std::unique_ptr<Stmt>* stmtSlot{nullptr};
 
-  FoldVisitor(std::unordered_map<std::string, uint64_t>& s, size_t& c) : stats(s), changes(c) {}
+  FoldVisitor(std::unordered_map<std::string, uint64_t>& statsMap, size_t& changeCount)
+      : stats(statsMap), changes(changeCount) {}
 
   static void assignLoc(Expr& dst, const Expr& src) { dst.file = src.file; dst.line = src.line; dst.col = src.col; }
 
@@ -51,76 +77,77 @@ struct FoldVisitor : public ast::VisitorBase {
   void bumpBinFloat() { ++stats["binary_float"]; }
   void bumpCmpFloat() { ++stats["compare_float"]; }
 
-  void rewrite(std::unique_ptr<Expr>& e) { if (!e) { return; } slot = &e; e->accept(*this); }
+  void rewrite(std::unique_ptr<Expr>& expr) { if (!expr) { return; } slot = &expr; expr->accept(*this); }
 
-  void touch(std::unique_ptr<Stmt>& s) { if (!s) { return; } stmtSlot = &s; s->accept(*this); }
-  void walkBlock(std::vector<std::unique_ptr<Stmt>>& body) { for (auto& st : body) { touch(st); } }
+  void touch(std::unique_ptr<Stmt>& stmt) { if (!stmt) { return; } stmtSlot = &stmt; stmt->accept(*this); }
+  void walkBlock(std::vector<std::unique_ptr<Stmt>>& body) { for (auto& stmt : body) { touch(stmt); } }
 
-  void visit(const Unary&) override {
-    auto* un = static_cast<Unary*>(slot->get());
-    if (un->op == UnaryOperator::Neg && un->operand) {
-      if (isInt(un->operand.get())) {
-        auto* lit = static_cast<IntLiteral*>(un->operand.get());
+  void visit(const Unary& unary) override {
+    (void)unary;
+    auto* unaryNode = static_cast<Unary*>(slot->get());
+    if (unaryNode->op == UnaryOperator::Neg && unaryNode->operand) {
+      if (isInt(unaryNode->operand.get())) {
+        auto* lit = static_cast<IntLiteral*>(unaryNode->operand.get());
         auto rep = std::make_unique<IntLiteral>(-lit->value);
-        assignLoc(*rep, *un); *slot = std::move(rep); ++changes; bumpUnary(); return;
+        assignLoc(*rep, *unaryNode); *slot = std::move(rep); ++changes; bumpUnary(); return;
       }
-      if (isFloat(un->operand.get())) {
-        auto* lit = static_cast<FloatLiteral*>(un->operand.get());
+      if (isFloat(unaryNode->operand.get())) {
+        auto* lit = static_cast<FloatLiteral*>(unaryNode->operand.get());
         auto rep = std::make_unique<FloatLiteral>(-lit->value);
-        assignLoc(*rep, *un); *slot = std::move(rep); ++changes; bumpUnary(); return;
+        assignLoc(*rep, *unaryNode); *slot = std::move(rep); ++changes; bumpUnary(); return;
       }
     }
-    rewrite(un->operand);
+    rewrite(unaryNode->operand);
   }
 
-  bool foldIntArith(Binary& bin, long long a, long long b) {
+  bool foldIntArith(Binary& bin, long long lhs, long long rhs) {
     long long res = 0;
     switch (bin.op) {
-      case BinaryOperator::Add: res = a + b; break;
-      case BinaryOperator::Sub: res = a - b; break;
-      case BinaryOperator::Mul: res = a * b; break;
-      case BinaryOperator::Div: if (b == 0) { return false; } res = a / b; break;
-      case BinaryOperator::Mod: if (b == 0) { return false; } res = a % b; break;
+      case BinaryOperator::Add: res = lhs + rhs; break;
+      case BinaryOperator::Sub: res = lhs - rhs; break;
+      case BinaryOperator::Mul: res = lhs * rhs; break;
+      case BinaryOperator::Div: if (rhs == 0) { return false; } res = lhs / rhs; break;
+      case BinaryOperator::Mod: if (rhs == 0) { return false; } res = lhs % rhs; break;
       default: return false;
     }
     bumpBinInt();
     auto rep = std::make_unique<IntLiteral>(res); assignLoc(*rep, bin); *slot = std::move(rep); ++changes; return true;
   }
-  bool foldIntCmp(Binary& bin, long long a, long long b) {
+  bool foldIntCmp(Binary& bin, long long lhs, long long rhs) {
     std::unique_ptr<Expr> rep;
     switch (bin.op) {
-      case BinaryOperator::Eq: rep = std::make_unique<BoolLiteral>(a == b); break;
-      case BinaryOperator::Ne: rep = std::make_unique<BoolLiteral>(a != b); break;
-      case BinaryOperator::Lt: rep = std::make_unique<BoolLiteral>(a < b); break;
-      case BinaryOperator::Le: rep = std::make_unique<BoolLiteral>(a <= b); break;
-      case BinaryOperator::Gt: rep = std::make_unique<BoolLiteral>(a > b); break;
-      case BinaryOperator::Ge: rep = std::make_unique<BoolLiteral>(a >= b); break;
+      case BinaryOperator::Eq: rep = std::make_unique<BoolLiteral>(lhs == rhs); break;
+      case BinaryOperator::Ne: rep = std::make_unique<BoolLiteral>(lhs != rhs); break;
+      case BinaryOperator::Lt: rep = std::make_unique<BoolLiteral>(lhs < rhs); break;
+      case BinaryOperator::Le: rep = std::make_unique<BoolLiteral>(lhs <= rhs); break;
+      case BinaryOperator::Gt: rep = std::make_unique<BoolLiteral>(lhs > rhs); break;
+      case BinaryOperator::Ge: rep = std::make_unique<BoolLiteral>(lhs >= rhs); break;
       default: return false;
     }
     bumpCmpInt();
     assignLoc(*rep, bin); *slot = std::move(rep); ++changes; return true;
   }
-  bool foldFloatArith(Binary& bin, double a, double b) {
+  bool foldFloatArith(Binary& bin, double lhs, double rhs) {
     double res = 0.0;
     switch (bin.op) {
-      case BinaryOperator::Add: res = a + b; break;
-      case BinaryOperator::Sub: res = a - b; break;
-      case BinaryOperator::Mul: res = a * b; break;
-      case BinaryOperator::Div: if (b == 0.0) { return false; } res = a / b; break;
+      case BinaryOperator::Add: res = lhs + rhs; break;
+      case BinaryOperator::Sub: res = lhs - rhs; break;
+      case BinaryOperator::Mul: res = lhs * rhs; break;
+      case BinaryOperator::Div: if (rhs == 0.0) { return false; } res = lhs / rhs; break;
       default: return false;
     }
     bumpBinFloat();
     auto rep = std::make_unique<FloatLiteral>(res); assignLoc(*rep, bin); *slot = std::move(rep); ++changes; return true;
   }
-  bool foldFloatCmp(Binary& bin, double a, double b) {
+  bool foldFloatCmp(Binary& bin, double lhs, double rhs) {
     std::unique_ptr<Expr> rep;
     switch (bin.op) {
-      case BinaryOperator::Eq: rep = std::make_unique<BoolLiteral>(a == b); break;
-      case BinaryOperator::Ne: rep = std::make_unique<BoolLiteral>(a != b); break;
-      case BinaryOperator::Lt: rep = std::make_unique<BoolLiteral>(a < b); break;
-      case BinaryOperator::Le: rep = std::make_unique<BoolLiteral>(a <= b); break;
-      case BinaryOperator::Gt: rep = std::make_unique<BoolLiteral>(a > b); break;
-      case BinaryOperator::Ge: rep = std::make_unique<BoolLiteral>(a >= b); break;
+      case BinaryOperator::Eq: rep = std::make_unique<BoolLiteral>(lhs == rhs); break;
+      case BinaryOperator::Ne: rep = std::make_unique<BoolLiteral>(lhs != rhs); break;
+      case BinaryOperator::Lt: rep = std::make_unique<BoolLiteral>(lhs < rhs); break;
+      case BinaryOperator::Le: rep = std::make_unique<BoolLiteral>(lhs <= rhs); break;
+      case BinaryOperator::Gt: rep = std::make_unique<BoolLiteral>(lhs > rhs); break;
+      case BinaryOperator::Ge: rep = std::make_unique<BoolLiteral>(lhs >= rhs); break;
       default: return false;
     }
     bumpCmpFloat();
@@ -131,62 +158,67 @@ struct FoldVisitor : public ast::VisitorBase {
     auto* left = bin.lhs.get();
     auto* right = bin.rhs.get();
     if (isInt(left) && isInt(right)) {
-      const auto a = static_cast<IntLiteral*>(left)->value;
-      const auto b = static_cast<IntLiteral*>(right)->value;
-      if (foldIntArith(bin, a, b)) { return; }
-      (void)foldIntCmp(bin, a, b);
+      const auto lhs = static_cast<IntLiteral*>(left)->value;
+      const auto rhs = static_cast<IntLiteral*>(right)->value;
+      if (foldIntArith(bin, lhs, rhs)) { return; }
+      (void)foldIntCmp(bin, lhs, rhs);
       return;
     }
     if (isFloat(left) && isFloat(right)) {
-      const auto a = static_cast<FloatLiteral*>(left)->value;
-      const auto b = static_cast<FloatLiteral*>(right)->value;
-      if (foldFloatArith(bin, a, b)) { return; }
-      (void)foldFloatCmp(bin, a, b);
+      const auto lhs = static_cast<FloatLiteral*>(left)->value;
+      const auto rhs = static_cast<FloatLiteral*>(right)->value;
+      if (foldFloatArith(bin, lhs, rhs)) { return; }
+      (void)foldFloatCmp(bin, lhs, rhs);
     }
   }
 
-  void visit(const Binary&) override {
+  void visit(const Binary& binary) override {
+    (void)binary;
     auto* bin = static_cast<Binary*>(slot->get());
     if (bin->lhs) { rewrite(bin->lhs); }
     if (bin->rhs) { rewrite(bin->rhs); }
     tryFoldBinary(*bin);
   }
 
-  void visit(const Call&) override {
+  void visit(const Call& callExpr) override {
+    (void)callExpr;
     auto* call = static_cast<Call*>(slot->get());
     if (call->callee) { rewrite(call->callee); }
     for (auto& arg : call->args) { rewrite(arg); }
   }
 
   // Stmt visitors
-  void visit(const AssignStmt&) override {
-    auto* as = static_cast<AssignStmt*>(stmtSlot->get());
-    rewrite(as->value);
+  void visit(const AssignStmt& assignStmt) override {
+    (void)assignStmt;
+    auto* assignNode = static_cast<AssignStmt*>(stmtSlot->get());
+    rewrite(assignNode->value);
   }
-  void visit(const ReturnStmt&) override {
-    auto* rs = static_cast<ReturnStmt*>(stmtSlot->get());
-    rewrite(rs->value);
+  void visit(const ReturnStmt& retStmt) override {
+    (void)retStmt;
+    auto* retNode = static_cast<ReturnStmt*>(stmtSlot->get());
+    rewrite(retNode->value);
   }
-  void visit(const IfStmt&) override {
-    auto* s = static_cast<IfStmt*>(stmtSlot->get());
-    rewrite(s->cond);
-    walkBlock(s->thenBody);
-    walkBlock(s->elseBody);
+  void visit(const IfStmt& ifStmt) override {
+    (void)ifStmt;
+    auto* ifNode = static_cast<IfStmt*>(stmtSlot->get());
+    rewrite(ifNode->cond);
+    walkBlock(ifNode->thenBody);
+    walkBlock(ifNode->elseBody);
   }
 
   // No-ops for other nodes
-  void visit(const ast::Module&) override {}
-  void visit(const ast::FunctionDef&) override {}
-  void visit(const ast::ExprStmt&) override {}
-  void visit(const ast::IntLiteral&) override {}
-  void visit(const ast::BoolLiteral&) override {}
-  void visit(const ast::FloatLiteral&) override {}
-  void visit(const ast::StringLiteral&) override {}
-  void visit(const ast::NoneLiteral&) override {}
-  void visit(const ast::Name&) override {}
-  void visit(const ast::TupleLiteral&) override {}
-  void visit(const ast::ListLiteral&) override {}
-  void visit(const ast::ObjectLiteral&) override {}
+  void visit(const ast::Module& module) override { (void)module; }
+  void visit(const ast::FunctionDef& functionDef) override { (void)functionDef; }
+  void visit(const ast::ExprStmt& exprStmt) override { (void)exprStmt; }
+  void visit(const ast::IntLiteral& intLiteral) override { (void)intLiteral; }
+  void visit(const ast::BoolLiteral& boolLiteral) override { (void)boolLiteral; }
+  void visit(const ast::FloatLiteral& floatLiteral) override { (void)floatLiteral; }
+  void visit(const ast::StringLiteral& stringLiteral) override { (void)stringLiteral; }
+  void visit(const ast::NoneLiteral& noneLiteral) override { (void)noneLiteral; }
+  void visit(const ast::Name& name) override { (void)name; }
+  void visit(const ast::TupleLiteral& tupleLiteral) override { (void)tupleLiteral; }
+  void visit(const ast::ListLiteral& listLiteral) override { (void)listLiteral; }
+  void visit(const ast::ObjectLiteral& objectLiteral) override { (void)objectLiteral; }
 };
 
 } // namespace

@@ -3,6 +3,24 @@
  * Purpose: Visitor-based traversal for future optimization passes.
  */
 #include "optimizer/Optimizer.h"
+#include "ast/AssignStmt.h"
+#include "ast/Binary.h"
+#include "ast/BoolLiteral.h"
+#include "ast/Call.h"
+#include "ast/ExprStmt.h"
+#include "ast/FloatLiteral.h"
+#include "ast/FunctionDef.h"
+#include "ast/IfStmt.h"
+#include "ast/IntLiteral.h"
+#include "ast/ListLiteral.h"
+#include "ast/Module.h"
+#include "ast/Name.h"
+#include "ast/NoneLiteral.h"
+#include "ast/ObjectLiteral.h"
+#include "ast/ReturnStmt.h"
+#include "ast/StringLiteral.h"
+#include "ast/TupleLiteral.h"
+#include "ast/Unary.h"
 #include "ast/VisitorBase.h"
 
 namespace pycc::opt {
@@ -79,7 +97,7 @@ struct Counter : public ast::VisitorBase {
   void visit(const ast::ObjectLiteral& obj) override {
     ++s.nodesVisited;
     ++s.exprsVisited;
-    for (const auto& v : obj.fields) { v->accept(*this); }
+    for (const auto& field : obj.fields) { field->accept(*this); }
   }
 };
 

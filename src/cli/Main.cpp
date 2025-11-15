@@ -8,8 +8,9 @@
  * Theory of Operation:
  *   Parse args then invoke Compiler::run.
  */
-#include "cli/CLI.h"
 #include "compiler/Compiler.h"
+#include "cli/ParseArgs.h"
+#include "cli/Usage.h"
 #include <cstddef>
 #include <iostream>
 

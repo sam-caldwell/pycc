@@ -1,0 +1,25 @@
+name: clang-tidy
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang clang-tidy
+      - name: Configure (lint preset)
+        run: |
+          cmake -S . -B build-lint -G Ninja \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DPYCC_ENABLE_TIDY=ON \
+            -DPYCC_REQUIRE_TIDY_PLUGIN=OFF
+      - name: Run clang-tidy
+        run: ninja -C build-lint tidy

@@ -4,8 +4,14 @@
  */
 #include "sema/Sema.h"
 #include "sema/TypeEnv.h"
+#include <cstddef>
+#include <cstdint>
+#include <ios>
 #include <sstream>
-#include <functional>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "ast/AssignStmt.h"
 #include "ast/Binary.h"
@@ -106,10 +112,10 @@ struct ExpressionTyper : public ast::VisitorBase {
   // NOLINTNEXTLINE(readability-function-size)
   void visit(const ast::ObjectLiteral& obj) override {
     out = Type::NoneType;
-    for (const auto& f : obj.fields) {
-      if (f) {
+    for (const auto& field : obj.fields) {
+      if (field) {
         ExpressionTyper sub{*env, *sigs, *retParamIdxs, *diags};
-        f->accept(sub);
+        field->accept(sub);
         if (!sub.ok) { ok = false; return; }
       }
     }
@@ -119,10 +125,10 @@ struct ExpressionTyper : public ast::VisitorBase {
     m.setCanonicalKey("obj");
   }
   void visit(const ast::Name& n) override {
-    uint32_t mask = env->getSet(n.id);
-    if (mask != 0U) {
-      outSet = mask;
-      if (TypeEnv::isSingleMask(mask)) { out = TypeEnv::kindFromMask(mask); }
+    const uint32_t maskVal = env->getSet(n.id);
+    if (maskVal != 0U) {
+      outSet = maskVal;
+      if (TypeEnv::isSingleMask(maskVal)) { out = TypeEnv::kindFromMask(maskVal); }
     }
     auto resolvedType = env->get(n.id);
     if (!resolvedType && outSet == 0U) { addDiag(*diags, std::string("undefined name: ") + n.id, &n); ok = false; return; }
@@ -141,10 +147,10 @@ struct ExpressionTyper : public ast::VisitorBase {
     const uint32_t fMask = TypeEnv::maskForKind(Type::Float);
     const uint32_t bMask = TypeEnv::maskForKind(Type::Bool);
     auto isSubset = [](uint32_t msk, uint32_t allow) { return msk && ((msk & ~allow) == 0U); };
-    uint32_t m = (sub.outSet != 0U) ? sub.outSet : TypeEnv::maskForKind(sub.out);
+    const uint32_t maskVal = (sub.outSet != 0U) ? sub.outSet : TypeEnv::maskForKind(sub.out);
     if (unaryNode.op == ast::UnaryOperator::Neg) {
-      if (isSubset(m, iMask)) { out = Type::Int; outSet = iMask; }
-      else if (isSubset(m, fMask)) { out = Type::Float; outSet = fMask; }
+      if (isSubset(maskVal, iMask)) { out = Type::Int; outSet = iMask; }
+      else if (isSubset(maskVal, fMask)) { out = Type::Float; outSet = fMask; }
       else { addDiag(*diags, "unary '-' requires int or float", &unaryNode); ok = false; return; }
       auto& mutableUnary = const_cast<ast::Unary&>(unaryNode); // NOLINT
       mutableUnary.setType(out);
@@ -152,7 +158,7 @@ struct ExpressionTyper : public ast::VisitorBase {
       return;
     }
     // 'not'
-    if (!isSubset(m, bMask)) { addDiag(*diags, "'not' requires bool", &unaryNode); ok = false; return; }
+    if (!isSubset(maskVal, bMask)) { addDiag(*diags, "'not' requires bool", &unaryNode); ok = false; return; }
     out = Type::Bool; outSet = bMask;
     auto& mutableUnary2 = const_cast<ast::Unary&>(unaryNode); // NOLINT
     mutableUnary2.setType(out);
@@ -363,57 +369,61 @@ static bool inferExprType(const ast::Expr* expr,
 // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
   std::unordered_map<std::string, Sig> sigs;
-  for (const auto& fn : mod.functions) {
-    Sig s; s.ret = fn->returnType;
-    for (const auto& p : fn->params) s.params.push_back(p.type);
-    sigs[fn->name] = std::move(s);
+  for (const auto& func : mod.functions) {
+    Sig sig; sig.ret = func->returnType;
+    for (const auto& param : func->params) { sig.params.push_back(param.type); }
+    sigs[func->name] = std::move(sig);
   }
   // Build a trivial interprocedural summary: which function consistently returns a specific parameter index
   std::unordered_map<std::string, int> retParamIdxs; // func -> param index
   struct RetIdxVisitor : public ast::VisitorBase {
     const ast::FunctionDef* fn{nullptr};
     int retIdx{-1}; bool hasReturn{false}; bool consistent{true};
-    void visit(const ast::ReturnStmt& r) override {
+    void visit(const ast::ReturnStmt& ret) override {
       if (!consistent) { return; }
       hasReturn = true;
-      if (!(r.value && r.value->kind == ast::NodeKind::Name)) { consistent = false; return; }
-      const auto* n = static_cast<const ast::Name*>(r.value.get());
+      if (!(ret.value && ret.value->kind == ast::NodeKind::Name)) { consistent = false; return; }
+      const auto* nameNode = static_cast<const ast::Name*>(ret.value.get());
       int idxFound = -1;
-      for (size_t i = 0; i < fn->params.size(); ++i) { if (fn->params[i].name == n->id) { idxFound = static_cast<int>(i); break; } }
+      for (size_t i = 0; i < fn->params.size(); ++i) { if (fn->params[i].name == nameNode->id) { idxFound = static_cast<int>(i); break; } }
       if (idxFound < 0) { consistent = false; return; }
-      if (retIdx < 0) retIdx = idxFound; else if (retIdx != idxFound) { consistent = false; }
+      if (retIdx < 0) { retIdx = idxFound; }
+      else if (retIdx != idxFound) { consistent = false; }
     }
-    void visit(const ast::IfStmt& iff) override { for (const auto& s : iff.thenBody) { s->accept(*this); } for (const auto& s : iff.elseBody) { s->accept(*this); } }
+    void visit(const ast::IfStmt& iff) override {
+      for (const auto& stmt : iff.thenBody) { stmt->accept(*this); }
+      for (const auto& stmt : iff.elseBody) { stmt->accept(*this); }
+    }
     // No-ops for others
-    void visit(const ast::Module&) override {}
-    void visit(const ast::FunctionDef&) override {}
-    void visit(const ast::AssignStmt&) override {}
-    void visit(const ast::ExprStmt&) override {}
-    void visit(const ast::IntLiteral&) override {}
-    void visit(const ast::BoolLiteral&) override {}
-    void visit(const ast::FloatLiteral&) override {}
-    void visit(const ast::StringLiteral&) override {}
-    void visit(const ast::NoneLiteral&) override {}
-    void visit(const ast::Name&) override {}
-    void visit(const ast::Call&) override {}
-    void visit(const ast::Binary&) override {}
-    void visit(const ast::Unary&) override {}
-    void visit(const ast::TupleLiteral&) override {}
-    void visit(const ast::ListLiteral&) override {}
-    void visit(const ast::ObjectLiteral&) override {}
+    void visit(const ast::Module& module) override { (void)module; }
+    void visit(const ast::FunctionDef& functionDef) override { (void)functionDef; }
+    void visit(const ast::AssignStmt& assign) override { (void)assign; }
+    void visit(const ast::ExprStmt& exprStmt) override { (void)exprStmt; }
+    void visit(const ast::IntLiteral& intLit) override { (void)intLit; }
+    void visit(const ast::BoolLiteral& boolLit) override { (void)boolLit; }
+    void visit(const ast::FloatLiteral& floatLit) override { (void)floatLit; }
+    void visit(const ast::StringLiteral& strLit) override { (void)strLit; }
+    void visit(const ast::NoneLiteral& noneLit) override { (void)noneLit; }
+    void visit(const ast::Name& name) override { (void)name; }
+    void visit(const ast::Call& call) override { (void)call; }
+    void visit(const ast::Binary& bin) override { (void)bin; }
+    void visit(const ast::Unary& unary) override { (void)unary; }
+    void visit(const ast::TupleLiteral& tuple) override { (void)tuple; }
+    void visit(const ast::ListLiteral& list) override { (void)list; }
+    void visit(const ast::ObjectLiteral& obj) override { (void)obj; }
   };
-  for (const auto& fn : mod.functions) {
-    RetIdxVisitor v; v.fn = fn.get();
-    for (const auto& st : fn->body) { st->accept(v); if (!v.consistent) break; }
-    if (v.hasReturn && v.consistent && v.retIdx >= 0) { retParamIdxs[fn->name] = v.retIdx; }
+  for (const auto& func : mod.functions) {
+    RetIdxVisitor visitor; visitor.fn = func.get();
+    for (const auto& stmt : func->body) { stmt->accept(visitor); if (!visitor.consistent) { break; } }
+    if (visitor.hasReturn && visitor.consistent && visitor.retIdx >= 0) { retParamIdxs[func->name] = visitor.retIdx; }
   }
 
-  for (const auto& fn : mod.functions) {
-    if (!(typeIsInt(fn->returnType) || typeIsBool(fn->returnType) || typeIsFloat(fn->returnType) || typeIsStr(fn->returnType) || fn->returnType == Type::Tuple)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/tuple returns supported"; diags.push_back(std::move(diagVar)); return false; }
+  for (const auto& func : mod.functions) {
+    if (!(typeIsInt(func->returnType) || typeIsBool(func->returnType) || typeIsFloat(func->returnType) || typeIsStr(func->returnType) || func->returnType == Type::Tuple)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/tuple returns supported"; diags.push_back(std::move(diagVar)); return false; }
     TypeEnv env;
-    for (const auto& param : fn->params) {
+    for (const auto& param : func->params) {
       if (!(typeIsInt(param.type) || typeIsBool(param.type) || typeIsFloat(param.type) || typeIsStr(param.type))) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str params supported"; diags.push_back(std::move(diagVar)); return false; }
-      env.define(param.name, param.type, {fn->name, 0, 0});
+      env.define(param.name, param.type, {func->name, 0, 0});
     }
     struct StmtChecker : public ast::VisitorBase {
       StmtChecker(const ast::FunctionDef& fn_, const std::unordered_map<std::string, Sig>& sigs_,
@@ -433,14 +443,14 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         ExpressionTyper valTyper{env, sigs, retParamIdxs, diags};
         if (assignStmt.value) { assignStmt.value->accept(valTyper); } else { ok = false; return; }
         if (!valTyper.ok) { ok = false; return; }
-        Type typeOut = valTyper.out;
+        const Type typeOut = valTyper.out;
         const bool allowed = typeIsInt(typeOut) || typeIsBool(typeOut) || typeIsFloat(typeOut) || typeIsStr(typeOut) || typeOut == Type::List;
         if (!allowed) {
           addDiag(diags, "only int/bool/float/str/list variables supported", &assignStmt); ok = false; return;
         }
         // Define from set if available, else exact kind
-        uint32_t m = (valTyper.outSet != 0U) ? valTyper.outSet : TypeEnv::maskForKind(typeOut);
-        env.defineSet(assignStmt.target, m, {assignStmt.file, assignStmt.line, assignStmt.col});
+        const uint32_t maskVal = (valTyper.outSet != 0U) ? valTyper.outSet : TypeEnv::maskForKind(typeOut);
+        env.defineSet(assignStmt.target, maskVal, {assignStmt.file, assignStmt.line, assignStmt.col});
       }
 
       // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
@@ -451,13 +461,14 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         TypeEnv elseL = env;
         // Visitor-based condition refinement
         struct ConditionRefiner : public ast::VisitorBase {
+          struct Envs { TypeEnv& thenEnv; TypeEnv& elseEnv; };
           TypeEnv& thenEnv; TypeEnv& elseEnv;
-          explicit ConditionRefiner(TypeEnv& t, TypeEnv& e) : thenEnv(t), elseEnv(e) {}
-          static Type typeFromName(const std::string& id) {
-            if (id == "int") return Type::Int;
-            if (id == "bool") return Type::Bool;
-            if (id == "float") return Type::Float;
-            if (id == "str") return Type::Str;
+          explicit ConditionRefiner(Envs envs) : thenEnv(envs.thenEnv), elseEnv(envs.elseEnv) {}
+          static Type typeFromName(const std::string& ident) {
+            if (ident == "int") { return Type::Int; }
+            if (ident == "bool") { return Type::Bool; }
+            if (ident == "float") { return Type::Float; }
+            if (ident == "str") { return Type::Str; }
             return Type::NoneType;
           }
           // isinstance(x, T) => then: x:T
@@ -469,61 +480,61 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
             if (!(call.args[1] && call.args[1]->kind == ast::NodeKind::Name)) { return; }
             const auto* var = static_cast<const ast::Name*>(call.args[0].get());
             const auto* tnm = static_cast<const ast::Name*>(call.args[1].get());
-            Type nt = typeFromName(tnm->id);
-            if (nt != Type::NoneType) { thenEnv.restrictToKind(var->id, nt); thenEnv.define(var->id, nt, {var->file, var->line, var->col}); }
+            const Type newType = typeFromName(tnm->id);
+            if (newType != Type::NoneType) { thenEnv.restrictToKind(var->id, newType); thenEnv.define(var->id, newType, {var->file, var->line, var->col}); }
           }
           // x == None => then x: NoneType; x != None => else x: NoneType
           // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
-          void visit(const ast::Binary& b) override {
+          void visit(const ast::Binary& bin) override {
             // Logical approximations:
             // - For A and B: then-branch applies both A and B refinements (safe);
             //   else-branch left unchanged (unspecified which subexpr fails).
             // - For A or B: else-branch would be (!A and !B) which requires negative types;
             //   leave conservative (no refinement) because TypeEnv has no "not None" type.
-            if (b.op == ast::BinaryOperator::And) {
-              if (b.lhs) { b.lhs->accept(*this); }
-              if (b.rhs) { b.rhs->accept(*this); }
+            if (bin.op == ast::BinaryOperator::And) {
+              if (bin.lhs) { bin.lhs->accept(*this); }
+              if (bin.rhs) { bin.rhs->accept(*this); }
               return;
             }
-            if (b.op == ast::BinaryOperator::Or) { applyNegExpr(b.lhs.get()); applyNegExpr(b.rhs.get()); return; }
-            auto refineEq = [&](const ast::Expr* a, const ast::Expr* b2, bool toThen) {
-              if (a && a->kind == ast::NodeKind::Name && b2 && b2->kind == ast::NodeKind::NoneLiteral) {
-                const auto* n = static_cast<const ast::Name*>(a);
-                auto& env = toThen ? thenEnv : elseEnv;
-                env.define(n->id, Type::NoneType, {n->file, n->line, n->col});
+            if (bin.op == ast::BinaryOperator::Or) { applyNegExpr(bin.lhs.get()); applyNegExpr(bin.rhs.get()); return; }
+            auto refineEq = [&](const ast::Expr* lhs, const ast::Expr* rhs, bool toThen) {
+              if (lhs && lhs->kind == ast::NodeKind::Name && rhs && rhs->kind == ast::NodeKind::NoneLiteral) {
+                const auto* nameNode = static_cast<const ast::Name*>(lhs);
+                auto& envRef = toThen ? thenEnv : elseEnv;
+                envRef.define(nameNode->id, Type::NoneType, {nameNode->file, nameNode->line, nameNode->col});
               }
             };
-            if (b.op == ast::BinaryOperator::Eq) {
-              refineEq(b.lhs.get(), b.rhs.get(), true);
-              refineEq(b.rhs.get(), b.lhs.get(), true);
-            } else if (b.op == ast::BinaryOperator::Ne) {
-              refineEq(b.lhs.get(), b.rhs.get(), false);
-              refineEq(b.rhs.get(), b.lhs.get(), false);
+            if (bin.op == ast::BinaryOperator::Eq) {
+              refineEq(bin.lhs.get(), bin.rhs.get(), true);
+              refineEq(bin.rhs.get(), bin.lhs.get(), true);
+            } else if (bin.op == ast::BinaryOperator::Ne) {
+              refineEq(bin.lhs.get(), bin.rhs.get(), false);
+              refineEq(bin.rhs.get(), bin.lhs.get(), false);
             }
           }
           // not(<expr>): swap then/else refinements for eq/ne None
           // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
-          void visit(const ast::Unary& u) override {
-            if (u.op != ast::UnaryOperator::Not || !u.operand) { return; }
-            if (u.operand->kind == ast::NodeKind::BinaryExpr) {
-              const auto* bin = static_cast<const ast::Binary*>(u.operand.get());
+          void visit(const ast::Unary& unary) override {
+            if (unary.op != ast::UnaryOperator::Not || !unary.operand) { return; }
+            if (unary.operand->kind == ast::NodeKind::BinaryExpr) {
+              const auto* bin = static_cast<const ast::Binary*>(unary.operand.get());
               if (bin->op == ast::BinaryOperator::Eq || bin->op == ast::BinaryOperator::Ne) {
                 // Create a temporary refiner with swapped envs
-                ConditionRefiner swapped{elseEnv, thenEnv};
-                u.operand->accept(swapped);
+                ConditionRefiner swapped{ConditionRefiner::Envs{elseEnv, thenEnv}};
+                unary.operand->accept(swapped);
               }
-            } else if (u.operand->kind == ast::NodeKind::Call) {
+            } else if (unary.operand->kind == ast::NodeKind::Call) {
               // not isinstance(x,T): then exclude T; else restrict to T
-              const auto* call = static_cast<const ast::Call*>(u.operand.get());
+              const auto* call = static_cast<const ast::Call*>(unary.operand.get());
               if (call->callee && call->callee->kind == ast::NodeKind::Name && call->args.size() == 2 && call->args[0] && call->args[0]->kind == ast::NodeKind::Name && call->args[1] && call->args[1]->kind == ast::NodeKind::Name) {
                 const auto* callee = static_cast<const ast::Name*>(call->callee.get());
                 if (callee->id == "isinstance") {
                   const auto* var = static_cast<const ast::Name*>(call->args[0].get());
                   const auto* tnm = static_cast<const ast::Name*>(call->args[1].get());
-                  Type nt = typeFromName(tnm->id);
-                  if (nt != Type::NoneType) {
-                    thenEnv.excludeKind(var->id, nt);
-                    elseEnv.restrictToKind(var->id, nt);
+                  const Type newType = typeFromName(tnm->id);
+                  if (newType != Type::NoneType) {
+                    thenEnv.excludeKind(var->id, newType);
+                    elseEnv.restrictToKind(var->id, newType);
                   }
                 }
               }
@@ -531,104 +542,105 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
           }
           // Apply negation refinement to a subexpression (for else-branch of OR)
           // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
-          void applyNegExpr(const ast::Expr* e) {
-            if (!e) { return; }
-            if (e->kind == ast::NodeKind::BinaryExpr) {
-              const auto* bb = static_cast<const ast::Binary*>(e);
-              if (bb->op == ast::BinaryOperator::Eq) {
-                auto setNN = [&](const ast::Expr* a, const ast::Expr* b2) {
-                  if (a && a->kind == ast::NodeKind::Name && b2 && b2->kind == ast::NodeKind::NoneLiteral) {
-                    const auto* n = static_cast<const ast::Name*>(a);
-                    elseEnv.markNonNone(n->id);
+          void applyNegExpr(const ast::Expr* expr) {
+            if (!expr) { return; }
+            if (expr->kind == ast::NodeKind::BinaryExpr) {
+              const auto* binaryNode = static_cast<const ast::Binary*>(expr);
+              if (binaryNode->op == ast::BinaryOperator::Eq) {
+                auto setNN = [&](const ast::Expr* lhs, const ast::Expr* rhs) {
+                  if (lhs && lhs->kind == ast::NodeKind::Name && rhs && rhs->kind == ast::NodeKind::NoneLiteral) {
+                    const auto* nameNode = static_cast<const ast::Name*>(lhs);
+                    elseEnv.markNonNone(nameNode->id);
                   }
                 };
-                setNN(bb->lhs.get(), bb->rhs.get());
-                setNN(bb->rhs.get(), bb->lhs.get());
+                setNN(binaryNode->lhs.get(), binaryNode->rhs.get());
+                setNN(binaryNode->rhs.get(), binaryNode->lhs.get());
                 return;
               }
-              if (bb->op == ast::BinaryOperator::Ne) {
-                auto setNone = [&](const ast::Expr* a, const ast::Expr* b2) {
-                  if (a && a->kind == ast::NodeKind::Name && b2 && b2->kind == ast::NodeKind::NoneLiteral) {
-                    const auto* n = static_cast<const ast::Name*>(a);
-                    elseEnv.define(n->id, Type::NoneType, {n->file, n->line, n->col});
+              if (binaryNode->op == ast::BinaryOperator::Ne) {
+                auto setNone = [&](const ast::Expr* lhs, const ast::Expr* rhs) {
+                  if (lhs && lhs->kind == ast::NodeKind::Name && rhs && rhs->kind == ast::NodeKind::NoneLiteral) {
+                    const auto* nameNode = static_cast<const ast::Name*>(lhs);
+                    elseEnv.define(nameNode->id, Type::NoneType, {nameNode->file, nameNode->line, nameNode->col});
                   }
                 };
-                setNone(bb->lhs.get(), bb->rhs.get());
-                setNone(bb->rhs.get(), bb->lhs.get());
+                setNone(binaryNode->lhs.get(), binaryNode->rhs.get());
+                setNone(binaryNode->rhs.get(), binaryNode->lhs.get());
                 return;
               }
             }
-            if (e->kind == ast::NodeKind::Call) {
-              const auto* c = static_cast<const ast::Call*>(e);
-              if (c->callee && c->callee->kind == ast::NodeKind::Name) {
-                const auto* cal = static_cast<const ast::Name*>(c->callee.get());
-                if (cal->id == "isinstance" && c->args.size() == 2 && c->args[0] && c->args[0]->kind == ast::NodeKind::Name && c->args[1] && c->args[1]->kind == ast::NodeKind::Name) {
-                  const auto* var = static_cast<const ast::Name*>(c->args[0].get());
-                  const auto* tnm = static_cast<const ast::Name*>(c->args[1].get());
-                  Type nt = typeFromName(tnm->id);
-                  if (nt != Type::NoneType) { elseEnv.excludeKind(var->id, nt); }
+            if (expr->kind == ast::NodeKind::Call) {
+              const auto* callNode = static_cast<const ast::Call*>(expr);
+              if (callNode->callee && callNode->callee->kind == ast::NodeKind::Name) {
+                const auto* cal = static_cast<const ast::Name*>(callNode->callee.get());
+                if (cal->id == "isinstance" && callNode->args.size() == 2 && callNode->args[0] && callNode->args[0]->kind == ast::NodeKind::Name && callNode->args[1] && callNode->args[1]->kind == ast::NodeKind::Name) {
+                  const auto* var = static_cast<const ast::Name*>(callNode->args[0].get());
+                  const auto* tnm = static_cast<const ast::Name*>(callNode->args[1].get());
+                  const Type newType2 = typeFromName(tnm->id);
+                  if (newType2 != Type::NoneType) { elseEnv.excludeKind(var->id, newType2); }
                   return;
                 }
               }
             }
-            if (e->kind == ast::NodeKind::UnaryExpr) {
-              const auto* uu = static_cast<const ast::Unary*>(e);
-              if (uu->op == ast::UnaryOperator::Not && uu->operand) { applyNegExpr(uu->operand.get()); }
+            if (expr->kind == ast::NodeKind::UnaryExpr) {
+              const auto* unaryExpr = static_cast<const ast::Unary*>(expr);
+              if (unaryExpr->op == ast::UnaryOperator::Not && unaryExpr->operand) { applyNegExpr(unaryExpr->operand.get()); }
             }
           }
 
           // No-ops
-          void visit(const ast::Module&) override {}
-          void visit(const ast::FunctionDef&) override {}
-          void visit(const ast::ReturnStmt&) override {}
-          void visit(const ast::AssignStmt&) override {}
-          void visit(const ast::ExprStmt&) override {}
-          void visit(const ast::IntLiteral&) override {}
-          void visit(const ast::BoolLiteral&) override {}
-          void visit(const ast::FloatLiteral&) override {}
-          void visit(const ast::StringLiteral&) override {}
-          void visit(const ast::NoneLiteral&) override {}
-          void visit(const ast::Name&) override {}
-          void visit(const ast::TupleLiteral&) override {}
-          void visit(const ast::ListLiteral&) override {}
-          void visit(const ast::ObjectLiteral&) override {}
-          void visit(const ast::IfStmt&) override {}
+          void visit(const ast::Module& module) override { (void)module; }
+          void visit(const ast::FunctionDef& functionDef) override { (void)functionDef; }
+          void visit(const ast::ReturnStmt& ret) override { (void)ret; }
+          void visit(const ast::AssignStmt& assign) override { (void)assign; }
+          void visit(const ast::ExprStmt& exprStmt) override { (void)exprStmt; }
+          void visit(const ast::IntLiteral& intLit) override { (void)intLit; }
+          void visit(const ast::BoolLiteral& boolLit) override { (void)boolLit; }
+          void visit(const ast::FloatLiteral& floatLit) override { (void)floatLit; }
+          void visit(const ast::StringLiteral& strLit) override { (void)strLit; }
+          void visit(const ast::NoneLiteral& noneLit) override { (void)noneLit; }
+          void visit(const ast::Name& name) override { (void)name; }
+          void visit(const ast::TupleLiteral& tupleLit) override { (void)tupleLit; }
+          void visit(const ast::ListLiteral& listLit) override { (void)listLit; }
+          void visit(const ast::ObjectLiteral& objLit) override { (void)objLit; }
+          void visit(const ast::IfStmt& ifStmt2) override { (void)ifStmt2; }
         };
-        if (iff.cond) { ConditionRefiner ref{thenL, elseL}; iff.cond->accept(ref); }
+        if (iff.cond) { ConditionRefiner ref{ConditionRefiner::Envs{thenL, elseL}}; iff.cond->accept(ref); }
         // then/else branches via a tiny visitor
         struct BranchChecker : public ast::VisitorBase {
           StmtChecker& parent; TypeEnv& envRef; const Type fnRet; bool& okRef;
-          BranchChecker(StmtChecker& p, TypeEnv& e, Type r, bool& ok) : parent(p), envRef(e), fnRet(r), okRef(ok) {}
-          void visit(const ast::AssignStmt& a) override {
-            Type t{}; if (!parent.infer(a.value.get(), t)) { okRef = false; return; }
-            envRef.define(a.target, t, {a.file, a.line, a.col});
+          BranchChecker(StmtChecker& parentIn, TypeEnv& envIn, Type retType, bool& okIn)
+              : parent(parentIn), envRef(envIn), fnRet(retType), okRef(okIn) {}
+          void visit(const ast::AssignStmt& assignStmt) override {
+            Type tmpType{}; if (!parent.infer(assignStmt.value.get(), tmpType)) { okRef = false; return; }
+            envRef.define(assignStmt.target, tmpType, {assignStmt.file, assignStmt.line, assignStmt.col});
           }
-          void visit(const ast::ReturnStmt& r) override {
-            Type t{}; if (!parent.infer(r.value.get(), t)) { okRef = false; return; }
-            if (t != fnRet) { addDiag(parent.diags, "return type mismatch in branch", &r); okRef = false; }
+          void visit(const ast::ReturnStmt& ret) override {
+            Type tmpType{}; if (!parent.infer(ret.value.get(), tmpType)) { okRef = false; return; }
+            if (tmpType != fnRet) { addDiag(parent.diags, "return type mismatch in branch", &ret); okRef = false; }
           }
           // No-ops
-          void visit(const ast::Module&) override {}
-          void visit(const ast::FunctionDef&) override {}
-          void visit(const ast::IfStmt&) override {}
-          void visit(const ast::ExprStmt&) override {}
-          void visit(const ast::IntLiteral&) override {}
-          void visit(const ast::BoolLiteral&) override {}
-          void visit(const ast::FloatLiteral&) override {}
-          void visit(const ast::StringLiteral&) override {}
-          void visit(const ast::NoneLiteral&) override {}
-          void visit(const ast::Name&) override {}
-          void visit(const ast::Call&) override {}
-          void visit(const ast::Binary&) override {}
-          void visit(const ast::Unary&) override {}
-          void visit(const ast::TupleLiteral&) override {}
-          void visit(const ast::ListLiteral&) override {}
-          void visit(const ast::ObjectLiteral&) override {}
+          void visit(const ast::Module& module) override { (void)module; }
+          void visit(const ast::FunctionDef& functionDef) override { (void)functionDef; }
+          void visit(const ast::IfStmt& ifStmt2) override { (void)ifStmt2; }
+          void visit(const ast::ExprStmt& exprStmt) override { (void)exprStmt; }
+          void visit(const ast::IntLiteral& intLit) override { (void)intLit; }
+          void visit(const ast::BoolLiteral& boolLit) override { (void)boolLit; }
+          void visit(const ast::FloatLiteral& floatLit) override { (void)floatLit; }
+          void visit(const ast::StringLiteral& strLit) override { (void)strLit; }
+          void visit(const ast::NoneLiteral& noneLit) override { (void)noneLit; }
+          void visit(const ast::Name& name) override { (void)name; }
+          void visit(const ast::Call& callNode) override { (void)callNode; }
+          void visit(const ast::Binary& bin) override { (void)bin; }
+          void visit(const ast::Unary& unaryNode) override { (void)unaryNode; }
+          void visit(const ast::TupleLiteral& tupleLit) override { (void)tupleLit; }
+          void visit(const ast::ListLiteral& listLit) override { (void)listLit; }
+          void visit(const ast::ObjectLiteral& objLit) override { (void)objLit; }
         };
         BranchChecker thenChecker{*this, thenL, fn.returnType, ok};
-        for (const auto& s : iff.thenBody) { if (!ok) break; s->accept(thenChecker); }
+        for (const auto& stmt2 : iff.thenBody) { if (!ok) { break; } stmt2->accept(thenChecker); }
         BranchChecker elseChecker{*this, elseL, fn.returnType, ok};
-        for (const auto& s : iff.elseBody) { if (!ok) break; s->accept(elseChecker); }
+        for (const auto& stmt2 : iff.elseBody) { if (!ok) { break; } stmt2->accept(elseChecker); }
         // Merge back to current env: intersect types present in both branches
         env.intersectFrom(thenL, elseL);
       }
@@ -657,8 +669,8 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
       void visit(const ast::NoneLiteral& noneNode) override { (void)noneNode; }
     };
 
-    StmtChecker checker{*fn, sigs, retParamIdxs, env, diags};
-    for (const auto& stmt : fn->body) {
+    StmtChecker checker{*func, sigs, retParamIdxs, env, diags};
+    for (const auto& stmt : func->body) {
       stmt->accept(checker);
       if (!checker.ok) { return false; }
     }

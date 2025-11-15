@@ -35,9 +35,9 @@ lint:
 	@echo "[lint] configuring lint tree at $(OUTDIR_LINT)"
 	@CC=$(CC) CXX=$(CXX) CMAKE_C_COMPILER=$(CC) CMAKE_CXX_COMPILER=$(CXX) $(CMAKE) -S . -B $(OUTDIR_LINT) -G Ninja -DPYCC_ENABLE_TIDY=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 	@echo "[build-inter] building clang-tidy plugins (pycc_tidy)"
-	@$(CMAKE) --build $(OUTDIR_LINT) --target pycc_tidy --parallel $(JOBS) || echo "[build-inter] plugin build skipped/unavailable"
+	@env -u MAKEFLAGS $(CMAKE) --build $(OUTDIR_LINT) --target pycc_tidy --parallel $(JOBS) || echo "[build-inter] plugin build skipped/unavailable"
 	@echo "[lint] run clang-tidy via CMake target"
-	@$(CMAKE) --build $(OUTDIR_LINT) --target tidy --parallel $(JOBS)
+	@env -u MAKEFLAGS $(CMAKE) --build $(OUTDIR_LINT) --target tidy --parallel $(JOBS)
 
 build-inter:
 	@echo "[build-inter] deprecated; use 'make lint'"
