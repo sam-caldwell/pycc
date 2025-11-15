@@ -69,6 +69,7 @@ struct SimplifyVisitor : public ast::VisitorBase {
   void visit(const Binary& binary) override {
     (void)binary;
     auto* bin = static_cast<Binary*>(slot->get());
+    auto* exprSlot = slot;
     rewrite(bin->lhs);
     rewrite(bin->rhs);
 
@@ -81,19 +82,19 @@ struct SimplifyVisitor : public ast::VisitorBase {
         switch (bin->op) {
           case BinaryOperator::Add:
             if (isZero(left)) { replacement = std::move(bin->rhs); } else if (isZero(right)) { replacement = std::move(bin->lhs); }
-            if (replacement) { ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
+            if (replacement) { ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           case BinaryOperator::Sub:
-            if (isZero(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
+            if (isZero(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           case BinaryOperator::Mul:
             if (isZero(left) || isZero(right)) { replacement = std::make_unique<IntLiteral>(0); }
             else if (isOne(left)) { replacement = std::move(bin->rhs); }
             else if (isOne(right)) { replacement = std::move(bin->lhs); }
-            if (replacement) { ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
+            if (replacement) { ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           case BinaryOperator::Div:
-            if (isOne(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
+            if (isOne(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           default: break;
         }
@@ -103,19 +104,19 @@ struct SimplifyVisitor : public ast::VisitorBase {
         switch (bin->op) {
           case BinaryOperator::Add:
             if (isZero(left)) { replacement = std::move(bin->rhs); } else if (isZero(right)) { replacement = std::move(bin->lhs); }
-            if (replacement) { ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+            if (replacement) { ++changes; stats["algebraic_float"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           case BinaryOperator::Sub:
-            if (isZero(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+            if (isZero(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_float"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           case BinaryOperator::Mul:
             if (isZero(left) || isZero(right)) { replacement = std::make_unique<FloatLiteral>(0.0); }
             else if (isOne(left)) { replacement = std::move(bin->rhs); }
             else if (isOne(right)) { replacement = std::move(bin->lhs); }
-            if (replacement) { ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+            if (replacement) { ++changes; stats["algebraic_float"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           case BinaryOperator::Div:
-            if (isOne(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+            if (isOne(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_float"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           default: break;
         }
@@ -127,8 +128,8 @@ struct SimplifyVisitor : public ast::VisitorBase {
         if (canonLhs && canonRhs && *canonLhs == *canonRhs) {
           auto typeL = bin->lhs->type(); auto typeR = bin->rhs->type();
           if (typeL && typeR && *typeL == *typeR) {
-            if (*typeL == TypeKind::Int) { replacement = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_int"]++; *slot = std::move(replacement); return; }
-            if (*typeL == TypeKind::Float) { replacement = std::make_unique<FloatLiteral>(0.0); ++changes; stats["algebraic_float"]++; *slot = std::move(replacement); return; }
+            if (*typeL == TypeKind::Int) { replacement = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return; }
+            if (*typeL == TypeKind::Float) { replacement = std::make_unique<FloatLiteral>(0.0); ++changes; stats["algebraic_float"]++; slot = exprSlot; *slot = std::move(replacement); return; }
           }
         }
       }
@@ -138,10 +139,11 @@ struct SimplifyVisitor : public ast::VisitorBase {
   void visit(const Unary& unary) override {
     (void)unary;
     auto* unaryNode = static_cast<Unary*>(slot->get());
+    auto* exprSlot = slot;
     if (unaryNode->op == UnaryOperator::Neg && unaryNode->operand && unaryNode->operand->kind == NodeKind::UnaryExpr) {
       auto* inner = static_cast<Unary*>(unaryNode->operand.get());
       if (inner->op == UnaryOperator::Neg && inner->operand) {
-        *slot = std::move(inner->operand); ++changes; stats["double_neg"]++;
+        slot = exprSlot; *slot = std::move(inner->operand); ++changes; stats["double_neg"]++;
         return;
       }
     }

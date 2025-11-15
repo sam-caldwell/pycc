@@ -1,0 +1,3 @@
+pe_col1.py:1:1: error: m
+  line
+  ^

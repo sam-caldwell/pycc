@@ -13,12 +13,6 @@ static std::vector<lex::Token> lexAll(const char* src) {
   return toks;
 }
 
-static std::vector<lex::TokenKind> kinds(const std::vector<lex::Token>& toks) {
-  std::vector<lex::TokenKind> out; out.reserve(toks.size());
-  for (const auto& t : toks) { out.push_back(t.kind); }
-  return out;
-}
-
 TEST(LexerEdges, CommentsAndBlankProduceNewlinesOnly) {
   const char* src = R"PY(
 # just a comment

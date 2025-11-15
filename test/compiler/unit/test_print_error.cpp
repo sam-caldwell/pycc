@@ -76,3 +76,49 @@ TEST(PrintError, ColorAddsAnsiSequences) {
   ASSERT_NE(out.find("\x1b[0m"), std::string::npos);
 }
 
+TEST(PrintError, EmptyFileNoCaret) {
+  const char* srcPath = "pe_empty.py";
+  { std::ofstream out(srcPath); /* empty file */ }
+  pycc::sema::Diagnostic d; d.file = srcPath; d.line = 1; d.col = 1; d.message = "msg";
+  const char* outPath = "pe_empty_out.txt";
+  int saved = dup(2);
+  FILE* fp = std::fopen(outPath, "w"); ASSERT_NE(fp, nullptr); int fd = fileno(fp); ASSERT_GE(fd, 0);
+  dup2(fd, 2);
+  pycc::Compiler::print_error(d, /*color=*/false, /*context=*/0);
+  fflush(stderr);
+  dup2(saved, 2); close(saved); std::fclose(fp);
+  auto out = readFile(outPath);
+  // Header present, but no caret since file had no line content
+  ASSERT_NE(out.find("pe_empty.py:1:1:"), std::string::npos);
+  ASSERT_EQ(out.find("^\n"), std::string::npos);
+}
+
+TEST(PrintError, MissingFilePathPrintsLabelAndMessageOnly) {
+  pycc::sema::Diagnostic d; d.file = ""; d.line = 1; d.col = 1; d.message = "oops";
+  const char* outPath = "pe_nofile_out.txt";
+  int saved = dup(2);
+  FILE* fp = std::fopen(outPath, "w"); ASSERT_NE(fp, nullptr); int fd = fileno(fp); ASSERT_GE(fd, 0);
+  dup2(fd, 2);
+  pycc::Compiler::print_error(d, /*color=*/false, /*context=*/0);
+  fflush(stderr);
+  dup2(saved, 2); close(saved); std::fclose(fp);
+  auto out = readFile(outPath);
+  // No file header; should start with "error:" label
+  ASSERT_NE(out.find("error: oops"), std::string::npos);
+}
+
+TEST(PrintError, CaretAtCol1Printed) {
+  const char* srcPath = "pe_col1.py";
+  { std::ofstream out(srcPath); out << "line" << '\n'; }
+  pycc::sema::Diagnostic d; d.file = srcPath; d.line = 1; d.col = 1; d.message = "m";
+  const char* outPath = "pe_col1_out.txt";
+  int saved = dup(2);
+  FILE* fp = std::fopen(outPath, "w"); ASSERT_NE(fp, nullptr); int fd = fileno(fp); ASSERT_GE(fd, 0);
+  dup2(fd, 2);
+  pycc::Compiler::print_error(d, /*color=*/false, /*context=*/0);
+  fflush(stderr);
+  dup2(saved, 2); close(saved); std::fclose(fp);
+  auto out = readFile(outPath);
+  // Two leading spaces then caret
+  ASSERT_NE(out.find("\n  ^\n"), std::string::npos);
+}

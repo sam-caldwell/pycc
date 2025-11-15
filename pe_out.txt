@@ -1,0 +1,4 @@
+pe_tmp.py:2:3: error: oops
+  xyZ
+    ^
+  (context lines: 2)

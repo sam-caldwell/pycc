@@ -33,6 +33,7 @@ enum class TokenKind {
   Return,     // return
   If,         // if
   Else,       // else
+  Elif,       // elif
 
   Arrow,      // ->
   Colon,      // :
@@ -77,6 +78,7 @@ inline const char* to_string(TokenKind k) {
     case TokenKind::Return: return "Return";
     case TokenKind::If: return "If";
     case TokenKind::Else: return "Else";
+    case TokenKind::Elif: return "Elif";
     case TokenKind::Arrow: return "Arrow";
     case TokenKind::Colon: return "Colon";
     case TokenKind::Comma: return "Comma";

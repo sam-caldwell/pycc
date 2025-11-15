@@ -88,6 +88,7 @@ CMakePresets.json
 *.gcno
 *.gcda
 *.gcov
+completion.md
 
 # IDE / Editor settings
 .idea/

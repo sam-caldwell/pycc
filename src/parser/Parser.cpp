@@ -106,6 +106,7 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
     // NEWLINE may follow (but parseFunction loop also handles)
     return std::make_unique<ast::ReturnStmt>(std::move(expr));
   }
+  // Note: while/for/pass/break/continue not yet supported
   if (peek().kind == TK::If) { return parseIfStmt(); }
   if (peek().kind == TK::Ident && peekNext().kind == TK::Equal) {
     const std::string name = get().text; // ident

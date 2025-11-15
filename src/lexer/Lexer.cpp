@@ -235,6 +235,7 @@ Token Lexer::scanOne(State& state) {
     else if (ident == "return") { kind = TokenKind::Return; }
     else if (ident == "if") { kind = TokenKind::If; }
     else if (ident == "else") { kind = TokenKind::Else; }
+    else if (ident == "elif") { kind = TokenKind::Elif; }
     else if (ident == "and") { kind = TokenKind::And; }
     else if (ident == "or") { kind = TokenKind::Or; }
     else if (ident == "not") { kind = TokenKind::Not; }
