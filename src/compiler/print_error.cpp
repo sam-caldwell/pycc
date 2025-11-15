@@ -1,35 +1,21 @@
 #include "compiler/Compiler.h"
 #include "sema/Sema.h"
 #include <fstream>
+#include <cstring>
 
 extern "C" long write(int, const void*, unsigned long);
 
 namespace pycc {
 
 static void write_str(const char* str) {
-  unsigned long len = 0;
-  while (str[len] != '\0') { ++len; } // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  (void)write(2, str, len);
+  if (str == nullptr) { return; }
+  const auto len = std::strlen(str);
+  (void)write(2, str, static_cast<unsigned long>(len));
 }
 
 static void write_int(int value) {
-  constexpr int kBufSize = 32;
-  constexpr int kBase10 = 10;
-  char buf[kBufSize]; // NOLINT(cppcoreguidelines-avoid-c-arrays)
-  char* const begin = &buf[0];      // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
-  char* cur = begin;                // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  if (value == 0) { write_str("0"); return; }
-  if (value < 0) { (void)write(2, "-", 1); value = -value; }
-  while (value > 0 && (cur - begin) < kBufSize) { // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    const int digit = value % kBase10;
-    *cur = static_cast<char>('0' + digit);      // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    ++cur;                                       // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    value /= kBase10;
-  }
-  while (cur != begin) {                         // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    --cur;                                       // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    (void)write(2, cur, 1);
-  }
+  const auto s = std::to_string(value);
+  (void)write(2, s.c_str(), static_cast<unsigned long>(s.size()));
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)

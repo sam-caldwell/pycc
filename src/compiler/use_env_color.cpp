@@ -1,35 +1,35 @@
 #include "compiler/Compiler.h"
-extern "C" char* getenv(const char*);
+#include <cstring>
+#include <string_view>
+#include <cctype>
+#include <cstdlib>
 
 namespace pycc {
 
-static bool equals_ci(const char* lhs, const char* rhs) { // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  int index = 0;
-  for (;;) {
-    char leftChar = lhs[index];   // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    char rightChar = rhs[index];  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    if (leftChar >= 'A' && leftChar <= 'Z') { leftChar = static_cast<char>(leftChar - 'A' + 'a'); }
-    if (rightChar >= 'A' && rightChar <= 'Z') { rightChar = static_cast<char>(rightChar - 'A' + 'a'); }
-    if (leftChar != rightChar) { return false; }
-    if (leftChar == '\0') { return true; }
-    ++index;
+static bool equals_ci_view(std::string_view a, std::string_view b) {
+  if (a.size() != b.size()) { return false; }
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    const unsigned char ac = static_cast<unsigned char>(a[i]);
+    const unsigned char bc = static_cast<unsigned char>(b[i]);
+    const char al = static_cast<char>(std::tolower(ac));
+    const char bl = static_cast<char>(std::tolower(bc));
+    if (al != bl) { return false; }
   }
+  return true;
 }
 
 static bool is_true_value(const char* strVal) {
   if (strVal == nullptr) { return false; }
-  if (strVal[0] == '1' && strVal[1] == '\0') { return true; } // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  if (equals_ci(strVal, "true")) { return true; }
-  if (equals_ci(strVal, "yes")) { return true; }
+  std::string_view sv{strVal, std::strlen(strVal)};
+  if (sv == "1") { return true; }
+  if (equals_ci_view(sv, "true")) { return true; }
+  if (equals_ci_view(sv, "yes")) { return true; }
   return false;
 }
 
 bool Compiler::use_env_color() {
-  const char* env_value = nullptr;
-  env_value = getenv("PYCC_COLOR"); // NOLINT(concurrency-mt-unsafe,misc-include-cleaner)
-  if (env_value == nullptr) {
-    return false;
-  }
+  const char* env_value = std::getenv("PYCC_COLOR");
+  if (env_value == nullptr) { return false; }
   return is_true_value(env_value);
 }
 } // namespace pycc

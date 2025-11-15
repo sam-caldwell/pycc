@@ -84,9 +84,18 @@ if(NOT TARGET tidy)
     set(TIDY_EXTRA_ARGS "")
   endif()
 
-  add_custom_target(tidy
-    COMMAND ${CMAKE_COMMAND} -E echo "[tidy] Running clang-tidy (using .clang-tidy)"
-    COMMAND clang-tidy -p ${CMAKE_BINARY_DIR} --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy ${TIDY_EXTRA_ARGS} ${TIDY_SOURCES}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    VERBATIM)
+  # Create per-file tidy targets so the build system can parallelize them
+  set(TIDY_TASKS)
+  set(_idx 0)
+  foreach(SRC ${TIDY_SOURCES})
+    set(_task tidy_${_idx})
+    add_custom_target(${_task}
+      COMMAND ${CMAKE_COMMAND} -E echo "[tidy] ${SRC}"
+      COMMAND clang-tidy -quiet -p ${CMAKE_BINARY_DIR} --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy ${TIDY_EXTRA_ARGS} ${SRC}
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      VERBATIM)
+    list(APPEND TIDY_TASKS ${_task})
+    math(EXPR _idx "${_idx}+1")
+  endforeach()
+  add_custom_target(tidy DEPENDS ${TIDY_TASKS})
 endif()

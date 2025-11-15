@@ -45,7 +45,6 @@ Checks: >
   -misc-unused-alias-decls,
   -misc-unused-parameters,
   -misc-unused-using-decls,
-  -misc-use-internal-linkage,
   -modernize-*,
   -performance-*,
   -portability-*,

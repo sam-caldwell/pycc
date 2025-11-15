@@ -37,34 +37,13 @@ std::unique_ptr<ast::Module> Parser::parseModule() {
   return mod;
 }
 
-// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
   expect(TK::Def, "'def'");
   auto nameTok = get();
   if (nameTok.kind != TK::Ident) { throw std::runtime_error("Parse error: expected function name"); }
   expect(TK::LParen, "'('");
   std::vector<ast::Param> params;
-  if (peek().kind != TK::RParen) {
-    // parse param list
-    for (;;) {
-      const auto& pNameTok = get();
-      if (pNameTok.kind != TK::Ident) {
-        throw std::runtime_error("Parse error: expected parameter name");
-      }
-      ast::Param param; param.name = pNameTok.text; param.type = ast::TypeKind::NoneType;
-      if (peek().kind == TK::Colon) {
-        get();
-        const auto& pTypeTok = get();
-        if (pTypeTok.kind != TK::TypeIdent) {
-          throw std::runtime_error("Parse error: expected type ident after ':'");
-        }
-        param.type = toTypeKind(pTypeTok.text);
-      }
-      params.push_back(std::move(param));
-      if (peek().kind == TK::Comma) { get(); continue; }
-      break;
-    }
-  }
+  parseParamList(params);
   expect(TK::RParen, "')'");
   expect(TK::Arrow, "'->'");
   auto typeTok = get();
@@ -90,7 +69,6 @@ std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
   return func;
 }
 
-// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 std::unique_ptr<ast::Stmt> Parser::parseStatement() {
   if (peek().kind == TK::Return) {
     get();
@@ -98,31 +76,7 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
     // NEWLINE may follow (but parseFunction loop also handles)
     return std::make_unique<ast::ReturnStmt>(std::move(expr));
   }
-  if (peek().kind == TK::If) {
-    get();
-    auto cond = parseExpr();
-    expect(TK::Colon, "':'");
-    expect(TK::Newline, "newline");
-    expect(TK::Indent, "indent");
-    auto ifs = std::make_unique<ast::IfStmt>(std::move(cond));
-    while (peek().kind != TK::Dedent && peek().kind != TK::End) {
-      if (peek().kind == TK::Newline) { get(); continue; }
-      ifs->thenBody.emplace_back(parseStatement());
-    }
-    expect(TK::Dedent, "dedent");
-    if (peek().kind == TK::Else) {
-      get();
-      expect(TK::Colon, "':'");
-      expect(TK::Newline, "newline");
-      expect(TK::Indent, "indent");
-      while (peek().kind != TK::Dedent && peek().kind != TK::End) {
-        if (peek().kind == TK::Newline) { get(); continue; }
-        ifs->elseBody.emplace_back(parseStatement());
-      }
-      expect(TK::Dedent, "dedent");
-    }
-    return ifs;
-  }
+  if (peek().kind == TK::If) { return parseIfStmt(); }
   if (peek().kind == TK::Ident && peekNext().kind == TK::Equal) {
     std::string name = get().text; // ident
     expect(TK::Equal, "'='");
@@ -132,6 +86,53 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
   // Fallback: expression statement
   auto expr = parseExpr();
   return std::make_unique<ast::ExprStmt>(std::move(expr));
+}
+
+void Parser::parseParamList(std::vector<ast::Param>& outParams) {
+  if (peek().kind == TK::RParen) { return; }
+  for (;;) {
+    const auto& pNameTok = get();
+    if (pNameTok.kind != TK::Ident) { throw std::runtime_error("Parse error: expected parameter name"); }
+    ast::Param param; param.name = pNameTok.text; param.type = ast::TypeKind::NoneType;
+    parseOptionalParamType(param);
+    outParams.push_back(std::move(param));
+    if (peek().kind == TK::Comma) { get(); continue; }
+    break;
+  }
+}
+
+void Parser::parseOptionalParamType(ast::Param& param) {
+  if (peek().kind != TK::Colon) { return; }
+  get();
+  const auto& pTypeTok = get();
+  if (pTypeTok.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected type ident after ':'"); }
+  param.type = toTypeKind(pTypeTok.text);
+}
+
+std::unique_ptr<ast::Stmt> Parser::parseIfStmt() {
+  get();
+  auto cond = parseExpr();
+  expect(TK::Colon, ":'");
+  expect(TK::Newline, "newline");
+  expect(TK::Indent, "indent");
+  auto ifs = std::make_unique<ast::IfStmt>(std::move(cond));
+  parseSuiteInto(ifs->thenBody);
+  if (peek().kind == TK::Else) {
+    get();
+    expect(TK::Colon, ":'");
+    expect(TK::Newline, "newline");
+    expect(TK::Indent, "indent");
+    parseSuiteInto(ifs->elseBody);
+  }
+  return ifs;
+}
+
+void Parser::parseSuiteInto(std::vector<std::unique_ptr<ast::Stmt>>& out) {
+  while (peek().kind != TK::Dedent && peek().kind != TK::End) {
+    if (peek().kind == TK::Newline) { get(); continue; }
+    out.emplace_back(parseStatement());
+  }
+  expect(TK::Dedent, "dedent");
 }
 
 std::unique_ptr<ast::Expr> Parser::parseExpr() { return parseLogicalOr(); }

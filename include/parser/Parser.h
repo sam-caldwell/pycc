@@ -37,6 +37,9 @@ class Parser {
 
   std::unique_ptr<ast::FunctionDef> parseFunction();
   void parseParamList(std::vector<ast::Param>& outParams);
+  void parseOptionalParamType(ast::Param& param);
+  void parseSuiteInto(std::vector<std::unique_ptr<ast::Stmt>>& out);
+  std::unique_ptr<ast::Stmt> parseIfStmt();
   std::unique_ptr<ast::Stmt> parseStatement();
   std::unique_ptr<ast::Expr> parseExpr();
   std::unique_ptr<ast::Expr> parseComparison();
