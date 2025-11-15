@@ -3,6 +3,7 @@ import json, os, subprocess, sys
 
 BUILD = os.environ.get('PYCC_BUILD_DIR', 'build')
 PROFDB = os.path.join(BUILD, 'coverage.profdata')
+MIN_PCT = float(os.environ.get('PYCC_COVERAGE_MIN', '95'))
 
 def run(cmd):
     return subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -63,8 +64,11 @@ def main():
             print(f"{g:<15} {cov:>10} {tot:>10} {pct:>8.1f}%")
         print('-'*48)
         pct_tot = (100.0*total_cov/total_tot) if total_tot else 0.0
-        print(f"{'TOTAL':<15} {total_cov:>10} {total_tot:>10} {pct_tot:>8.1f}%\n")
-        return 0
+        print(f"{'TOTAL':<15} {total_cov:>10} {total_tot:>10} {pct_tot:>8.1f}%")
+        print(f"Threshold: {MIN_PCT:.1f}%")
+        ok = pct_tot >= MIN_PCT
+        print('[coverage] PASS' if ok else '[coverage] FAIL')
+        return 0 if ok else 2
     except Exception as e:
         print('[coverage] error:', e)
         return 1

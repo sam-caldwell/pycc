@@ -58,5 +58,5 @@ coverage:
 		echo "[coverage] No .profraw found; running tests now"; \
 		LLVM_PROFILE_FILE=$(OUTDIR)/coverage-%p.profraw ctest --test-dir $(OUTDIR) --output-on-failure || true; \
 	}'
-	@echo "[coverage] Generating report by phase"
-	@PYCC_BUILD_DIR=$(OUTDIR) python3 tools/coverage.py || echo "[coverage] skipped (requires llvm-cov/llvm-profdata)"
+	@echo "[coverage] Generating report by phase (>=95% required)"
+	@PYCC_BUILD_DIR=$(OUTDIR) PYCC_COVERAGE_MIN=95 python3 tools/coverage.py || { rc=$$?; if [ $$rc -eq 1 ]; then echo "[coverage] skipped (requires llvm-cov/llvm-profdata)"; else exit $$rc; fi; }

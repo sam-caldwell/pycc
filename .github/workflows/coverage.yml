@@ -1,0 +1,25 @@
+name: coverage
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-17 clang-17 lld-17
+          echo "/usr/lib/llvm-17/bin" >> $GITHUB_PATH
+      - name: Configure (coverage)
+        run: cmake -S . -B build -G Ninja -DPYCC_COVERAGE=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Run tests with coverage runtime
+        run: |
+          LLVM_PROFILE_FILE=build/coverage-%p.profraw ctest --test-dir build --output-on-failure
+      - name: Enforce coverage >= 95%
+        run: PYCC_BUILD_DIR=build PYCC_COVERAGE_MIN=95 python3 tools/coverage.py
