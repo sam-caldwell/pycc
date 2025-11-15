@@ -60,22 +60,26 @@ struct ExpressionTyper : public ast::VisitorBase {
   const std::unordered_map<std::string, int>* retParamIdxs{nullptr};
   std::vector<Diagnostic>* diags{nullptr};
   Type out{Type::NoneType};
+  uint32_t outSet{0};
   bool ok{true};
 
   void visit(const ast::IntLiteral& n) override {
     out = Type::Int;
+    outSet = TypeEnv::maskForKind(out);
     auto& mutableInt = const_cast<ast::IntLiteral&>(n); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     mutableInt.setType(out);
     mutableInt.setCanonicalKey(std::string("i:") + std::to_string(static_cast<long long>(n.value)));
   }
   void visit(const ast::BoolLiteral& n) override {
     out = Type::Bool;
+    outSet = TypeEnv::maskForKind(out);
     auto& mutableBool = const_cast<ast::BoolLiteral&>(n); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     mutableBool.setType(out);
     mutableBool.setCanonicalKey(std::string("b:") + (n.value ? "1" : "0"));
   }
   void visit(const ast::FloatLiteral& n) override {
     out = Type::Float;
+    outSet = TypeEnv::maskForKind(out);
     auto& mutableFloat = const_cast<ast::FloatLiteral&>(n); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     mutableFloat.setType(out);
     constexpr int kDoublePrecision = 17;
@@ -87,12 +91,14 @@ struct ExpressionTyper : public ast::VisitorBase {
   }
   void visit(const ast::NoneLiteral& n) override {
     out = Type::NoneType;
+    outSet = TypeEnv::maskForKind(out);
     auto& mutableNone = const_cast<ast::NoneLiteral&>(n); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     mutableNone.setType(out);
     mutableNone.setCanonicalKey("none");
   }
   void visit(const ast::StringLiteral& n) override {
     out = Type::Str;
+    outSet = TypeEnv::maskForKind(out);
     auto& mutableString = const_cast<ast::StringLiteral&>(n); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     mutableString.setType(out);
     mutableString.setCanonicalKey(std::string("s:") + std::to_string(n.value.size()));
@@ -113,9 +119,15 @@ struct ExpressionTyper : public ast::VisitorBase {
     m.setCanonicalKey("obj");
   }
   void visit(const ast::Name& n) override {
+    uint32_t mask = env->getSet(n.id);
+    if (mask != 0U) {
+      outSet = mask;
+      if (TypeEnv::isSingleMask(mask)) { out = TypeEnv::kindFromMask(mask); }
+    }
     auto resolvedType = env->get(n.id);
     if (!resolvedType) { addDiag(*diags, std::string("undefined name: ") + n.id, &n); ok = false; return; }
-    out = *resolvedType; auto& mutableName = const_cast<ast::Name&>(n); // NOLINT(cppcoreguidelines-pro-type-const-cast)
+    if (outSet == 0U) { out = *resolvedType; outSet = TypeEnv::maskForKind(out); } else if (TypeEnv::isSingleMask(outSet)) { out = TypeEnv::kindFromMask(outSet); }
+    auto& mutableName = const_cast<ast::Name&>(n); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     mutableName.setType(out); mutableName.setCanonicalKey(std::string("n:") + n.id);
   }
   // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
@@ -124,17 +136,26 @@ struct ExpressionTyper : public ast::VisitorBase {
     if (operandExpr == nullptr) { addDiag(*diags, "null operand", &unaryNode); ok = false; return; }
     ExpressionTyper sub{*env, *sigs, *retParamIdxs, *diags};
     operandExpr->accept(sub); if (!sub.ok) { ok = false; return; }
+    const uint32_t iMask = TypeEnv::maskForKind(Type::Int);
+    const uint32_t fMask = TypeEnv::maskForKind(Type::Float);
+    const uint32_t bMask = TypeEnv::maskForKind(Type::Bool);
+    auto isSubset = [](uint32_t msk, uint32_t allow) { return msk && ((msk & ~allow) == 0U); };
+    uint32_t m = (sub.outSet != 0U) ? sub.outSet : TypeEnv::maskForKind(sub.out);
     if (unaryNode.op == ast::UnaryOperator::Neg) {
-      if (!typeIsInt(sub.out)) { addDiag(*diags, "unary '-' requires int", &unaryNode); ok = false; return; }
-      out = Type::Int; auto& mutableUnary = const_cast<ast::Unary&>(unaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
+      if (isSubset(m, iMask)) { out = Type::Int; outSet = iMask; }
+      else if (isSubset(m, fMask)) { out = Type::Float; outSet = fMask; }
+      else { addDiag(*diags, "unary '-' requires int or float", &unaryNode); ok = false; return; }
+      auto& mutableUnary = const_cast<ast::Unary&>(unaryNode); // NOLINT
       mutableUnary.setType(out);
       if (unaryNode.operand) { const auto& can = unaryNode.operand->canonical(); if (can) { mutableUnary.setCanonicalKey("u:neg:(" + *can + ")"); } }
-    } else {
-      if (!typeIsBool(sub.out)) { addDiag(*diags, "'not' requires bool", &unaryNode); ok = false; return; }
-      out = Type::Bool; auto& mutableUnary2 = const_cast<ast::Unary&>(unaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
-      mutableUnary2.setType(out);
-      if (unaryNode.operand) { const auto& can2 = unaryNode.operand->canonical(); if (can2) { mutableUnary2.setCanonicalKey("u:not:(" + *can2 + ")"); } }
+      return;
     }
+    // 'not'
+    if (!isSubset(m, bMask)) { addDiag(*diags, "'not' requires bool", &unaryNode); ok = false; return; }
+    out = Type::Bool; outSet = bMask;
+    auto& mutableUnary2 = const_cast<ast::Unary&>(unaryNode); // NOLINT
+    mutableUnary2.setType(out);
+    if (unaryNode.operand) { const auto& can2 = unaryNode.operand->canonical(); if (can2) { mutableUnary2.setCanonicalKey("u:not:(" + *can2 + ")"); } }
   }
   // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
   void visit(const ast::Binary& binaryNode) override {
@@ -146,8 +167,15 @@ struct ExpressionTyper : public ast::VisitorBase {
     if (!rhsTyper.ok) { ok = false; return; }
     // Arithmetic
     if (binaryNode.op == ast::BinaryOperator::Add || binaryNode.op == ast::BinaryOperator::Sub || binaryNode.op == ast::BinaryOperator::Mul || binaryNode.op == ast::BinaryOperator::Div || binaryNode.op == ast::BinaryOperator::Mod) {
-      if (typeIsInt(lhsTyper.out) && typeIsInt(rhsTyper.out)) { out = Type::Int; return; }
-      if (binaryNode.op != ast::BinaryOperator::Mod && typeIsFloat(lhsTyper.out) && typeIsFloat(rhsTyper.out)) { out = Type::Float; return; }
+      const uint32_t iMask = TypeEnv::maskForKind(Type::Int);
+      const uint32_t fMask = TypeEnv::maskForKind(Type::Float);
+      const uint32_t lMask = (lhsTyper.outSet != 0U) ? lhsTyper.outSet : TypeEnv::maskForKind(lhsTyper.out);
+      const uint32_t rMask = (rhsTyper.outSet != 0U) ? rhsTyper.outSet : TypeEnv::maskForKind(rhsTyper.out);
+      if (lMask == iMask && rMask == iMask) { out = Type::Int; outSet = iMask; return; }
+      if (binaryNode.op != ast::BinaryOperator::Mod && lMask == fMask && rMask == fMask) { out = Type::Float; outSet = fMask; return; }
+      const uint32_t numMask = iMask | fMask;
+      auto subMask = [](uint32_t msk, uint32_t allow) { return msk && ((msk & ~allow) == 0U); };
+      if (subMask(lMask, numMask) && subMask(rMask, numMask)) { addDiag(*diags, "ambiguous numeric types; both operands must be int or both float", &binaryNode); ok = false; return; }
       addDiag(*diags, "arithmetic operands must both be int or both be float (mod only for int)", &binaryNode); ok = false; return;
     }
     // Comparisons
@@ -164,8 +192,12 @@ struct ExpressionTyper : public ast::VisitorBase {
         }
         return;
       }
-      const bool bothInt = typeIsInt(lhsTyper.out) && typeIsInt(rhsTyper.out);
-      const bool bothFloat = typeIsFloat(lhsTyper.out) && typeIsFloat(rhsTyper.out);
+      const uint32_t iMask = TypeEnv::maskForKind(Type::Int);
+      const uint32_t fMask = TypeEnv::maskForKind(Type::Float);
+      const uint32_t lMask = (lhsTyper.outSet != 0U) ? lhsTyper.outSet : TypeEnv::maskForKind(lhsTyper.out);
+      const uint32_t rMask = (rhsTyper.outSet != 0U) ? rhsTyper.outSet : TypeEnv::maskForKind(rhsTyper.out);
+      const bool bothInt = (lMask == iMask) && (rMask == iMask);
+      const bool bothFloat = (lMask == fMask) && (rMask == fMask);
       if (!(bothInt || bothFloat)) { addDiag(*diags, "comparison operands must both be int or both be float", &binaryNode); ok = false; return; }
       out = Type::Bool; auto& mutableBinary = const_cast<ast::Binary&>(binaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       mutableBinary.setType(out);
@@ -430,10 +462,22 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
             const auto* var = static_cast<const ast::Name*>(call.args[0].get());
             const auto* tnm = static_cast<const ast::Name*>(call.args[1].get());
             Type nt = typeFromName(tnm->id);
-            if (nt != Type::NoneType) { thenEnv.define(var->id, nt, {var->file, var->line, var->col}); }
+            if (nt != Type::NoneType) { thenEnv.restrictToKind(var->id, nt); thenEnv.define(var->id, nt, {var->file, var->line, var->col}); }
           }
           // x == None => then x: NoneType; x != None => else x: NoneType
+          // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
           void visit(const ast::Binary& b) override {
+            // Logical approximations:
+            // - For A and B: then-branch applies both A and B refinements (safe);
+            //   else-branch left unchanged (unspecified which subexpr fails).
+            // - For A or B: else-branch would be (!A and !B) which requires negative types;
+            //   leave conservative (no refinement) because TypeEnv has no "not None" type.
+            if (b.op == ast::BinaryOperator::And) {
+              if (b.lhs) { b.lhs->accept(*this); }
+              if (b.rhs) { b.rhs->accept(*this); }
+              return;
+            }
+            if (b.op == ast::BinaryOperator::Or) { applyNegExpr(b.lhs.get()); applyNegExpr(b.rhs.get()); return; }
             auto refineEq = [&](const ast::Expr* a, const ast::Expr* b2, bool toThen) {
               if (a && a->kind == ast::NodeKind::Name && b2 && b2->kind == ast::NodeKind::NoneLiteral) {
                 const auto* n = static_cast<const ast::Name*>(a);
@@ -463,6 +507,54 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
               // not isinstance(x,T): no straightforward else refinement available; skip
             }
           }
+          // Apply negation refinement to a subexpression (for else-branch of OR)
+          // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
+          void applyNegExpr(const ast::Expr* e) {
+            if (!e) { return; }
+            if (e->kind == ast::NodeKind::BinaryExpr) {
+              const auto* bb = static_cast<const ast::Binary*>(e);
+              if (bb->op == ast::BinaryOperator::Eq) {
+                auto setNN = [&](const ast::Expr* a, const ast::Expr* b2) {
+                  if (a && a->kind == ast::NodeKind::Name && b2 && b2->kind == ast::NodeKind::NoneLiteral) {
+                    const auto* n = static_cast<const ast::Name*>(a);
+                    elseEnv.markNonNone(n->id);
+                  }
+                };
+                setNN(bb->lhs.get(), bb->rhs.get());
+                setNN(bb->rhs.get(), bb->lhs.get());
+                return;
+              }
+              if (bb->op == ast::BinaryOperator::Ne) {
+                auto setNone = [&](const ast::Expr* a, const ast::Expr* b2) {
+                  if (a && a->kind == ast::NodeKind::Name && b2 && b2->kind == ast::NodeKind::NoneLiteral) {
+                    const auto* n = static_cast<const ast::Name*>(a);
+                    elseEnv.define(n->id, Type::NoneType, {n->file, n->line, n->col});
+                  }
+                };
+                setNone(bb->lhs.get(), bb->rhs.get());
+                setNone(bb->rhs.get(), bb->lhs.get());
+                return;
+              }
+            }
+            if (e->kind == ast::NodeKind::Call) {
+              const auto* c = static_cast<const ast::Call*>(e);
+              if (c->callee && c->callee->kind == ast::NodeKind::Name) {
+                const auto* cal = static_cast<const ast::Name*>(c->callee.get());
+                if (cal->id == "isinstance" && c->args.size() == 2 && c->args[0] && c->args[0]->kind == ast::NodeKind::Name && c->args[1] && c->args[1]->kind == ast::NodeKind::Name) {
+                  const auto* var = static_cast<const ast::Name*>(c->args[0].get());
+                  const auto* tnm = static_cast<const ast::Name*>(c->args[1].get());
+                  Type nt = typeFromName(tnm->id);
+                  if (nt != Type::NoneType) { elseEnv.excludeKind(var->id, nt); }
+                  return;
+                }
+              }
+            }
+            if (e->kind == ast::NodeKind::UnaryExpr) {
+              const auto* uu = static_cast<const ast::Unary*>(e);
+              if (uu->op == ast::UnaryOperator::Not && uu->operand) { applyNegExpr(uu->operand.get()); }
+            }
+          }
+
           // No-ops
           void visit(const ast::Module&) override {}
           void visit(const ast::FunctionDef&) override {}
@@ -515,6 +607,8 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         for (const auto& s : iff.thenBody) { if (!ok) break; s->accept(thenChecker); }
         BranchChecker elseChecker{*this, elseL, fn.returnType, ok};
         for (const auto& s : iff.elseBody) { if (!ok) break; s->accept(elseChecker); }
+        // Merge back to current env: intersect types present in both branches
+        env.intersectFrom(thenL, elseL);
       }
 
       void visit(const ast::ReturnStmt& retStmt) override {
