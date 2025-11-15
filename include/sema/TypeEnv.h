@@ -49,6 +49,11 @@ class TypeEnv {
     if (isSingle(cur)) { types_[name] = kindFor(cur); }
     if (k == ast::TypeKind::NoneType) { markNonNone(name); }
   }
+  void defineSet(const std::string& name, uint32_t mask, Provenance p) {
+    prov_[name] = std::move(p);
+    sets_[name] = mask;
+    if (isSingle(mask)) { types_[name] = kindFor(mask); }
+  }
   std::optional<ast::TypeKind> get(const std::string& name) const {
     auto it = types_.find(name);
     if (it == types_.end()) return std::nullopt; return it->second;

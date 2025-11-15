@@ -125,8 +125,9 @@ struct ExpressionTyper : public ast::VisitorBase {
       if (TypeEnv::isSingleMask(mask)) { out = TypeEnv::kindFromMask(mask); }
     }
     auto resolvedType = env->get(n.id);
-    if (!resolvedType) { addDiag(*diags, std::string("undefined name: ") + n.id, &n); ok = false; return; }
-    if (outSet == 0U) { out = *resolvedType; outSet = TypeEnv::maskForKind(out); } else if (TypeEnv::isSingleMask(outSet)) { out = TypeEnv::kindFromMask(outSet); }
+    if (!resolvedType && outSet == 0U) { addDiag(*diags, std::string("undefined name: ") + n.id, &n); ok = false; return; }
+    if (outSet == 0U && resolvedType) { out = *resolvedType; outSet = TypeEnv::maskForKind(out); }
+    if (TypeEnv::isSingleMask(outSet)) { out = TypeEnv::kindFromMask(outSet); }
     auto& mutableName = const_cast<ast::Name&>(n); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     mutableName.setType(out); mutableName.setCanonicalKey(std::string("n:") + n.id);
   }
@@ -428,15 +429,18 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
       bool infer(const ast::Expr* expr, Type& out) { return inferExprType(expr, env, sigs, retParamIdxs, out, diags); }
 
       void visit(const ast::AssignStmt& assignStmt) override {
-        Type typeOut{}; if (!infer(assignStmt.value.get(), typeOut)) { ok = false; return; }
-        // Allow pointer-typed aggregates like list as variables
+        // Infer value with set awareness
+        ExpressionTyper valTyper{env, sigs, retParamIdxs, diags};
+        if (assignStmt.value) { assignStmt.value->accept(valTyper); } else { ok = false; return; }
+        if (!valTyper.ok) { ok = false; return; }
+        Type typeOut = valTyper.out;
         const bool allowed = typeIsInt(typeOut) || typeIsBool(typeOut) || typeIsFloat(typeOut) || typeIsStr(typeOut) || typeOut == Type::List;
         if (!allowed) {
           addDiag(diags, "only int/bool/float/str/list variables supported", &assignStmt); ok = false; return;
         }
-        auto existing = env.get(assignStmt.target);
-        if (!existing) { env.define(assignStmt.target, typeOut, {assignStmt.file, assignStmt.line, assignStmt.col}); }
-        else if (*existing != typeOut) { addDiag(diags, std::string("type mismatch on assignment: ") + assignStmt.target, &assignStmt); ok = false; }
+        // Define from set if available, else exact kind
+        uint32_t m = (valTyper.outSet != 0U) ? valTyper.outSet : TypeEnv::maskForKind(typeOut);
+        env.defineSet(assignStmt.target, m, {assignStmt.file, assignStmt.line, assignStmt.col});
       }
 
       // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
@@ -498,6 +502,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
             }
           }
           // not(<expr>): swap then/else refinements for eq/ne None
+          // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
           void visit(const ast::Unary& u) override {
             if (u.op != ast::UnaryOperator::Not || !u.operand) { return; }
             if (u.operand->kind == ast::NodeKind::BinaryExpr) {
