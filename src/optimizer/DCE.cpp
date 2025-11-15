@@ -5,7 +5,10 @@
 #include "ast/VisitorBase.h"
 
 namespace pycc::opt {
-using namespace pycc::ast;
+using pycc::ast::Module;
+using pycc::ast::Stmt;
+using pycc::ast::IfStmt;
+using pycc::ast::NodeKind;
 
 namespace {
 struct DceVisitor : public ast::VisitorBase {
@@ -17,33 +20,32 @@ struct DceVisitor : public ast::VisitorBase {
     stmtSlot = &s; s->accept(*this);
   }
 
-  void visit(const IfStmt&) override {
+  void visit(const ast::IfStmt&) override {
     auto* ifs = static_cast<IfStmt*>(stmtSlot->get());
     pruneBlock(ifs->thenBody);
     pruneBlock(ifs->elseBody);
   }
 
   // No-ops for other nodes
-  void visit(const Module&) override {}
-  void visit(const FunctionDef&) override {}
-  void visit(const ReturnStmt&) override {}
-  void visit(const AssignStmt&) override {}
-  void visit(const ExprStmt&) override {}
-  void visit(const IntLiteral&) override {}
-  void visit(const BoolLiteral&) override {}
-  void visit(const FloatLiteral&) override {}
-  void visit(const StringLiteral&) override {}
-  void visit(const NoneLiteral&) override {}
-  void visit(const Name&) override {}
-  void visit(const Call&) override {}
-  void visit(const Binary&) override {}
-  void visit(const Unary&) override {}
-  void visit(const TupleLiteral&) override {}
-  void visit(const ListLiteral&) override {}
-  void visit(const ObjectLiteral&) override {}
+  void visit(const ast::Module&) override {}
+  void visit(const ast::FunctionDef&) override {}
+  void visit(const ast::ReturnStmt&) override {}
+  void visit(const ast::AssignStmt&) override {}
+  void visit(const ast::ExprStmt&) override {}
+  void visit(const ast::IntLiteral&) override {}
+  void visit(const ast::BoolLiteral&) override {}
+  void visit(const ast::FloatLiteral&) override {}
+  void visit(const ast::StringLiteral&) override {}
+  void visit(const ast::NoneLiteral&) override {}
+  void visit(const ast::Name&) override {}
+  void visit(const ast::Call&) override {}
+  void visit(const ast::Binary&) override {}
+  void visit(const ast::Unary&) override {}
+  void visit(const ast::TupleLiteral&) override {}
+  void visit(const ast::ListLiteral&) override {}
+  void visit(const ast::ObjectLiteral&) override {}
 
   // Block pruning driver
-  // NOLINTNEXTLINE(readability-function-size)
   void pruneBlock(std::vector<std::unique_ptr<Stmt>>& body) {
     std::vector<std::unique_ptr<Stmt>> newBody;
     bool seenReturn = false;

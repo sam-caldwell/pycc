@@ -84,6 +84,10 @@ if(NOT TARGET tidy)
     set(TIDY_EXTRA_ARGS "")
   endif()
 
+  # Silence underlying compiler warnings from system headers during clang-tidy
+  # This does not affect clang-tidy checks themselves.
+  list(APPEND TIDY_EXTRA_ARGS "-extra-arg=-w")
+
   # Create per-file tidy targets so the build system can parallelize them
   set(TIDY_TASKS)
   set(_idx 0)
