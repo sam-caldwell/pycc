@@ -55,8 +55,9 @@ static bool applySimpleBoolFlags(std::string_view arg, Options& out) {
 }
 
 static bool applyPrefixedOptions(std::string_view arg, Options& out) {
-  constexpr std::string_view astLogPrefix{"--ast-log="};
-  if (arg.rfind(astLogPrefix, 0) == 0) { out.astLog = parseAstLogValue(arg.substr(astLogPrefix.size())); return true; }
+  if (constexpr std::string_view astLogPrefix{"--ast-log="}; arg.rfind(astLogPrefix, 0) == 0) {
+    out.astLog = parseAstLogValue(arg.substr(astLogPrefix.size())); return true;
+  }
 
   constexpr std::string_view logPathPrefix{"--log-path="};
   if (arg.rfind(logPathPrefix, 0) == 0) { out.logPath = std::string(arg.substr(logPathPrefix.size())); return true; }

@@ -1,8 +1,11 @@
 #include <string>
+#include <string_view>
 #include "cli/Usage.h"
 namespace pycc::cli {
-    std::string Usage() {
-        return R"(pycc [options] file...
+
+namespace {
+// Keep help text as a compile-time constant to avoid reallocation work.
+constexpr std::string_view kUsageText = R"(pycc [options] file...
 
 Options:
   -h, --help           Print this help and exit
@@ -23,5 +26,7 @@ Options:
   --diag-context=<N>   Lines of context to show around errors (default: 1)
   --                    End of options
 )";
-    }
+} // namespace
+
+std::string Usage() { return std::string(kUsageText); }
 } // namespace pycc::cli

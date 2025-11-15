@@ -73,7 +73,7 @@ void Metrics::start(const std::string& name) {
   active_[name] = Clock::now();
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+
 void Metrics::stop(const std::string& name) {
   auto iter = active_.find(name);
   if (iter == active_.end()) { return; }

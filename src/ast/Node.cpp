@@ -2,8 +2,8 @@
  * Name: pycc::ast::Node::accept
  * Purpose: Default dynamic dispatch via central switch for non-override nodes.
  */
-#include "ast/Visitor.h"
 #include "ast/Node.h"
+#include "ast/Visitor.h"
 
 namespace pycc::ast {
 

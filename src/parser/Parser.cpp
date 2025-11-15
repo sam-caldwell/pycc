@@ -203,23 +203,18 @@ std::unique_ptr<ast::Expr> Parser::parseAdditive() {
   return lhs;
 }
 
-// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 std::unique_ptr<ast::Expr> Parser::parseMultiplicative() {
   // Allow postfix on unary (calls) before binding operators
   auto lhs = parsePostfix(parseUnary());
   for (;;) {
-    if (peek().kind == TK::Star || peek().kind == TK::Slash || peek().kind == TK::Percent) {
-      auto opTok = get();
-      auto rhs = parsePostfix(parseUnary());
-      ast::BinaryOperator binOp = ast::BinaryOperator::Mul;
-      if (opTok.kind == TK::Slash) { binOp = ast::BinaryOperator::Div; }
-      else if (opTok.kind == TK::Percent) { binOp = ast::BinaryOperator::Mod; }
-      auto node = std::make_unique<ast::Binary>(binOp, std::move(lhs), std::move(rhs));
-      node->line = opTok.line; node->col = opTok.col; node->file = opTok.file;
-      lhs = std::move(node);
-      continue;
-    }
-    break;
+    const auto k = peek().kind;
+    if (!(k == TK::Star || k == TK::Slash || k == TK::Percent)) { break; }
+    auto opTok = get();
+    auto rhs = parsePostfix(parseUnary());
+    const auto binOp = mulOpFor(opTok.kind);
+    auto node = std::make_unique<ast::Binary>(binOp, std::move(lhs), std::move(rhs));
+    node->line = opTok.line; node->col = opTok.col; node->file = opTok.file;
+    lhs = std::move(node);
   }
   return lhs;
 }
@@ -250,121 +245,110 @@ std::unique_ptr<ast::Expr> Parser::parseUnary() {
   return parsePrimary();
 }
 
-// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 std::unique_ptr<ast::Expr> Parser::parsePrimary() {
   const auto& tok = get();
-  if (tok.kind == TK::Int) {
-    auto node = std::make_unique<ast::IntLiteral>(std::stoll(tok.text));
-    node->line = tok.line; node->col = tok.col; node->file = tok.file;
-    return node;
-  }
-  if (tok.kind == TK::Float) {
-    auto node = std::make_unique<ast::FloatLiteral>(std::stod(tok.text));
-    node->line = tok.line; node->col = tok.col; node->file = tok.file;
-    return node;
-  }
-  if (tok.kind == TK::String) {
-    std::string text = tok.text;
-    if (!text.empty() && (text.front() == '"' || text.front() == '\'')) {
-      // strip surrounding quotes
-      if (text.size() >= 2 && text.back() == text.front()) { text = text.substr(1, text.size() - 2); }
-    }
-    auto node = std::make_unique<ast::StringLiteral>(text);
-    node->line = tok.line; node->col = tok.col; node->file = tok.file;
-    return node;
-  }
-  if (tok.kind == TK::Ident || tok.kind == TK::TypeIdent) {
-    if (tok.kind == TK::TypeIdent && tok.text == "None") {
-      auto node = std::make_unique<ast::NoneLiteral>();
-      node->line = tok.line; node->col = tok.col; node->file = tok.file;
-      return node;
-    }
-    auto node = std::make_unique<ast::Name>(tok.text);
-    node->line = tok.line; node->col = tok.col; node->file = tok.file;
-    return node;
-  }
-  if (tok.kind == TK::BoolLit) {
-    bool boolVal = (tok.text == "True");
-    auto node = std::make_unique<ast::BoolLiteral>(boolVal);
-    node->line = tok.line; node->col = tok.col; node->file = tok.file;
-    return node;
-  }
-  if (tok.kind == TK::LBracket) {
-    auto list = std::make_unique<ast::ListLiteral>();
-    if (peek().kind != TK::RBracket) {
-      for (;;) {
-        auto expr = parseExpr();
-        list->elements.emplace_back(std::move(expr));
-        if (peek().kind == TK::Comma) { get(); continue; }
-        break;
-      }
-    }
-    expect(TK::RBracket, "]'");
-    list->line = tok.line; list->col = tok.col; list->file = tok.file;
-    return list;
-  }
-  if (tok.kind == TK::LParen) {
-    auto first = parseExpr();
-    if (peek().kind == TK::Comma) {
-      auto tup = std::make_unique<ast::TupleLiteral>();
-      tup->elements.emplace_back(std::move(first));
-      while (peek().kind == TK::Comma) {
-        get();
-        if (peek().kind == TK::RParen) { break; }
-        auto expr2 = parseExpr();
-        tup->elements.emplace_back(std::move(expr2));
-      }
-      expect(TK::RParen, "')'");
-      tup->line = tok.line; tup->col = tok.col; tup->file = tok.file;
-      return tup;
-    }
-    expect(TK::RParen, "')'");
-    return first;
-  }
+  if (tok.kind == TK::Int) { auto n = std::make_unique<ast::IntLiteral>(std::stoll(tok.text)); n->line = tok.line; n->col = tok.col; n->file = tok.file; return n; }
+  if (tok.kind == TK::Float) { auto n = std::make_unique<ast::FloatLiteral>(std::stod(tok.text)); n->line = tok.line; n->col = tok.col; n->file = tok.file; return n; }
+  if (tok.kind == TK::String) { auto n = std::make_unique<ast::StringLiteral>(unquoteString(tok.text)); n->line = tok.line; n->col = tok.col; n->file = tok.file; return n; }
+  if (tok.kind == TK::Ident || tok.kind == TK::TypeIdent) { return parseNameOrNone(tok); }
+  if (tok.kind == TK::BoolLit) { bool v = (tok.text == "True"); auto n = std::make_unique<ast::BoolLiteral>(v); n->line = tok.line; n->col = tok.col; n->file = tok.file; return n; }
+  if (tok.kind == TK::LBracket) { return parseListLiteral(tok); }
+  if (tok.kind == TK::LParen) { return parseTupleOrParen(tok); }
   throw std::runtime_error("Parse error: expected primary expression");
 }
 
-// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 std::unique_ptr<ast::Expr> Parser::parsePostfix(std::unique_ptr<ast::Expr> base) {
-  // Handle calls and object(...) sugar
-  for (;;) {
-    if (peek().kind == TK::LParen) {
-      get(); // '('
-      // Parse arguments first so we can decide whether to build a Call or ObjectLiteral
-      std::vector<std::unique_ptr<ast::Expr>> args;
-      if (peek().kind != TK::RParen) {
-        for (;;) {
-          auto arg = parseExpr();
-          args.emplace_back(std::move(arg));
-          if (peek().kind == TK::Comma) { get(); continue; }
-          break;
-        }
-      }
-      expect(TK::RParen, "')'");
-
-      // If callee is name 'object', desugar to ObjectLiteral
-      if (base && base->kind == ast::NodeKind::Name) {
-        const auto* nameExpr = dynamic_cast<const ast::Name*>(base.get());
-        if (nameExpr != nullptr && nameExpr->id == "object") {
-          auto obj = std::make_unique<ast::ObjectLiteral>();
-          obj->fields = std::move(args);
-          obj->line = base->line; obj->col = base->col; obj->file = base->file;
-          base = std::move(obj);
-          continue;
-        }
-      }
-
-      auto call = std::make_unique<ast::Call>(std::move(base));
-      call->args = std::move(args);
-      base = std::move(call);
-      continue;
-    }
-    break;
+  while (peek().kind == TK::LParen) {
+    get();
+    auto args = parseArgList();
+    if (desugarObjectCall(base, args)) { continue; }
+    auto call = std::make_unique<ast::Call>(std::move(base));
+    call->args = std::move(args);
+    base = std::move(call);
   }
   return base;
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+// Helpers
+std::string Parser::unquoteString(std::string text) {
+  if (!text.empty() && (text.front() == '"' || text.front() == '\'')) {
+    if (text.size() >= 2 && text.back() == text.front()) { text = text.substr(1, text.size() - 2); }
+  }
+  return text;
+}
+
+std::unique_ptr<ast::Expr> Parser::parseListLiteral(const lex::Token& openTok) {
+  auto list = std::make_unique<ast::ListLiteral>();
+  if (peek().kind != TK::RBracket) {
+    list->elements.emplace_back(parseExpr());
+    while (peek().kind == TK::Comma) { get(); list->elements.emplace_back(parseExpr()); }
+  }
+  expect(TK::RBracket, "]'");
+  list->line = openTok.line; list->col = openTok.col; list->file = openTok.file;
+  return list;
+}
+
+std::unique_ptr<ast::Expr> Parser::parseTupleOrParen(const lex::Token& openTok) {
+  auto first = parseExpr();
+  if (peek().kind != TK::Comma) { expect(TK::RParen, "')'"); return first; }
+  auto tup = std::make_unique<ast::TupleLiteral>();
+  tup->elements.emplace_back(std::move(first));
+  while (peek().kind == TK::Comma) {
+    get();
+    if (peek().kind == TK::RParen) { break; }
+    tup->elements.emplace_back(parseExpr());
+  }
+  expect(TK::RParen, "')'");
+  tup->line = openTok.line; tup->col = openTok.col; tup->file = openTok.file;
+  return tup;
+}
+
+std::unique_ptr<ast::Expr> Parser::parseNameOrNone(const lex::Token& tok) {
+  if (tok.kind == TK::TypeIdent && tok.text == "None") {
+    auto n = std::make_unique<ast::NoneLiteral>();
+    n->line = tok.line; n->col = tok.col; n->file = tok.file;
+    return n;
+  }
+  auto n = std::make_unique<ast::Name>(tok.text);
+  n->line = tok.line; n->col = tok.col; n->file = tok.file;
+  return n;
+}
+
+std::vector<std::unique_ptr<ast::Expr>> Parser::parseArgList() {
+  std::vector<std::unique_ptr<ast::Expr>> args;
+  if (peek().kind != TK::RParen) {
+    args.emplace_back(parseExpr());
+    while (peek().kind == TK::Comma) { get(); args.emplace_back(parseExpr()); }
+  }
+  expect(TK::RParen, "')'");
+  return args;
+}
+
+bool Parser::desugarObjectCall(std::unique_ptr<ast::Expr>& base,
+                               std::vector<std::unique_ptr<ast::Expr>>& args) {
+  if (base && base->kind == ast::NodeKind::Name) {
+    const auto* nameExpr = dynamic_cast<const ast::Name*>(base.get());
+    if (nameExpr != nullptr && nameExpr->id == "object") {
+      auto obj = std::make_unique<ast::ObjectLiteral>();
+      obj->fields = std::move(args);
+      obj->line = base->line; obj->col = base->col; obj->file = base->file;
+      base = std::move(obj);
+      return true;
+    }
+  }
+  return false;
+}
+
+ast::BinaryOperator Parser::mulOpFor(lex::TokenKind kind) {
+  switch (kind) {
+    case TK::Star: return ast::BinaryOperator::Mul;
+    case TK::Slash: return ast::BinaryOperator::Div;
+    case TK::Percent: return ast::BinaryOperator::Mod;
+    default: return ast::BinaryOperator::Mul;
+  }
+}
+
+
 ast::TypeKind Parser::toTypeKind(const std::string& typeName) {
   if (typeName == "int") { return ast::TypeKind::Int; }
   if (typeName == "bool") { return ast::TypeKind::Bool; }

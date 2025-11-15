@@ -133,7 +133,7 @@ struct ExpressionTyper : public ast::VisitorBase {
   }
   // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
   void visit(const ast::Unary& unaryNode) override {
-    ast::Expr* operandExpr = unaryNode.operand.get();
+    const ast::Expr* operandExpr = unaryNode.operand.get();
     if (operandExpr == nullptr) { addDiag(*diags, "null operand", &unaryNode); ok = false; return; }
     ExpressionTyper sub{*env, *sigs, *retParamIdxs, *diags};
     operandExpr->accept(sub); if (!sub.ok) { ok = false; return; }
@@ -360,7 +360,7 @@ static bool inferExprType(const ast::Expr* expr,
   return true;
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static,readability-function-size,readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
   std::unordered_map<std::string, Sig> sigs;
   for (const auto& fn : mod.functions) {

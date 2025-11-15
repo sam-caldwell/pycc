@@ -9,6 +9,10 @@ namespace pycc::opt {
 
 struct Counter : public ast::VisitorBase {
   Stats s;
+  Stats run(const ast::Module& module) {
+    module.accept(*this);
+    return s;
+  }
   void visit(const ast::Module& module) override {
     ++s.nodesVisited;
     for (const auto& func : module.functions) { func->accept(*this); }
@@ -78,11 +82,7 @@ struct Counter : public ast::VisitorBase {
     for (const auto& v : obj.fields) { v->accept(*this); }
   }
 };
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-Stats Optimizer::analyze(const ast::Module& module) const {
-  Counter counter; // NOLINT(misc-const-correctness)
-  module.accept(counter);
-  return counter.s;
-}
+
+Stats Optimizer::analyze(const ast::Module& module) const { return Counter{}.run(module); }
 
 } // namespace pycc::opt

@@ -191,7 +191,7 @@ class Lexer : public ITokenStream {
   bool refill();                    // append next token to buffer
   bool readNextLine(State& st);     // load next line into state
   bool atEOF() const;               // no more inputs
-  bool emitIndentTokens(State& st, std::vector<Token>& out, int baseCol);
+  bool emitIndentTokens(State& state, std::vector<Token>& out, int baseCol);
   Token scanOne(State& state);      // scan a single token from current state
 
   void buildAll();                  // build tokens_ from all inputs (LIFO)

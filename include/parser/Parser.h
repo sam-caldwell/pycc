@@ -51,6 +51,16 @@ class Parser {
   std::unique_ptr<ast::Expr> parsePrimary();
   std::unique_ptr<ast::Expr> parsePostfix(std::unique_ptr<ast::Expr> base);
   static ast::TypeKind toTypeKind(const std::string& typeName);
+
+  // Refactoring helpers (kept private)
+  static std::string unquoteString(std::string text);
+  std::unique_ptr<ast::Expr> parseListLiteral(const lex::Token& openTok);
+  std::unique_ptr<ast::Expr> parseTupleOrParen(const lex::Token& openTok);
+  static std::unique_ptr<ast::Expr> parseNameOrNone(const lex::Token& tok);
+  std::vector<std::unique_ptr<ast::Expr>> parseArgList();
+  static bool desugarObjectCall(std::unique_ptr<ast::Expr>& base,
+                                std::vector<std::unique_ptr<ast::Expr>>& args);
+  static ast::BinaryOperator mulOpFor(lex::TokenKind kind);
 };
 
 } // namespace pycc::parse

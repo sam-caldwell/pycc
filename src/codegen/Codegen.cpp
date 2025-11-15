@@ -1022,7 +1022,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   return irStream.str();
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+
 bool Codegen::runCmd(const std::string& cmd, std::string& outErr) { // NOLINT(concurrency-mt-unsafe)
   // Simple wrapper around std::system; capture only exit code.
   // For Milestone 1 simplicity, we don't capture stdout/stderr streams.

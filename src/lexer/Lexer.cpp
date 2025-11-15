@@ -17,7 +17,7 @@ FileInput::FileInput(std::string path) : path_(std::move(path)), in_(nullptr) {
   auto ifs = std::make_unique<std::ifstream>(path_);
   in_ = std::move(ifs);
 }
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+
 bool FileInput::getline(std::string& out) {
   if (!in_ || !(*in_)) { return false; }
   if (!std::getline(*in_, out)) { return false; }
@@ -30,14 +30,14 @@ StringInput::StringInput(std::string text, std::string name)
   auto iss = std::make_unique<std::istringstream>(std::move(text));
   in_ = std::move(iss);
 }
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+
 bool StringInput::getline(std::string& out) {
   if (!in_ || !(*in_)) { return false; }
   if (!std::getline(*in_, out)) { return false; }
   return true;
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+
 void Lexer::pushFile(const std::string& path) {
   State state;
   state.src = std::make_unique<FileInput>(path);
@@ -49,7 +49,7 @@ void Lexer::pushFile(const std::string& path) {
   stack_.push_back(std::move(state));
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+
 void Lexer::pushString(const std::string& text, const std::string& name) {
   State state;
   state.src = std::make_unique<StringInput>(text, name);
@@ -61,7 +61,7 @@ void Lexer::pushString(const std::string& text, const std::string& name) {
   stack_.push_back(std::move(state));
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+
 bool Lexer::readNextLine(State& state) {
   state.line.clear();
   if (!state.src->getline(state.line)) { return false; }
@@ -74,7 +74,7 @@ bool Lexer::readNextLine(State& state) {
   return true;
 }
 
-// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity,readability-convert-member-functions-to-static)
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 bool Lexer::emitIndentTokens(State& state, std::vector<Token>& out, const int baseCol) {
   // Compute leading spaces
   size_t idx = 0; size_t spaces = 0;
