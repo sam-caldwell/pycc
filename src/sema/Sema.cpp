@@ -210,8 +210,12 @@ struct ExpressionTyper : public ast::VisitorBase {
     }
     // Logical
     if (binaryNode.op == ast::BinaryOperator::And || binaryNode.op == ast::BinaryOperator::Or) {
-      if (!typeIsBool(lhsTyper.out) || !typeIsBool(rhsTyper.out)) { addDiag(*diags, "logical operands must be bool", &binaryNode); ok = false; return; }
-      out = Type::Bool; auto& mutableBinary2 = const_cast<ast::Binary&>(binaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
+      const uint32_t bMask = TypeEnv::maskForKind(Type::Bool);
+      const uint32_t lMask = (lhsTyper.outSet != 0U) ? lhsTyper.outSet : TypeEnv::maskForKind(lhsTyper.out);
+      const uint32_t rMask = (rhsTyper.outSet != 0U) ? rhsTyper.outSet : TypeEnv::maskForKind(rhsTyper.out);
+      auto isSubset = [](uint32_t msk, uint32_t allow) { return msk && ((msk & ~allow) == 0U); };
+      if (!isSubset(lMask, bMask) || !isSubset(rMask, bMask)) { addDiag(*diags, "logical operands must be bool", &binaryNode); ok = false; return; }
+      out = Type::Bool; outSet = bMask; auto& mutableBinary2 = const_cast<ast::Binary&>(binaryNode); // NOLINT
       mutableBinary2.setType(out);
       if (binaryNode.lhs && binaryNode.rhs) {
         const auto& lcan = binaryNode.lhs->canonical();
@@ -504,7 +508,20 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
                 u.operand->accept(swapped);
               }
             } else if (u.operand->kind == ast::NodeKind::Call) {
-              // not isinstance(x,T): no straightforward else refinement available; skip
+              // not isinstance(x,T): then exclude T; else restrict to T
+              const auto* call = static_cast<const ast::Call*>(u.operand.get());
+              if (call->callee && call->callee->kind == ast::NodeKind::Name && call->args.size() == 2 && call->args[0] && call->args[0]->kind == ast::NodeKind::Name && call->args[1] && call->args[1]->kind == ast::NodeKind::Name) {
+                const auto* callee = static_cast<const ast::Name*>(call->callee.get());
+                if (callee->id == "isinstance") {
+                  const auto* var = static_cast<const ast::Name*>(call->args[0].get());
+                  const auto* tnm = static_cast<const ast::Name*>(call->args[1].get());
+                  Type nt = typeFromName(tnm->id);
+                  if (nt != Type::NoneType) {
+                    thenEnv.excludeKind(var->id, nt);
+                    elseEnv.restrictToKind(var->id, nt);
+                  }
+                }
+              }
             }
           }
           // Apply negation refinement to a subexpression (for else-branch of OR)
