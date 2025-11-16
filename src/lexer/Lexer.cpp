@@ -150,9 +150,20 @@ Token Lexer::scanOne(State& state) {
   if (chr == ')') { ++idx; return makeTok(TokenKind::RParen, idx-1, idx); }
   if (chr == '[') { ++idx; return makeTok(TokenKind::LBracket, idx-1, idx); }
   if (chr == ']') { ++idx; return makeTok(TokenKind::RBracket, idx-1, idx); }
-  if (chr == ':') { ++idx; return makeTok(TokenKind::Colon, idx-1, idx); }
+  if (chr == '{') { ++idx; return makeTok(TokenKind::LBrace, idx-1, idx); }
+  if (chr == '}') { ++idx; return makeTok(TokenKind::RBrace, idx-1, idx); }
+  if (chr == ':') {
+    if (idx + 1 < line.size() && line[idx+1] == '=') {
+      idx += 2; return makeTok(TokenKind::ColonEqual, idx-2, idx);
+    }
+    ++idx; return makeTok(TokenKind::Colon, idx-1, idx);
+  }
   if (chr == ',') { ++idx; return makeTok(TokenKind::Comma, idx-1, idx); }
-  if (chr == '+') { ++idx; return makeTok(TokenKind::Plus, idx-1, idx); }
+  if (chr == '@') { ++idx; return makeTok(TokenKind::At, idx-1, idx); }
+  if (chr == '+') {
+    if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::PlusEqual, idx-2, idx); }
+    ++idx; return makeTok(TokenKind::Plus, idx-1, idx);
+  }
   if (chr == '"' || chr == '\'') {
     const char quote = chr;
     size_t jpos = idx + 1;
@@ -163,18 +174,60 @@ Token Lexer::scanOne(State& state) {
     idx = endPos;
     return tok;
   }
+  // bytes literal prefix b'..' or B".."
+  if ((chr == 'b' || chr == 'B') && idx + 1 < line.size() && (line[idx+1] == '"' || line[idx+1] == '\'')) {
+    const char quote = line[idx+1];
+    size_t jpos = idx + 2;
+    while (jpos < line.size() && line[jpos] != quote) { ++jpos; }
+    const size_t endPos = (jpos < line.size() && line[jpos] == quote) ? (jpos + 1) : jpos;
+    const Token tok = makeTok(TokenKind::Bytes, idx, endPos);
+    idx = endPos;
+    return tok;
+  }
   if (chr == '-') {
     if (idx + 1 < line.size() && line[idx+1] == '>') { idx += 2; return makeTok(TokenKind::Arrow, idx-2, idx); }
+    if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::MinusEqual, idx-2, idx); }
     ++idx; return makeTok(TokenKind::Minus, idx-1, idx);
   }
-  if (chr == '*') { ++idx; return makeTok(TokenKind::Star, idx-1, idx); }
-  if (chr == '/') { ++idx; return makeTok(TokenKind::Slash, idx-1, idx); }
-  if (chr == '%') { ++idx; return makeTok(TokenKind::Percent, idx-1, idx); }
+  if (chr == '*') {
+    if (idx + 1 < line.size() && line[idx+1] == '*') {
+      if (idx + 2 < line.size() && line[idx+2] == '=') { idx += 3; return makeTok(TokenKind::StarStarEqual, idx-3, idx); }
+      idx += 2; return makeTok(TokenKind::StarStar, idx-2, idx);
+    }
+    if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::StarEqual, idx-2, idx); }
+    ++idx; return makeTok(TokenKind::Star, idx-1, idx);
+  }
+  if (chr == '/') {
+    if (idx + 1 < line.size() && line[idx+1] == '/') {
+      if (idx + 2 < line.size() && line[idx+2] == '=') { idx += 3; return makeTok(TokenKind::SlashSlashEqual, idx-3, idx); }
+      idx += 2; return makeTok(TokenKind::SlashSlash, idx-2, idx);
+    }
+    if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::SlashEqual, idx-2, idx); }
+    ++idx; return makeTok(TokenKind::Slash, idx-1, idx);
+  }
+  if (chr == '%') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::PercentEqual, idx-2, idx); } ++idx; return makeTok(TokenKind::Percent, idx-1, idx); }
   if (chr == '=') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::EqEq, idx-2, idx); } ++idx; return makeTok(TokenKind::Equal, idx-1, idx); }
   if (chr == '!') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::NotEq, idx-2, idx); } }
-  if (chr == '<') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::Le, idx-2, idx); } ++idx; return makeTok(TokenKind::Lt, idx-1, idx); }
-  if (chr == '>') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::Ge, idx-2, idx); } ++idx; return makeTok(TokenKind::Gt, idx-1, idx); }
-  if (chr == '|') { ++idx; return makeTok(TokenKind::Pipe, idx-1, idx); }
+  if (chr == '<') {
+    if (idx + 1 < line.size() && line[idx+1] == '<') {
+      if (idx + 2 < line.size() && line[idx+2] == '=') { idx += 3; return makeTok(TokenKind::LShiftEqual, idx-3, idx); }
+      idx += 2; return makeTok(TokenKind::LShift, idx-2, idx);
+    }
+    if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::Le, idx-2, idx); }
+    ++idx; return makeTok(TokenKind::Lt, idx-1, idx);
+  }
+  if (chr == '>') {
+    if (idx + 1 < line.size() && line[idx+1] == '>') {
+      if (idx + 2 < line.size() && line[idx+2] == '=') { idx += 3; return makeTok(TokenKind::RShiftEqual, idx-3, idx); }
+      idx += 2; return makeTok(TokenKind::RShift, idx-2, idx);
+    }
+    if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::Ge, idx-2, idx); }
+    ++idx; return makeTok(TokenKind::Gt, idx-1, idx);
+  }
+  if (chr == '|') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::PipeEqual, idx-2, idx); } ++idx; return makeTok(TokenKind::Pipe, idx-1, idx); }
+  if (chr == '&') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::AmpEqual, idx-2, idx); } ++idx; return makeTok(TokenKind::Amp, idx-1, idx); }
+  if (chr == '^') { if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::CaretEqual, idx-2, idx); } ++idx; return makeTok(TokenKind::Caret, idx-1, idx); }
+  if (chr == '~') { ++idx; return makeTok(TokenKind::Tilde, idx-1, idx); }
 
   auto scanExponent = [&](size_t pos) -> size_t {
     size_t idx = pos;
@@ -217,13 +270,17 @@ Token Lexer::scanOne(State& state) {
     idx = jpos;
     return tok;
   }
-  if (chr == '.' && idx + 1 < line.size() && std::isdigit(static_cast<unsigned char>(line[idx+1])) != 0) {
-    size_t mpos = idx + 1;
-    while (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) { ++mpos; }
-    const size_t epos = scanExponent(mpos);
-    const Token tok = makeTok(TokenKind::Float, idx, epos);
-    idx = epos;
-    return tok;
+  if (chr == '.') {
+    if (idx + 2 < line.size() && line[idx+1] == '.' && line[idx+2] == '.') { idx += 3; return makeTok(TokenKind::Ellipsis, idx-3, idx); }
+    if (idx + 1 < line.size() && std::isdigit(static_cast<unsigned char>(line[idx+1])) != 0) {
+      size_t mpos = idx + 1;
+      while (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) { ++mpos; }
+      const size_t epos = scanExponent(mpos);
+      const Token tok = makeTok(TokenKind::Float, idx, epos);
+      idx = epos;
+      return tok;
+    }
+    ++idx; return makeTok(TokenKind::Dot, idx-1, idx);
   }
 
   if (isIdentStart(chr)) {
@@ -233,12 +290,37 @@ Token Lexer::scanOne(State& state) {
     TokenKind kind = TokenKind::Ident;
     if (ident == "def") { kind = TokenKind::Def; }
     else if (ident == "return") { kind = TokenKind::Return; }
+    else if (ident == "del") { kind = TokenKind::Del; }
     else if (ident == "if") { kind = TokenKind::If; }
     else if (ident == "else") { kind = TokenKind::Else; }
     else if (ident == "elif") { kind = TokenKind::Elif; }
+    else if (ident == "while") { kind = TokenKind::While; }
+    else if (ident == "for") { kind = TokenKind::For; }
+    else if (ident == "in") { kind = TokenKind::In; }
+    else if (ident == "break") { kind = TokenKind::Break; }
+    else if (ident == "continue") { kind = TokenKind::Continue; }
+    else if (ident == "pass") { kind = TokenKind::Pass; }
+    else if (ident == "try") { kind = TokenKind::Try; }
+    else if (ident == "except") { kind = TokenKind::Except; }
+    else if (ident == "finally") { kind = TokenKind::Finally; }
+    else if (ident == "with") { kind = TokenKind::With; }
+    else if (ident == "as") { kind = TokenKind::As; }
+    else if (ident == "match") { kind = TokenKind::Match; }
+    else if (ident == "case") { kind = TokenKind::Case; }
+    else if (ident == "import") { kind = TokenKind::Import; }
+    else if (ident == "from") { kind = TokenKind::From; }
+    else if (ident == "class") { kind = TokenKind::Class; }
+    else if (ident == "assert") { kind = TokenKind::Assert; }
+    else if (ident == "raise") { kind = TokenKind::Raise; }
+    else if (ident == "global") { kind = TokenKind::Global; }
+    else if (ident == "nonlocal") { kind = TokenKind::Nonlocal; }
+    else if (ident == "yield") { kind = TokenKind::Yield; }
+    else if (ident == "await") { kind = TokenKind::Await; }
     else if (ident == "and") { kind = TokenKind::And; }
     else if (ident == "or") { kind = TokenKind::Or; }
     else if (ident == "not") { kind = TokenKind::Not; }
+    else if (ident == "lambda") { kind = TokenKind::Lambda; }
+    else if (ident == "is") { kind = TokenKind::Is; }
     else if (ident == "True" || ident == "False") { kind = TokenKind::BoolLit; }
     else if (ident == "int" || ident == "bool" || ident == "float" || ident == "str" || ident == "None" || ident == "tuple" || ident == "list" || ident == "dict") { kind = TokenKind::TypeIdent; }
     const Token tok = makeTok(kind, idx, jpos);

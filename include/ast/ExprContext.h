@@ -2,10 +2,11 @@
 
 namespace pycc::ast {
 
-enum class UnaryOperator {
-    Neg,
-    Not,
-    BitNot
+enum class ExprContext {
+  Load,
+  Store,
+  Del
 };
 
 } // namespace pycc::ast
+

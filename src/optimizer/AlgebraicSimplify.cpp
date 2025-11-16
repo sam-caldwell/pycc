@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -51,8 +52,11 @@ struct SimplifyVisitor : public ast::VisitorBase {
 
   void rewrite(std::unique_ptr<Expr>& expr) {
     if (!expr) { return; }
+    // debug
+    std::cerr << "rewrite enter expr ptr=" << (void*)expr.get() << " kind=" << (int)expr->kind << "\n";
     slot = &expr;
     expr->accept(*this);
+    std::cerr << "rewrite exit  expr ptr=" << (void*)(slot->get()) << " kind=" << (slot && slot->get() ? (int)slot->get()->kind : -1) << "\n";
   }
 
   void touch(std::unique_ptr<Stmt>& stmt) {
@@ -77,6 +81,8 @@ struct SimplifyVisitor : public ast::VisitorBase {
     const Expr* left = bin->lhs.get();
     const Expr* right = bin->rhs.get();
     if (left && right) {
+      // Debug: trace ops in this test path
+      // std::cerr << "visit Binary op=" << static_cast<int>(bin->op) << "\n";
       // Int rules
       if (left->kind == NodeKind::IntLiteral || right->kind == NodeKind::IntLiteral) {
         switch (bin->op) {
@@ -88,7 +94,7 @@ struct SimplifyVisitor : public ast::VisitorBase {
             if (isZero(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           case BinaryOperator::Mul:
-            if (isZero(left) || isZero(right)) { replacement = std::make_unique<IntLiteral>(0); }
+            if (isZero(left) || isZero(right)) { replacement = std::make_unique<IntLiteral>(0); /*std::cerr << "replace mul int zero->0\n";*/ }
             else if (isOne(left)) { replacement = std::move(bin->rhs); }
             else if (isOne(right)) { replacement = std::move(bin->lhs); }
             if (replacement) { ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return; }
@@ -166,7 +172,9 @@ struct SimplifyVisitor : public ast::VisitorBase {
   void visit(const ReturnStmt& retStmt) override {
     (void)retStmt;
     auto* retNode = static_cast<ReturnStmt*>(stmtSlot->get());
+    std::cerr << "Return before: ptr=" << (void*)retNode->value.get() << " kind=" << (retNode->value ? (int)retNode->value->kind : -1) << "\n";
     rewrite(retNode->value);
+    std::cerr << "Return after:  ptr=" << (void*)retNode->value.get() << " kind=" << (retNode->value ? (int)retNode->value->kind : -1) << "\n";
   }
   void visit(const IfStmt& ifStmt) override {
     (void)ifStmt;
@@ -198,7 +206,20 @@ size_t AlgebraicSimplify::run(Module& module) {
   size_t changes = 0;
   stats_.clear();
   SimplifyVisitor vis(stats_, changes);
-  for (auto& func : module.functions) { vis.walkBlock(func->body); }
+  for (auto& func : module.functions) {
+    // debug pre-scan
+    std::cerr << "AlgebraicSimplify: function '" << func->name << "' has " << func->body.size() << " stmts\n";
+    for (size_t i = 0; i < func->body.size(); ++i) {
+      const auto* s = func->body[i].get();
+      std::cerr << "  stmt[" << i << "] kind=" << (int)s->kind << "\n";
+    }
+    vis.walkBlock(func->body);
+    // debug post-scan
+    for (size_t i = 0; i < func->body.size(); ++i) {
+      const auto* s = func->body[i].get();
+      std::cerr << "  after stmt[" << i << "] kind=" << (int)s->kind << "\n";
+    }
+  }
   return changes;
 }
 

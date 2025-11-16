@@ -9,7 +9,8 @@
 namespace pycc::ast {
 
     struct AssignStmt final : Stmt, Acceptable<AssignStmt, NodeKind::AssignStmt> {
-        std::string target;
+        std::string target; // legacy simple target (name-only) for compatibility
+        std::vector<std::unique_ptr<Expr>> targets; // new: general targets (may be multiple)
         std::unique_ptr<Expr> value;
         AssignStmt(std::string t, std::unique_ptr<Expr> v)
             : Stmt(NodeKind::AssignStmt), target(std::move(t)), value(std::move(v)) {}

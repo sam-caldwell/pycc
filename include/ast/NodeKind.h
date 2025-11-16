@@ -19,7 +19,51 @@ namespace pycc::ast {
         TupleLiteral,
         ListLiteral,
         ObjectLiteral,
-        NoneLiteral
+        NoneLiteral,
+        // Appended node kinds (do not reorder existing entries)
+        Attribute,
+        Subscript,
+        BytesLiteral,
+        EllipsisLiteral,
+        DelStmt,
+        WhileStmt,
+        ForStmt,
+        BreakStmt,
+        ContinueStmt,
+        PassStmt,
+        TryStmt,
+        ExceptHandler,
+        WithItem,
+        WithStmt,
+        Import,
+        ImportFrom,
+        Alias,
+        ClassDef,
+        DefStmt,
+        NamedExpr
+        ,MatchStmt
+        ,MatchCase
+        ,PatternWildcard
+        ,PatternName
+        ,PatternLiteral
+        ,PatternOr
+        ,PatternAs
+        ,PatternClass
+        ,IfExpr
+        ,LambdaExpr
+        ,DictLiteral
+        ,SetLiteral
+        ,AugAssignStmt
+        ,RaiseStmt
+        ,GlobalStmt
+        ,NonlocalStmt
+        ,AssertStmt
+        ,YieldExpr
+        ,AwaitExpr
+        ,ListComp
+        ,SetComp
+        ,DictComp
+        ,GeneratorExpr
     };
 
     inline const char *to_string(const NodeKind element) {

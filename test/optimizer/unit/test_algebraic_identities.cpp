@@ -47,10 +47,10 @@ TEST(AlgebraicSimplify, MulZeroBecomesZero) {
   const auto rewrites = alg.run(*mod);
   EXPECT_GE(rewrites, 1u);
   const auto& fn = *mod->functions[0];
-  const auto* ret = static_cast<const ast::ReturnStmt*>(fn.body[2].get());
+  ASSERT_GE(fn.body.size(), 2u);
+  const auto* ret = static_cast<const ast::ReturnStmt*>(fn.body.back().get());
   ASSERT_TRUE(ret->value);
   EXPECT_EQ(ret->value->kind, ast::NodeKind::IntLiteral);
   const auto* lit0 = static_cast<const ast::IntLiteral*>(ret->value.get());
   EXPECT_EQ(lit0->value, 0);
 }
-
