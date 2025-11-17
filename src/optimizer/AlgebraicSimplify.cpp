@@ -52,11 +52,10 @@ struct SimplifyVisitor : public ast::VisitorBase {
 
   void rewrite(std::unique_ptr<Expr>& expr) {
     if (!expr) { return; }
-    // debug
-    std::cerr << "rewrite enter expr ptr=" << (void*)expr.get() << " kind=" << (int)expr->kind << "\n";
+    // debug (removed)
     slot = &expr;
     expr->accept(*this);
-    std::cerr << "rewrite exit  expr ptr=" << (void*)(slot->get()) << " kind=" << (slot && slot->get() ? (int)slot->get()->kind : -1) << "\n";
+    // debug (removed)
   }
 
   void touch(std::unique_ptr<Stmt>& stmt) {
@@ -172,9 +171,9 @@ struct SimplifyVisitor : public ast::VisitorBase {
   void visit(const ReturnStmt& retStmt) override {
     (void)retStmt;
     auto* retNode = static_cast<ReturnStmt*>(stmtSlot->get());
-    std::cerr << "Return before: ptr=" << (void*)retNode->value.get() << " kind=" << (retNode->value ? (int)retNode->value->kind : -1) << "\n";
+    // debug (removed)
     rewrite(retNode->value);
-    std::cerr << "Return after:  ptr=" << (void*)retNode->value.get() << " kind=" << (retNode->value ? (int)retNode->value->kind : -1) << "\n";
+    // debug (removed)
   }
   void visit(const IfStmt& ifStmt) override {
     (void)ifStmt;
@@ -206,20 +205,7 @@ size_t AlgebraicSimplify::run(Module& module) {
   size_t changes = 0;
   stats_.clear();
   SimplifyVisitor vis(stats_, changes);
-  for (auto& func : module.functions) {
-    // debug pre-scan
-    std::cerr << "AlgebraicSimplify: function '" << func->name << "' has " << func->body.size() << " stmts\n";
-    for (size_t i = 0; i < func->body.size(); ++i) {
-      const auto* s = func->body[i].get();
-      std::cerr << "  stmt[" << i << "] kind=" << (int)s->kind << "\n";
-    }
-    vis.walkBlock(func->body);
-    // debug post-scan
-    for (size_t i = 0; i < func->body.size(); ++i) {
-      const auto* s = func->body[i].get();
-      std::cerr << "  after stmt[" << i << "] kind=" << (int)s->kind << "\n";
-    }
-  }
+  for (auto& func : module.functions) { vis.walkBlock(func->body); }
   return changes;
 }
 

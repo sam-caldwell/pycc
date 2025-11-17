@@ -52,6 +52,7 @@ enum class TokenKind {
   From,       // from
   Class,      // class
   At,         // @
+  Async,      // async
   Assert,     // assert
   Raise,      // raise
   Global,     // global
@@ -111,6 +112,7 @@ enum class TokenKind {
   Ident,      // identifier
   Int,        // integer literal
   Float,      // float literal
+  Imag,       // imaginary numeric (e.g., 1j)
   String,     // string literal
   BoolLit,    // True/False
 
@@ -148,6 +150,7 @@ inline const char* to_string(TokenKind k) {
     case TokenKind::From: return "From";
     case TokenKind::Class: return "Class";
     case TokenKind::At: return "At";
+    case TokenKind::Async: return "Async";
     case TokenKind::Assert: return "Assert";
     case TokenKind::Raise: return "Raise";
     case TokenKind::Global: return "Global";
@@ -205,6 +208,7 @@ inline const char* to_string(TokenKind k) {
     case TokenKind::Ident: return "Ident";
     case TokenKind::Int: return "Int";
     case TokenKind::Float: return "Float";
+    case TokenKind::Imag: return "Imag";
     case TokenKind::String: return "String";
     case TokenKind::BoolLit: return "BoolLit";
     case TokenKind::TypeIdent: return "TypeIdent";

@@ -45,5 +45,15 @@ struct PatternClass final : Pattern, Acceptable<PatternClass, NodeKind::PatternC
       : Pattern(NodeKind::PatternClass), className(std::move(cn)) {}
 };
 
-} // namespace pycc::ast
+struct PatternSequence final : Pattern, Acceptable<PatternSequence, NodeKind::PatternSequence> {
+  bool isList{true}; // true: [], false: ()
+  std::vector<std::unique_ptr<Pattern>> elements;
+  PatternSequence() : Pattern(NodeKind::PatternSequence) {}
+};
 
+struct PatternMapping final : Pattern, Acceptable<PatternMapping, NodeKind::PatternMapping> {
+  std::vector<std::pair<std::unique_ptr<Expr>, std::unique_ptr<Pattern>>> items;
+  PatternMapping() : Pattern(NodeKind::PatternMapping) {}
+};
+
+} // namespace pycc::ast

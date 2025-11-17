@@ -164,25 +164,36 @@ Token Lexer::scanOne(State& state) {
     if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::PlusEqual, idx-2, idx); }
     ++idx; return makeTok(TokenKind::Plus, idx-1, idx);
   }
-  if (chr == '"' || chr == '\'') {
-    const char quote = chr;
-    size_t jpos = idx + 1;
-    while (jpos < line.size() && line[jpos] != quote) { ++jpos; }
-    // consume closing quote if present
-    const size_t endPos = (jpos < line.size() && line[jpos] == quote) ? (jpos + 1) : jpos;
-    const Token tok = makeTok(TokenKind::String, idx, endPos);
+  auto scanStringLike = [&](size_t start, bool bytesPrefix) -> Token {
+    const char first = line[start];
+    size_t p = start;
+    // gather optional second prefix (f/r/b) already accounted outside; if prefix char then move one
+    if ((first=='b'||first=='B'||first=='f'||first=='F'||first=='r'||first=='R') && p+1 < line.size()) { ++p; }
+    char quote = line[p]; bool triple = false;
+    if (p+2 < line.size() && line[p]==line[p+1] && line[p]==line[p+2] && (line[p]=='"'||line[p]=='\'')) { triple = true; }
+    // advance idx conservatively to end of current line token extent
+    size_t endPos;
+    if (!triple) {
+      size_t j = p+1; while (j < line.size() && line[j] != quote) ++j; endPos = (j < line.size() ? j+1 : j);
+    } else {
+      // consume triple opener and pretend it ends immediately (placeholder)
+      endPos = p + 3; // keep parser progressing; actual content spans multiple lines
+    }
+    Token tok = makeTok(bytesPrefix ? TokenKind::Bytes : TokenKind::String, start, endPos);
+    // Store placeholder lexeme: prefix + quotes + ... + quotes
+    std::string pref = line.substr(start, p - start);
+    std::string q = triple ? std::string(3, line[p]) : std::string(1, line[p]);
+    tok.text = pref + q + (triple?"...":"") + q;
     idx = endPos;
     return tok;
-  }
-  // bytes literal prefix b'..' or B".."
-  if ((chr == 'b' || chr == 'B') && idx + 1 < line.size() && (line[idx+1] == '"' || line[idx+1] == '\'')) {
-    const char quote = line[idx+1];
-    size_t jpos = idx + 2;
-    while (jpos < line.size() && line[jpos] != quote) { ++jpos; }
-    const size_t endPos = (jpos < line.size() && line[jpos] == quote) ? (jpos + 1) : jpos;
-    const Token tok = makeTok(TokenKind::Bytes, idx, endPos);
-    idx = endPos;
-    return tok;
+  };
+  if (chr == '"' || chr == '\'') { return scanStringLike(idx, /*bytesPrefix=*/false); }
+  // prefixes: b/B, f/F, r/R and combos like fr/rf -> treat as String, Bytes if b present
+  if ((chr=='b'||chr=='B'||chr=='f'||chr=='F'||chr=='r'||chr=='R') && idx+1 < line.size()) {
+    size_t p = idx; bool hasB=false; int cnt=0;
+    while (cnt<2 && p<line.size() && (line[p]=='b'||line[p]=='B'||line[p]=='f'||line[p]=='F'||line[p]=='r'||line[p]=='R')) { hasB = hasB || (line[p]=='b'||line[p]=='B'); ++p; ++cnt; }
+    if (p < line.size() && (line[p]=='\''||line[p]=='"')) { return scanStringLike(idx, hasB); }
+    if (p+2 < line.size() && line[p]==line[p+1] && line[p]==line[p+2] && (line[p]=='\''||line[p]=='"')) { return scanStringLike(idx, hasB); }
   }
   if (chr == '-') {
     if (idx + 1 < line.size() && line[idx+1] == '>') { idx += 2; return makeTok(TokenKind::Arrow, idx-2, idx); }
@@ -251,24 +262,24 @@ Token Lexer::scanOne(State& state) {
       if (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) {
         while (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) { ++mpos; }
         const size_t epos = scanExponent(mpos);
-        const Token tok = makeTok(TokenKind::Float, idx, epos);
-        idx = epos;
-        return tok;
+        size_t end = epos;
+        if (end < line.size() && (line[end] == 'j' || line[end] == 'J')) { ++end; const Token tok = makeTok(TokenKind::Imag, idx, end); idx = end; return tok; }
+        const Token tok = makeTok(TokenKind::Float, idx, epos); idx = epos; return tok;
       }
       const size_t epos = scanExponent(kpos + 1);
-      const Token tok = makeTok(TokenKind::Float, idx, epos);
-      idx = epos;
-      return tok;
+      size_t end = epos;
+      if (end < line.size() && (line[end] == 'j' || line[end] == 'J')) { ++end; const Token tok = makeTok(TokenKind::Imag, idx, end); idx = end; return tok; }
+      const Token tok = makeTok(TokenKind::Float, idx, epos); idx = epos; return tok;
     }
     const size_t epos = scanExponent(kpos);
     if (epos != kpos) {
-      const Token tok = makeTok(TokenKind::Float, idx, epos);
-      idx = epos;
-      return tok;
+      size_t end = epos;
+      if (end < line.size() && (line[end] == 'j' || line[end] == 'J')) { ++end; const Token tok = makeTok(TokenKind::Imag, idx, end); idx = end; return tok; }
+      const Token tok = makeTok(TokenKind::Float, idx, epos); idx = epos; return tok;
     }
-    const Token tok = makeTok(TokenKind::Int, idx, jpos);
-    idx = jpos;
-    return tok;
+    size_t end = jpos;
+    if (end < line.size() && (line[end] == 'j' || line[end] == 'J')) { ++end; const Token tok = makeTok(TokenKind::Imag, idx, end); idx = end; return tok; }
+    const Token tok = makeTok(TokenKind::Int, idx, jpos); idx = jpos; return tok;
   }
   if (chr == '.') {
     if (idx + 2 < line.size() && line[idx+1] == '.' && line[idx+2] == '.') { idx += 3; return makeTok(TokenKind::Ellipsis, idx-3, idx); }
@@ -276,9 +287,9 @@ Token Lexer::scanOne(State& state) {
       size_t mpos = idx + 1;
       while (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) { ++mpos; }
       const size_t epos = scanExponent(mpos);
-      const Token tok = makeTok(TokenKind::Float, idx, epos);
-      idx = epos;
-      return tok;
+      size_t end = epos;
+      if (end < line.size() && (line[end] == 'j' || line[end] == 'J')) { ++end; const Token tok = makeTok(TokenKind::Imag, idx, end); idx = end; return tok; }
+      const Token tok = makeTok(TokenKind::Float, idx, epos); idx = epos; return tok;
     }
     ++idx; return makeTok(TokenKind::Dot, idx-1, idx);
   }
@@ -310,6 +321,7 @@ Token Lexer::scanOne(State& state) {
     else if (ident == "import") { kind = TokenKind::Import; }
     else if (ident == "from") { kind = TokenKind::From; }
     else if (ident == "class") { kind = TokenKind::Class; }
+    else if (ident == "async") { kind = TokenKind::Async; }
     else if (ident == "assert") { kind = TokenKind::Assert; }
     else if (ident == "raise") { kind = TokenKind::Raise; }
     else if (ident == "global") { kind = TokenKind::Global; }
@@ -322,7 +334,7 @@ Token Lexer::scanOne(State& state) {
     else if (ident == "lambda") { kind = TokenKind::Lambda; }
     else if (ident == "is") { kind = TokenKind::Is; }
     else if (ident == "True" || ident == "False") { kind = TokenKind::BoolLit; }
-    else if (ident == "int" || ident == "bool" || ident == "float" || ident == "str" || ident == "None" || ident == "tuple" || ident == "list" || ident == "dict") { kind = TokenKind::TypeIdent; }
+    else if (ident == "int" || ident == "bool" || ident == "float" || ident == "str" || ident == "None" || ident == "tuple" || ident == "list" || ident == "dict" || ident == "Optional" || ident == "Union") { kind = TokenKind::TypeIdent; }
     const Token tok = makeTok(kind, idx, jpos);
     idx = jpos;
     return tok;

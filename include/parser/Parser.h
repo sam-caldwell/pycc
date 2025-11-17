@@ -65,10 +65,18 @@ class Parser {
 
   // Refactoring helpers (kept private)
   static std::string unquoteString(std::string text);
+  std::unique_ptr<ast::Expr> parseExprFromString(const std::string& text,
+                                                const std::string& name);
   std::unique_ptr<ast::Expr> parseListLiteral(const lex::Token& openTok);
   std::unique_ptr<ast::Expr> parseTupleOrParen(const lex::Token& openTok);
   static std::unique_ptr<ast::Expr> parseNameOrNone(const lex::Token& tok);
-  std::vector<std::unique_ptr<ast::Expr>> parseArgList();
+  struct ArgList {
+    std::vector<std::unique_ptr<ast::Expr>> positional;
+    std::vector<ast::KeywordArg> keywords;
+    std::vector<std::unique_ptr<ast::Expr>> starArgs;
+    std::vector<std::unique_ptr<ast::Expr>> kwStarArgs;
+  };
+  ArgList parseArgList();
   static bool desugarObjectCall(std::unique_ptr<ast::Expr>& base,
                                 std::vector<std::unique_ptr<ast::Expr>>& args);
   static ast::BinaryOperator mulOpFor(lex::TokenKind kind);

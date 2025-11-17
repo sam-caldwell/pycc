@@ -46,6 +46,7 @@ void dispatch(Node& n, V& v) {
         case NodeKind::EllipsisLiteral: v.visit(static_cast<EllipsisLiteral&>(n)); break;
         case NodeKind::DictLiteral: v.visit(static_cast<DictLiteral&>(n)); break;
         case NodeKind::SetLiteral: v.visit(static_cast<SetLiteral&>(n)); break;
+        case NodeKind::ImagLiteral: v.visit(static_cast<Literal<double, NodeKind::ImagLiteral>&>(n)); break;
         case NodeKind::NamedExpr: v.visit(static_cast<NamedExpr&>(n)); break;
         case NodeKind::MatchStmt: v.visit(static_cast<MatchStmt&>(n)); break;
         case NodeKind::MatchCase: v.visit(static_cast<MatchCase&>(n)); break;
@@ -68,6 +69,10 @@ void dispatch(Node& n, V& v) {
         case NodeKind::SetComp: v.visit(static_cast<SetComp&>(n)); break;
         case NodeKind::DictComp: v.visit(static_cast<DictComp&>(n)); break;
         case NodeKind::GeneratorExpr: v.visit(static_cast<GeneratorExpr&>(n)); break;
+        case NodeKind::Compare: v.visit(static_cast<Compare&>(n)); break;
+        case NodeKind::PatternSequence: v.visit(static_cast<PatternSequence&>(n)); break;
+        case NodeKind::PatternMapping: v.visit(static_cast<PatternMapping&>(n)); break;
+        case NodeKind::FStringLiteral: v.visit(static_cast<FStringLiteral&>(n)); break;
         default: break;
     }
 }

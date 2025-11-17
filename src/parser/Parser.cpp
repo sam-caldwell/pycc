@@ -85,6 +85,7 @@ std::unique_ptr<ast::Module> Parser::parseModule() {
     if (peek().kind == TK::Newline) { get(); continue; }
     // Collect decorators if any
     auto decorators = parseDecorators();
+    if (peek().kind == TK::Async && peekNext().kind == TK::Def) { get(); }
     if (peek().kind == TK::Def) {
       auto fn = parseFunction();
       fn->decorators = std::move(decorators);
@@ -112,6 +113,16 @@ std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
   expect(TK::Arrow, "'->'");
   auto typeTok = get();
   if (typeTok.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected return type ident"); }
+  // Optional generic shape: list[int], dict[str, int], tuple[int, str]
+  if (peek().kind == TK::LBracket) {
+    int depth = 0;
+    do {
+      const auto& t = get();
+      if (t.kind == TK::LBracket) { ++depth; }
+      else if (t.kind == TK::RBracket) { --depth; }
+      else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) { break; }
+    } while (depth > 0);
+  }
   // Limited Optional/Union syntax support: allow T | None and ignore the None part for now
   if (peek().kind == TK::Pipe) {
     get(); // consume '|'
@@ -134,6 +145,7 @@ std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
 }
 
 std::unique_ptr<ast::Stmt> Parser::parseStatement() {
+  if (peek().kind == TK::Async && peekNext().kind == TK::Def) { get(); }
   if (peek().kind == TK::Def) {
     // Allow function defs as statements (e.g., in class bodies)
     auto fn = parseFunction();
@@ -166,9 +178,11 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
   if (peek().kind == TK::Global) { return parseGlobalStmt(); }
   if (peek().kind == TK::Nonlocal) { return parseNonlocalStmt(); }
   if (peek().kind == TK::While) { return parseWhileStmt(); }
+  if (peek().kind == TK::Async && peekNext().kind == TK::For) { get(); return parseForStmt(); }
   if (peek().kind == TK::For) { return parseForStmt(); }
   if (peek().kind == TK::Match) { return parseMatchStmt(); }
   if (peek().kind == TK::Try) { return parseTryStmt(); }
+  if (peek().kind == TK::Async && peekNext().kind == TK::With) { get(); return parseWithStmt(); }
   if (peek().kind == TK::With) { return parseWithStmt(); }
   if (peek().kind == TK::Import || peek().kind == TK::From) { return parseImportStmt(); }
   if (peek().kind == TK::Class) { return parseClass(); }
@@ -203,6 +217,29 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
     }
   }
   // Assignment (supports tuple/list/attr/subscript targets, possibly comma-separated)
+  // Annotated assignment: NAME ':' type ['=' expr]
+  if (peek().kind == TK::Ident && peekNext().kind == TK::Colon) {
+    const auto& nameTok = get(); get(); // consume name and ':'
+    // parse a type ident/name with optional generic shape
+    ast::TypeKind tkind = ast::TypeKind::NoneType;
+    const auto& tTok = get();
+    if (tTok.kind == TK::TypeIdent) {
+      tkind = toTypeKind(tTok.text);
+      if (peek().kind == TK::LBracket) {
+        int depth = 0;
+        do {
+          const auto& t = get();
+          if (t.kind == TK::LBracket) { ++depth; }
+          else if (t.kind == TK::RBracket) { --depth; }
+          else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) { break; }
+        } while (depth > 0);
+      }
+    }
+    auto nameExpr = std::make_unique<ast::Name>(nameTok.text);
+    if (tkind != ast::TypeKind::NoneType) nameExpr->setType(tkind);
+    if (peek().kind == TK::Equal) { get(); auto rhs = parseExpr(); auto asg = std::make_unique<ast::AssignStmt>(nameTok.text, std::move(rhs)); asg->targets.emplace_back(std::move(nameExpr)); return asg; }
+    return std::make_unique<ast::ExprStmt>(std::move(nameExpr));
+  }
   if (hasPendingEqualOnLine()) {
     std::vector<std::unique_ptr<ast::Expr>> targets;
     // Parse one or more targets separated by commas
@@ -213,6 +250,13 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
     } while (true);
     expect(TK::Equal, "'='");
     auto rhs = parseExpr();
+    // Allow tuple without parens on RHS: a, b = 1, 2
+    if (peek().kind == TK::Comma) {
+      auto tup = std::make_unique<ast::TupleLiteral>();
+      tup->elements.emplace_back(std::move(rhs));
+      while (peek().kind == TK::Comma) { get(); tup->elements.emplace_back(parseExpr()); }
+      rhs = std::move(tup);
+    }
     // Validate and set ctx on all targets
     for (auto& t : targets) {
       if (!isValidAssignmentTarget(t.get())) { throw std::runtime_error("Parse error: invalid assignment target"); }
@@ -233,14 +277,30 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
 
 void Parser::parseParamList(std::vector<ast::Param>& outParams) {
   if (peek().kind == TK::RParen) { return; }
+  bool kwOnly = false;
   for (;;) {
-    const auto& pNameTok = get();
-    if (pNameTok.kind != TK::Ident) { throw std::runtime_error("Parse error: expected parameter name"); }
-    ast::Param param; param.name = pNameTok.text; param.type = ast::TypeKind::NoneType;
-    parseOptionalParamType(param);
-    outParams.push_back(std::move(param));
-    if (peek().kind == TK::Comma) { get(); continue; }
-    break;
+    if (peek().kind == TK::StarStar) {
+      get();
+      const auto& nm = get(); if (nm.kind != TK::Ident) throw std::runtime_error("Parse error: expected name after '**'");
+      ast::Param param; param.name = nm.text; param.isKwVarArg = true; parseOptionalParamType(param);
+      outParams.push_back(std::move(param));
+    } else if (peek().kind == TK::Star) {
+      get();
+      if (peek().kind == TK::Comma) { kwOnly = true; }
+      else {
+        const auto& nm = get(); if (nm.kind != TK::Ident) throw std::runtime_error("Parse error: expected name after '*'");
+        ast::Param param; param.name = nm.text; param.isVarArg = true; parseOptionalParamType(param);
+        outParams.push_back(std::move(param));
+        kwOnly = true; // params after *args are kw-only
+      }
+    } else {
+      const auto& pNameTok = get(); if (pNameTok.kind != TK::Ident) { throw std::runtime_error("Parse error: expected parameter name"); }
+      ast::Param param; param.name = pNameTok.text; param.type = ast::TypeKind::NoneType; param.isKwOnly = kwOnly;
+      parseOptionalParamType(param);
+      if (peek().kind == TK::Equal) { get(); param.defaultValue = parseExpr(); }
+      outParams.push_back(std::move(param));
+    }
+    if (peek().kind != TK::Comma) break; get(); if (peek().kind == TK::RParen) break;
   }
 }
 
@@ -250,6 +310,17 @@ void Parser::parseOptionalParamType(ast::Param& param) {
   const auto& pTypeTok = get();
   if (pTypeTok.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected type ident after ':'"); }
   param.type = toTypeKind(pTypeTok.text);
+  // Accept generic shape like list[int], dict[str, int], tuple[int, str]
+  if (peek().kind == TK::LBracket) {
+    int depth = 0;
+    // consume '[' ... ']'
+    do {
+      const auto& t = get();
+      if (t.kind == TK::LBracket) { ++depth; }
+      else if (t.kind == TK::RBracket) { --depth; }
+      else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) { break; }
+    } while (depth > 0);
+  }
 }
 
 std::unique_ptr<ast::Stmt> Parser::parseIfStmt() {
@@ -314,11 +385,24 @@ std::unique_ptr<ast::Expr> Parser::parseExpr() {
   // Conditional expression: <expr> if <expr> else <expr>
   auto condBase = parseLogicalOr();
   if (peek().kind == TK::If) {
-    get();
-    auto test = parseExpr();
-    expect(TK::Else, "'else'");
-    auto orelse = parseExpr();
-    return std::make_unique<ast::IfExpr>(std::move(condBase), std::move(test), std::move(orelse));
+    // Lookahead to decide whether this is a true conditional expression or part of a comprehension guard
+    bool hasElse = false; int depth = 0;
+    for (size_t i = 0; i < 256; ++i) {
+      const auto& t = ts_.peek(i);
+      if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break;
+      if (t.kind == TK::LParen || t.kind == TK::LBracket || t.kind == TK::LBrace) { ++depth; continue; }
+      if (t.kind == TK::RParen || t.kind == TK::RBracket || t.kind == TK::RBrace) { if (depth > 0) --depth; continue; }
+      if (depth == 0 && (t.kind == TK::Comma || t.kind == TK::RParen || t.kind == TK::RBracket || t.kind == TK::RBrace || t.kind == TK::Colon)) break;
+      if (t.kind == TK::Else) { hasElse = true; break; }
+      if (t.kind == TK::For && depth == 0) { break; }
+    }
+    if (hasElse) {
+      get();
+      auto test = parseExpr();
+      expect(TK::Else, "'else'");
+      auto orelse = parseExpr();
+      return std::make_unique<ast::IfExpr>(std::move(condBase), std::move(test), std::move(orelse));
+    }
   }
   return condBase;
 }
@@ -348,34 +432,46 @@ std::unique_ptr<ast::Expr> Parser::parseLogicalAnd() {
 }
 
 std::unique_ptr<ast::Expr> Parser::parseComparison() {
-  auto lhs = parseBitwiseOr();
+  auto left = parseBitwiseOr();
   using TK = lex::TokenKind;
-  if (peek().kind == TK::EqEq || peek().kind == TK::NotEq ||
-      peek().kind == TK::Lt || peek().kind == TK::Le ||
-      peek().kind == TK::Gt || peek().kind == TK::Ge ||
-      peek().kind == TK::Is || peek().kind == TK::In ||
-      (peek().kind == TK::Not && peekNext().kind == TK::In)) {
+  // collect chain
+  std::vector<ast::BinaryOperator> ops;
+  std::vector<std::unique_ptr<ast::Expr>> comps;
+  for (;;) {
+    const auto& k = peek().kind;
+    if (!(k == TK::EqEq || k == TK::NotEq || k == TK::Lt || k == TK::Le || k == TK::Gt || k == TK::Ge || k == TK::Is || k == TK::In || (k == TK::Not && peekNext().kind == TK::In))) {
+      break;
+    }
     auto opTok = get();
     ast::BinaryOperator binOp = ast::BinaryOperator::Eq;
-    if (opTok.kind == TK::Not && peek().kind == TK::In) { get(); /* consume 'in' */ }
-    auto rhs = parseBitwiseOr();
-    switch (opTok.kind) {
-      case TK::EqEq: binOp = ast::BinaryOperator::Eq; break;
-      case TK::NotEq: binOp = ast::BinaryOperator::Ne; break;
-      case TK::Lt: binOp = ast::BinaryOperator::Lt; break;
-      case TK::Le: binOp = ast::BinaryOperator::Le; break;
-      case TK::Gt: binOp = ast::BinaryOperator::Gt; break;
-      case TK::Ge: binOp = ast::BinaryOperator::Ge; break;
-      case TK::Is: binOp = (peek().kind == TK::Not ? (get(), ast::BinaryOperator::IsNot) : ast::BinaryOperator::Is); break;
-      case TK::In: binOp = ast::BinaryOperator::In; break;
-      case TK::Not: binOp = ast::BinaryOperator::NotIn; break;
-      default: break;
+    if (opTok.kind == TK::Not && peek().kind == TK::In) { get(); binOp = ast::BinaryOperator::NotIn; }
+    else {
+      switch (opTok.kind) {
+        case TK::EqEq: binOp = ast::BinaryOperator::Eq; break;
+        case TK::NotEq: binOp = ast::BinaryOperator::Ne; break;
+        case TK::Lt: binOp = ast::BinaryOperator::Lt; break;
+        case TK::Le: binOp = ast::BinaryOperator::Le; break;
+        case TK::Gt: binOp = ast::BinaryOperator::Gt; break;
+        case TK::Ge: binOp = ast::BinaryOperator::Ge; break;
+        case TK::Is: binOp = (peek().kind == TK::Not ? (get(), ast::BinaryOperator::IsNot) : ast::BinaryOperator::Is); break;
+        case TK::In: binOp = ast::BinaryOperator::In; break;
+        default: break;
+      }
     }
-    auto node = std::make_unique<ast::Binary>(binOp, std::move(lhs), std::move(rhs));
-    node->line = opTok.line; node->col = opTok.col; node->file = opTok.file;
+    ops.push_back(binOp);
+    comps.emplace_back(parseBitwiseOr());
+  }
+  if (ops.empty()) { return left; }
+  if (ops.size() == 1) {
+    // backward-compat: emit Binary when single comparator
+    auto node = std::make_unique<ast::Binary>(ops[0], std::move(left), std::move(comps[0]));
     return node;
   }
-  return lhs;
+  auto cmp = std::make_unique<ast::Compare>();
+  cmp->left = std::move(left);
+  cmp->ops = std::move(ops);
+  cmp->comparators = std::move(comps);
+  return cmp;
 }
 
 std::unique_ptr<ast::Expr> Parser::parseBitwiseOr() {
@@ -525,7 +621,46 @@ std::unique_ptr<ast::Expr> Parser::parsePrimary() {
   }
   if (tok.kind == TK::Int) { auto node = std::make_unique<ast::IntLiteral>(std::stoll(tok.text)); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node; }
   if (tok.kind == TK::Float) { auto node = std::make_unique<ast::FloatLiteral>(std::stod(tok.text)); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node; }
-  if (tok.kind == TK::String) { auto node = std::make_unique<ast::StringLiteral>(unquoteString(tok.text)); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node; }
+  if (tok.kind == TK::Imag) { auto node = std::make_unique<ast::ImagLiteral>(std::stod(tok.text)); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node; }
+  if (tok.kind == TK::String) {
+    auto raw = tok.text;
+    auto hasF = [&](){ size_t i = 0; auto pref=[&](char c){return c=='f'||c=='F'||c=='r'||c=='R'||c=='b'||c=='B';}; if (i<raw.size() && pref(raw[i])) { bool f = (raw[i]=='f'||raw[i]=='F'); ++i; if (i<raw.size() && pref(raw[i])) { f = f || (raw[i]=='f'||raw[i]=='F'); ++i; } return f; } return false; }();
+    if (hasF) {
+      auto content = unquoteString(raw);
+      auto fs = std::make_unique<ast::FStringLiteral>();
+      std::string lit;
+      size_t i = 0; auto n = content.size();
+      auto flush_lit = [&](){ if (!lit.empty()) { ast::FStringSegment s; s.isExpr=false; s.text = lit; fs->parts.push_back(std::move(s)); lit.clear(); } };
+      while (i < n) {
+        if (content[i] == '{') {
+          if (i+1 < n && content[i+1] == '{') { lit.push_back('{'); i += 2; continue; }
+          // parse expression segment
+          size_t j = i + 1; int depth = 1; size_t exprEnd = std::string::npos; size_t pos = j; size_t topCut = std::string::npos;
+          while (j < n && depth > 0) {
+            if (content[j] == '{') { ++depth; }
+            else if (content[j] == '}') { --depth; if (depth == 0) break; }
+            else if ((content[j] == '!' || content[j] == ':') && depth == 1 && topCut == std::string::npos) { topCut = j; }
+            ++j;
+          }
+          if (j >= n || depth != 0) { throw std::runtime_error("Parse error: unclosed f-string expression"); }
+          exprEnd = (topCut != std::string::npos ? topCut : j);
+          std::string exprText = content.substr(pos, exprEnd - pos);
+          flush_lit();
+          ast::FStringSegment seg; seg.isExpr = true; seg.expr = parseExprFromString(exprText, "<fexpr>"); fs->parts.push_back(std::move(seg));
+          i = j + 1; // skip closing '}'
+          continue;
+        } else if (content[i] == '}') {
+          if (i+1 < n && content[i+1] == '}') { lit.push_back('}'); i += 2; continue; }
+          throw std::runtime_error("Parse error: single '}' in f-string");
+        } else {
+          lit.push_back(content[i]); ++i;
+        }
+      }
+      flush_lit();
+      fs->line = tok.line; fs->col = tok.col; fs->file = tok.file; return fs;
+    }
+    auto node = std::make_unique<ast::StringLiteral>(unquoteString(raw)); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node;
+  }
   if (tok.kind == TK::Bytes) { auto node = std::make_unique<ast::BytesLiteral>(unquoteString(tok.text.substr(1))); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node; }
   if (tok.kind == TK::Ellipsis) { auto node = std::make_unique<ast::EllipsisLiteral>(); node->line = tok.line; node->col = tok.col; node->file = tok.file; return node; }
   if (tok.kind == TK::Ident || tok.kind == TK::TypeIdent) { return parseNameOrNone(tok); }
@@ -547,9 +682,14 @@ std::unique_ptr<ast::Expr> Parser::parsePostfix(std::unique_ptr<ast::Expr> base)
     if (peek().kind == TK::LParen) {
       get();
       auto argres = parseArgList();
-      if (desugarObjectCall(base, argres)) { continue; }
+      if (argres.keywords.empty() && argres.starArgs.empty() && argres.kwStarArgs.empty()) {
+        if (desugarObjectCall(base, argres.positional)) { continue; }
+      }
       auto call = std::make_unique<ast::Call>(std::move(base));
-      call->args = std::move(argres);
+      call->args = std::move(argres.positional);
+      call->keywords = std::move(argres.keywords);
+      call->starArgs = std::move(argres.starArgs);
+      call->kwStarArgs = std::move(argres.kwStarArgs);
       base = std::move(call);
       continue;
     }
@@ -591,10 +731,30 @@ std::unique_ptr<ast::Expr> Parser::parsePostfix(std::unique_ptr<ast::Expr> base)
 
 // Helpers
 std::string Parser::unquoteString(std::string text) {
-  if (!text.empty() && (text.front() == '"' || text.front() == '\'')) {
-    if (text.size() >= 2 && text.back() == text.front()) { text = text.substr(1, text.size() - 2); }
+  // Handle optional prefixes: [fFrRbB]{1,2}
+  size_t i = 0; auto isPref=[&](char c){return c=='f'||c=='F'||c=='r'||c=='R'||c=='b'||c=='B';};
+  if (text.size()>=1 && isPref(text[i])) { ++i; if (text.size()>i && isPref(text[i])) ++i; }
+  if (i >= text.size()) return {};
+  // Determine quote style
+  if (i+2 < text.size() && (text[i]=='\'' || text[i]=='"') && text[i]==text[i+1] && text[i]==text[i+2]) {
+    // triple quoted
+    const char q = text[i];
+    size_t start = i+3; size_t end = text.size();
+    if (end >= 3 && text[end-1]==q && text[end-2]==q && text[end-3]==q) end -= 3; // trim
+    if (end >= start) return text.substr(start, end-start);
+    return {};
+  }
+  if (text[i]=='\'' || text[i]=='"') {
+    const char q=text[i]; size_t start=i+1; size_t end=text.size(); if (end>i+1 && text[end-1]==q) --end; if (end>=start) return text.substr(start, end-start);
   }
   return text;
+}
+
+std::unique_ptr<ast::Expr> Parser::parseExprFromString(const std::string& text,
+                                                      const std::string& name) {
+  lex::Lexer L; L.pushString(text, name);
+  Parser P(L);
+  return P.parseExpr();
 }
 
 std::unique_ptr<ast::Expr> Parser::parseListLiteral(const lex::Token& openTok) {
@@ -608,6 +768,7 @@ std::unique_ptr<ast::Expr> Parser::parseListLiteral(const lex::Token& openTok) {
   auto first = parseExpr();
   // List comprehension if 'for' follows
   if (peek().kind == TK::For) {
+    // std::cerr << "parseListLiteral: entering list comp\n";
     auto lc = std::make_unique<ast::ListComp>();
     lc->elt = std::move(first);
     lc->fors = parseComprehensionFors();
@@ -617,7 +778,11 @@ std::unique_ptr<ast::Expr> Parser::parseListLiteral(const lex::Token& openTok) {
   }
   auto list = std::make_unique<ast::ListLiteral>();
   list->elements.emplace_back(std::move(first));
-  while (peek().kind == TK::Comma) { get(); if (peek().kind == TK::RBracket) break; list->elements.emplace_back(parseExpr()); }
+  while (peek().kind == TK::Comma) {
+    get();
+    if (peek().kind == TK::RBracket) { throw std::runtime_error("Parse error: trailing comma in list literal not allowed"); }
+    list->elements.emplace_back(parseExpr());
+  }
   expect(TK::RBracket, "]'");
   list->line = openTok.line; list->col = openTok.col; list->file = openTok.file;
   return list;
@@ -640,6 +805,22 @@ std::unique_ptr<ast::Expr> Parser::parseDictOrSetLiteral(const lex::Token& openT
   if (peek().kind == TK::RBrace) {
     get(); auto d = std::make_unique<ast::DictLiteral>(); d->line = openTok.line; d->col = openTok.col; d->file = openTok.file; return d;
   }
+  // If starts with '**' -> dict with unpack(s)
+  if (peek().kind == TK::StarStar) {
+    auto dict = std::make_unique<ast::DictLiteral>();
+    bool first = true;
+    for (;;) {
+      if (!first) {
+        if (peek().kind == TK::RBrace) break;
+        expect(TK::Comma, "','");
+        if (peek().kind == TK::RBrace) break;
+      }
+      if (peek().kind == TK::StarStar) { get(); dict->unpacks.emplace_back(parseExpr()); }
+      else { auto k = parseExpr(); expect(TK::Colon, ":'"); auto v = parseExpr(); dict->items.emplace_back(std::move(k), std::move(v)); }
+      first = false;
+    }
+    expect(TK::RBrace, "'}'"); dict->line = openTok.line; dict->col = openTok.col; dict->file = openTok.file; return dict;
+  }
   // Parse first element
   auto first = parseExpr();
   // Dict: first ':' value
@@ -658,7 +839,10 @@ std::unique_ptr<ast::Expr> Parser::parseDictOrSetLiteral(const lex::Token& openT
     auto dict = std::make_unique<ast::DictLiteral>();
     dict->items.emplace_back(std::move(first), std::move(firstVal));
     while (peek().kind == TK::Comma) {
-      get(); if (peek().kind == TK::RBrace) break; auto k = parseExpr(); expect(TK::Colon, ":'"); auto v = parseExpr(); dict->items.emplace_back(std::move(k), std::move(v));
+      get();
+      if (peek().kind == TK::RBrace) break;
+      if (peek().kind == TK::StarStar) { get(); dict->unpacks.emplace_back(parseExpr()); continue; }
+      auto k = parseExpr(); expect(TK::Colon, ":'"); auto v = parseExpr(); dict->items.emplace_back(std::move(k), std::move(v));
     }
     expect(TK::RBrace, "'}'");
     dict->line = openTok.line; dict->col = openTok.col; dict->file = openTok.file;
@@ -692,7 +876,12 @@ std::vector<ast::ComprehensionFor> Parser::parseComprehensionFors() {
     cf.target = parsePostfix(parseUnary());
     expect(TK::In, "'in'");
     cf.iter = parseExpr();
-    while (peek().kind == TK::If) { get(); cf.ifs.emplace_back(parseExpr()); }
+    while (peek().kind == TK::If) {
+      get();
+      // std::cerr << "comp for: guard begins\n";
+      cf.ifs.emplace_back(parseExpr());
+      // std::cerr << "comp for: guard parsed\n";
+    }
     out.emplace_back(std::move(cf));
   }
   return out;
@@ -856,14 +1045,33 @@ std::unique_ptr<ast::Expr> Parser::parseNameOrNone(const lex::Token& tok) {
   return node;
 }
 
-std::vector<std::unique_ptr<ast::Expr>> Parser::parseArgList() {
-  std::vector<std::unique_ptr<ast::Expr>> args;
+Parser::ArgList Parser::parseArgList() {
+  ArgList out;
+  bool seenKeyword = false;
   if (peek().kind != TK::RParen) {
-    args.emplace_back(parseExpr());
-    while (peek().kind == TK::Comma) { get(); if (peek().kind == TK::RParen) break; args.emplace_back(parseExpr()); }
+    for (;;) {
+      if (peek().kind == TK::StarStar) {
+        get(); out.kwStarArgs.emplace_back(parseExpr());
+      } else if (peek().kind == TK::Star) {
+        get(); out.starArgs.emplace_back(parseExpr());
+      } else if (peek().kind == TK::Ident && ts_.peek(1).kind == TK::Equal) {
+        // keyword argument
+        const auto nameTok = get(); get(); // consume '='
+        ast::KeywordArg kw{nameTok.text, parseExpr()};
+        out.keywords.emplace_back(std::move(kw));
+        seenKeyword = true;
+      } else {
+        // positional argument
+        if (seenKeyword) { throw std::runtime_error("Parse error: positional argument follows keyword argument"); }
+        out.positional.emplace_back(parseExpr());
+      }
+      if (peek().kind != TK::Comma) break;
+      get();
+      if (peek().kind == TK::RParen) break; // allow trailing comma
+    }
   }
   expect(TK::RParen, "')'");
-  return args;
+  return out;
 }
 
 bool Parser::desugarObjectCall(std::unique_ptr<ast::Expr>& base,
@@ -982,13 +1190,14 @@ std::unique_ptr<ast::Stmt> Parser::parseMatchStmt() {
 std::unique_ptr<ast::MatchCase> Parser::parseMatchCase() {
   expect(TK::Case, "'case'");
   auto pat = parsePattern();
-  // Guards not supported yet; error if encountered
-  if (peek().kind == TK::If) { throw std::runtime_error("Parse error: match case guards not supported"); }
+  std::unique_ptr<ast::Expr> guard;
+  if (peek().kind == TK::If) { get(); guard = parseExpr(); }
   expect(TK::Colon, ":'");
   if (peek().kind == TK::Newline) { get(); }
   expect(TK::Indent, "indent");
   auto cs = std::make_unique<ast::MatchCase>();
   cs->pattern = std::move(pat);
+  cs->guard = std::move(guard);
   parseSuiteInto(cs->body);
   return cs;
 }
@@ -1027,6 +1236,48 @@ std::unique_ptr<ast::Pattern> Parser::parseSimplePattern() {
   // Name capture (not followed by '(')
   if (tok.kind == TK::Ident && peek().kind != TK::LParen) {
     return std::make_unique<ast::PatternName>(tok.text);
+  }
+  // Sequence patterns: [pats] or (pats)
+  if (tok.kind == TK::LBracket) {
+    auto ps = std::make_unique<ast::PatternSequence>();
+    ps->isList = true;
+    if (peek().kind != TK::RBracket) { ps->elements.emplace_back(parsePattern()); while (peek().kind == TK::Comma) { get(); if (peek().kind == TK::RBracket) break; ps->elements.emplace_back(parsePattern()); } }
+    expect(TK::RBracket, "]'");
+    return ps;
+  }
+  if (tok.kind == TK::LParen) {
+    // grouping or tuple pattern
+    auto inner = parsePattern();
+    if (peek().kind == TK::Comma) {
+      auto ps = std::make_unique<ast::PatternSequence>(); ps->isList = false; ps->elements.emplace_back(std::move(inner));
+      while (peek().kind == TK::Comma) { get(); if (peek().kind == TK::RParen) break; ps->elements.emplace_back(parsePattern()); }
+      expect(TK::RParen, ")'");
+      return ps;
+    }
+    expect(TK::RParen, ")'");
+    return inner;
+  }
+  // Mapping pattern: {key: pattern, ...}
+  if (tok.kind == TK::LBrace) {
+    auto pm = std::make_unique<ast::PatternMapping>();
+    if (peek().kind != TK::RBrace) {
+      for (;;) {
+        // keys: simple literals or names
+        std::unique_ptr<ast::Expr> keyExpr;
+        const auto& kt = get();
+        if (kt.kind == TK::Ident || kt.kind == TK::TypeIdent) { keyExpr = std::make_unique<ast::Name>(kt.text); }
+        else if (kt.kind == TK::String) { keyExpr = std::make_unique<ast::StringLiteral>(unquoteString(kt.text)); }
+        else if (kt.kind == TK::Int) { keyExpr = std::make_unique<ast::IntLiteral>(std::stoll(kt.text)); }
+        else if (kt.kind == TK::Float) { keyExpr = std::make_unique<ast::FloatLiteral>(std::stod(kt.text)); }
+        else { throw std::runtime_error("Parse error: unsupported mapping key in pattern"); }
+        expect(TK::Colon, ":'");
+        auto pv = parsePattern();
+        pm->items.emplace_back(std::move(keyExpr), std::move(pv));
+        if (peek().kind != TK::Comma) break; get(); if (peek().kind == TK::RBrace) break;
+      }
+    }
+    expect(TK::RBrace, "'}'");
+    return pm;
   }
   // Class pattern: Name '(' [patterns] ')'
   if (tok.kind == TK::Ident && peek().kind == TK::LParen) {
@@ -1105,6 +1356,8 @@ ast::TypeKind Parser::toTypeKind(const std::string& typeName) {
   if (typeName == "tuple") { return ast::TypeKind::Tuple; }
   if (typeName == "list") { return ast::TypeKind::List; }
   if (typeName == "dict") { return ast::TypeKind::Dict; }
+  if (typeName == "Optional") { return ast::TypeKind::Optional; }
+  if (typeName == "Union") { return ast::TypeKind::Union; }
   return ast::TypeKind::NoneType;
 }
 

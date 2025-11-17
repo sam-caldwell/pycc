@@ -64,6 +64,11 @@ namespace pycc::ast {
         ,SetComp
         ,DictComp
         ,GeneratorExpr
+        ,Compare
+        ,PatternSequence
+        ,PatternMapping
+        ,ImagLiteral
+        ,FStringLiteral
     };
 
     inline const char *to_string(const NodeKind element) {

@@ -10,10 +10,11 @@
 namespace pycc::ast {
 
 struct DictLiteral final : Expr, Acceptable<DictLiteral, NodeKind::DictLiteral> {
-  // sequence of key:value pairs
+  // key:value pairs
   std::vector<std::pair<std::unique_ptr<Expr>, std::unique_ptr<Expr>>> items;
+  // '**expr' unpack entries
+  std::vector<std::unique_ptr<Expr>> unpacks;
   DictLiteral() : Expr(NodeKind::DictLiteral) {}
 };
 
 } // namespace pycc::ast
-

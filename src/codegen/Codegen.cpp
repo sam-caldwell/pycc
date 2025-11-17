@@ -666,6 +666,19 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
       void visit(const ast::Unary& u) override {
         auto V = run(*u.operand);
+        auto toBool = [&](const Value& vin) -> Value {
+          if (vin.k == ValKind::I1) { return vin; }
+          std::ostringstream r; r << "%t" << temp++;
+          switch (vin.k) {
+            case ValKind::I32:
+              ir << "  " << r.str() << " = icmp ne i32 " << vin.s << ", 0\n"; return Value{r.str(), ValKind::I1};
+            case ValKind::F64:
+              ir << "  " << r.str() << " = fcmp one double " << vin.s << ", 0.0\n"; return Value{r.str(), ValKind::I1};
+            case ValKind::Ptr:
+              ir << "  " << r.str() << " = icmp ne ptr " << vin.s << ", null\n"; return Value{r.str(), ValKind::I1};
+            default: throw std::runtime_error("unsupported truthiness conversion");
+          }
+        };
         if (u.op == ast::UnaryOperator::Neg) {
           if (V.k == ValKind::I32) {
             std::ostringstream reg; reg << "%t" << temp++;
@@ -677,9 +690,9 @@ std::string Codegen::generateIR(const ast::Module& mod) {
             throw std::runtime_error("unsupported '-' on bool");
           }
         } else {
-          if (V.k != ValKind::I1) throw std::runtime_error("'not' requires bool");
+          auto VB = toBool(V);
           std::ostringstream reg; reg << "%t" << temp++;
-          ir << "  " << reg.str() << " = xor i1 " << V.s << ", true\n";
+          ir << "  " << reg.str() << " = xor i1 " << VB.s << ", true\n";
           out = Value{reg.str(), ValKind::I1};
         }
       }
@@ -738,7 +751,20 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           return;
         }
         if (b.op == ast::BinaryOperator::And || b.op == ast::BinaryOperator::Or) {
-          if (LV.k != ValKind::I1) throw std::runtime_error("logical LHS must be bool");
+          auto toBool = [&](const Value& vin) -> Value {
+            if (vin.k == ValKind::I1) { return vin; }
+            std::ostringstream r; r << "%t" << temp++;
+            switch (vin.k) {
+              case ValKind::I32:
+                ir << "  " << r.str() << " = icmp ne i32 " << vin.s << ", 0\n"; return Value{r.str(), ValKind::I1};
+              case ValKind::F64:
+                ir << "  " << r.str() << " = fcmp one double " << vin.s << ", 0.0\n"; return Value{r.str(), ValKind::I1};
+              case ValKind::Ptr:
+                ir << "  " << r.str() << " = icmp ne ptr " << vin.s << ", null\n"; return Value{r.str(), ValKind::I1};
+              default: throw std::runtime_error("unsupported truthiness conversion");
+            }
+          };
+          LV = toBool(LV);
           static int scCounter = 0; int id = scCounter++;
           if (b.op == ast::BinaryOperator::And) {
             std::string rhsLbl = std::string("and.rhs") + std::to_string(id);
@@ -747,7 +773,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
             ir << "  br i1 " << LV.s << ", label %" << rhsLbl << ", label %" << falseLbl << "\n";
             ir << rhsLbl << ":\n";
             auto RV2 = run(*b.rhs);
-            if (RV2.k != ValKind::I1) throw std::runtime_error("logical RHS must be bool");
+            RV2 = toBool(RV2);
             ir << "  br label %" << endLbl << "\n";
             ir << falseLbl << ":\n  br label %" << endLbl << "\n";
             ir << endLbl << ":\n";
@@ -762,7 +788,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
             ir << trueLbl << ":\n  br label %" << endLbl << "\n";
             ir << rhsLbl << ":\n";
             auto RV2 = run(*b.rhs);
-            if (RV2.k != ValKind::I1) throw std::runtime_error("logical RHS must be bool");
+            RV2 = toBool(RV2);
             ir << "  br label %" << endLbl << "\n";
             ir << endLbl << ":\n";
             std::ostringstream rphi; rphi << "%t" << temp++;

@@ -7,14 +7,14 @@ namespace pycc::ast {
 
 // Forward declarations to break include cycles
 template <typename T, NodeKind K> struct Literal;
-struct Name; struct Call; struct Binary; struct Unary; struct TupleLiteral; struct ListLiteral; struct DictLiteral; struct SetLiteral; struct ObjectLiteral; struct NoneLiteral; struct Attribute; struct Subscript; struct EllipsisLiteral; template <typename T, NodeKind K> struct Literal;
+struct Name; struct Call; struct Binary; struct Unary; struct TupleLiteral; struct ListLiteral; struct DictLiteral; struct SetLiteral; struct ObjectLiteral; struct NoneLiteral; struct Attribute; struct Subscript; struct EllipsisLiteral; struct Compare; struct FStringLiteral; template <typename T, NodeKind K> struct Literal;
 struct ReturnStmt; struct AssignStmt; struct AugAssignStmt; struct RaiseStmt; struct GlobalStmt; struct NonlocalStmt; struct AssertStmt; struct IfStmt; struct ExprStmt;
 struct WhileStmt; struct ForStmt; struct BreakStmt; struct ContinueStmt; struct PassStmt;
 struct TryStmt; struct ExceptHandler; struct WithItem; struct WithStmt;
 struct Import; struct ImportFrom; struct Alias; struct ClassDef; struct DelStmt; struct DefStmt; struct NamedExpr; struct IfExpr; struct LambdaExpr; struct YieldExpr; struct AwaitExpr; struct ListComp; struct SetComp; struct DictComp; struct GeneratorExpr;
 struct FunctionDef; struct Module;
 struct MatchStmt; struct MatchCase;
-struct PatternWildcard; struct PatternName; struct PatternLiteral; struct PatternOr; struct PatternAs; struct PatternClass;
+struct PatternWildcard; struct PatternName; struct PatternLiteral; struct PatternOr; struct PatternAs; struct PatternClass; struct PatternSequence; struct PatternMapping;
 
 // Virtual visitor interface for AST traversal using polymorphism.
 struct VisitorBase {
@@ -47,6 +47,7 @@ struct VisitorBase {
   virtual void visit(const Literal<double, NodeKind::FloatLiteral>&) = 0;
   virtual void visit(const Literal<std::string, NodeKind::StringLiteral>&) = 0;
   virtual void visit(const Literal<std::string, NodeKind::BytesLiteral>&) {}
+  virtual void visit(const Literal<double, NodeKind::ImagLiteral>&) {}
   virtual void visit(const NoneLiteral&) = 0;
   virtual void visit(const EllipsisLiteral&) {}
   virtual void visit(const DictLiteral&) {}
@@ -63,6 +64,8 @@ struct VisitorBase {
   virtual void visit(const NamedExpr&) {}
   virtual void visit(const IfExpr&) {}
   virtual void visit(const LambdaExpr&) {}
+  virtual void visit(const Compare&) {}
+  virtual void visit(const FStringLiteral&) {}
   virtual void visit(const YieldExpr&) {}
   virtual void visit(const AwaitExpr&) {}
   virtual void visit(const ListComp&) {}
@@ -78,6 +81,8 @@ struct VisitorBase {
   virtual void visit(const PatternOr&) {}
   virtual void visit(const PatternAs&) {}
   virtual void visit(const PatternClass&) {}
+  virtual void visit(const PatternSequence&) {}
+  virtual void visit(const PatternMapping&) {}
   // control statements (no-op by default)
   virtual void visit(const AugAssignStmt&) {}
   virtual void visit(const RaiseStmt&) {}
