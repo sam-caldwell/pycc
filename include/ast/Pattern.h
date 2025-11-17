@@ -41,6 +41,7 @@ struct PatternAs final : Pattern, Acceptable<PatternAs, NodeKind::PatternAs> {
 struct PatternClass final : Pattern, Acceptable<PatternClass, NodeKind::PatternClass> {
   std::string className; // simple name
   std::vector<std::unique_ptr<Pattern>> args; // positional-only for now (shape)
+  std::vector<std::pair<std::string, std::unique_ptr<Pattern>>> kwargs; // keyword patterns
   explicit PatternClass(std::string cn)
       : Pattern(NodeKind::PatternClass), className(std::move(cn)) {}
 };
@@ -53,7 +54,14 @@ struct PatternSequence final : Pattern, Acceptable<PatternSequence, NodeKind::Pa
 
 struct PatternMapping final : Pattern, Acceptable<PatternMapping, NodeKind::PatternMapping> {
   std::vector<std::pair<std::unique_ptr<Expr>, std::unique_ptr<Pattern>>> items;
+  bool hasRest{false};
+  std::string restName; // valid if hasRest
   PatternMapping() : Pattern(NodeKind::PatternMapping) {}
+};
+
+struct PatternStar final : Pattern, Acceptable<PatternStar, NodeKind::PatternStar> {
+  std::string name; // may be "_" to discard
+  explicit PatternStar(std::string n) : Pattern(NodeKind::PatternStar), name(std::move(n)) {}
 };
 
 } // namespace pycc::ast

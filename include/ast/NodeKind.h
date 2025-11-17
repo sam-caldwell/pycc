@@ -67,6 +67,7 @@ namespace pycc::ast {
         ,Compare
         ,PatternSequence
         ,PatternMapping
+        ,PatternStar
         ,ImagLiteral
         ,FStringLiteral
     };

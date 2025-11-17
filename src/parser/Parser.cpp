@@ -93,7 +93,7 @@ std::unique_ptr<ast::Module> Parser::parseModule() {
     } else if (peek().kind == TK::Class) {
       auto cls = parseClass();
       cls->decorators = std::move(decorators);
-      // Note: Module does not yet store classes (shape-only)
+      mod->classes.emplace_back(std::move(cls));
     } else {
       // Skip unknown top-level constructs
       get();
@@ -123,12 +123,14 @@ std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
       else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) { break; }
     } while (depth > 0);
   }
-  // Limited Optional/Union syntax support: allow T | None and ignore the None part for now
-  if (peek().kind == TK::Pipe) {
+  // Accept union pipe syntax: T | U | ... (shape-only)
+  while (peek().kind == TK::Pipe) {
     get(); // consume '|'
     const auto& typeTok2 = get();
     if (typeTok2.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected type ident after '|'"); }
-    // ignore t2
+    if (peek().kind == TK::LBracket) {
+      int d = 0; do { const auto& t = get(); if (t.kind == TK::LBracket) ++d; else if (t.kind == TK::RBracket) --d; else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break; } while (d > 0);
+    }
   }
   expect(TK::Colon, "':'");
   if (peek().kind == TK::Newline) { get(); }
@@ -234,6 +236,11 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
           else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) { break; }
         } while (depth > 0);
       }
+      // Accept union pipe chain
+      while (peek().kind == TK::Pipe) {
+        get(); const auto& tt = get(); if (tt.kind != TK::TypeIdent) throw std::runtime_error("Parse error: expected type ident after '|'");
+        if (peek().kind == TK::LBracket) { int d=0; do { const auto& t = get(); if (t.kind==TK::LBracket) ++d; else if (t.kind==TK::RBracket) --d; else if (t.kind==TK::End||t.kind==TK::Newline||t.kind==TK::Dedent) break; } while (d>0); }
+      }
     }
     auto nameExpr = std::make_unique<ast::Name>(nameTok.text);
     if (tkind != ast::TypeKind::NoneType) nameExpr->setType(tkind);
@@ -320,6 +327,16 @@ void Parser::parseOptionalParamType(ast::Param& param) {
       else if (t.kind == TK::RBracket) { --depth; }
       else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) { break; }
     } while (depth > 0);
+  }
+  // Accept union pipe chain: T | U | V (shape-only)
+  while (peek().kind == TK::Pipe) {
+    get();
+    const auto& nextTok = get();
+    if (nextTok.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected type ident after '|'"); }
+    // Optional bracketed shape
+    if (peek().kind == TK::LBracket) {
+      int d = 0; do { const auto& t = get(); if (t.kind == TK::LBracket) ++d; else if (t.kind == TK::RBracket) --d; else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break; } while (d > 0);
+    }
   }
 }
 
@@ -1264,39 +1281,66 @@ std::unique_ptr<ast::Pattern> Parser::parseSimplePattern() {
   if (tok.kind == TK::LBracket) {
     auto ps = std::make_unique<ast::PatternSequence>();
     ps->isList = true;
-    if (peek().kind != TK::RBracket) { ps->elements.emplace_back(parsePattern()); while (peek().kind == TK::Comma) { get(); if (peek().kind == TK::RBracket) break; ps->elements.emplace_back(parsePattern()); } }
+    bool first = true;
+    while (peek().kind != TK::RBracket) {
+      if (!first) { if (peek().kind != TK::Comma) break; get(); if (peek().kind == TK::RBracket) break; }
+      if (peek().kind == TK::Star) {
+        get(); const auto& nm = get(); if (!(nm.kind == TK::Ident || (nm.kind == TK::Ident && nm.text == "_"))) throw std::runtime_error("Parse error: expected name after '*'");
+        ps->elements.emplace_back(std::make_unique<ast::PatternStar>(nm.text));
+      } else {
+        ps->elements.emplace_back(parsePattern());
+      }
+      first = false;
+    }
     expect(TK::RBracket, "]'");
     return ps;
   }
   if (tok.kind == TK::LParen) {
     // grouping or tuple pattern
-    auto inner = parsePattern();
-    if (peek().kind == TK::Comma) {
-      auto ps = std::make_unique<ast::PatternSequence>(); ps->isList = false; ps->elements.emplace_back(std::move(inner));
-      while (peek().kind == TK::Comma) { get(); if (peek().kind == TK::RParen) break; ps->elements.emplace_back(parsePattern()); }
-      expect(TK::RParen, ")'");
-      return ps;
+    auto ps = std::make_unique<ast::PatternSequence>(); ps->isList = false;
+    bool first = true;
+    while (peek().kind != TK::RParen) {
+      if (!first) { if (peek().kind != TK::Comma) break; get(); if (peek().kind == TK::RParen) break; }
+      if (peek().kind == TK::Star) {
+        get(); const auto& nm = get(); if (nm.kind != TK::Ident) throw std::runtime_error("Parse error: expected name after '*'");
+        ps->elements.emplace_back(std::make_unique<ast::PatternStar>(nm.text));
+      } else {
+        ps->elements.emplace_back(parsePattern());
+      }
+      first = false;
     }
     expect(TK::RParen, ")'");
-    return inner;
+    if (ps->elements.size() == 1 && ps->elements[0]->kind != ast::NodeKind::PatternStar) {
+      // grouping only
+      return std::move(ps->elements[0]);
+    }
+    return ps;
   }
   // Mapping pattern: {key: pattern, ...}
   if (tok.kind == TK::LBrace) {
     auto pm = std::make_unique<ast::PatternMapping>();
     if (peek().kind != TK::RBrace) {
+      bool first = true;
       for (;;) {
-        // keys: simple literals or names
-        std::unique_ptr<ast::Expr> keyExpr;
-        const auto& kt = get();
-        if (kt.kind == TK::Ident || kt.kind == TK::TypeIdent) { keyExpr = std::make_unique<ast::Name>(kt.text); }
-        else if (kt.kind == TK::String) { keyExpr = std::make_unique<ast::StringLiteral>(unquoteString(kt.text)); }
-        else if (kt.kind == TK::Int) { keyExpr = std::make_unique<ast::IntLiteral>(std::stoll(kt.text)); }
-        else if (kt.kind == TK::Float) { keyExpr = std::make_unique<ast::FloatLiteral>(std::stod(kt.text)); }
-        else { throw std::runtime_error("Parse error: unsupported mapping key in pattern"); }
-        expect(TK::Colon, ":'");
-        auto pv = parsePattern();
-        pm->items.emplace_back(std::move(keyExpr), std::move(pv));
-        if (peek().kind != TK::Comma) break; get(); if (peek().kind == TK::RBrace) break;
+        if (!first) { if (peek().kind != TK::Comma) break; get(); if (peek().kind == TK::RBrace) break; }
+        if (peek().kind == TK::StarStar) {
+          get(); const auto& nm = get(); if (nm.kind != TK::Ident) throw std::runtime_error("Parse error: expected name after '**'");
+          pm->hasRest = true; pm->restName = nm.text;
+        } else {
+          // keys: simple literals or names
+          std::unique_ptr<ast::Expr> keyExpr;
+          const auto& kt = get();
+          if (kt.kind == TK::Ident || kt.kind == TK::TypeIdent) { keyExpr = std::make_unique<ast::Name>(kt.text); }
+          else if (kt.kind == TK::String) { keyExpr = std::make_unique<ast::StringLiteral>(unquoteString(kt.text)); }
+          else if (kt.kind == TK::Int) { keyExpr = std::make_unique<ast::IntLiteral>(std::stoll(kt.text)); }
+          else if (kt.kind == TK::Float) { keyExpr = std::make_unique<ast::FloatLiteral>(std::stod(kt.text)); }
+          else { throw std::runtime_error("Parse error: unsupported mapping key in pattern"); }
+          expect(TK::Colon, ":'");
+          auto pv = parsePattern();
+          pm->items.emplace_back(std::move(keyExpr), std::move(pv));
+        }
+        first = false;
+        if (peek().kind != TK::Comma) break;
       }
     }
     expect(TK::RBrace, "'}'");
@@ -1307,8 +1351,20 @@ std::unique_ptr<ast::Pattern> Parser::parseSimplePattern() {
     get(); // '('
     auto pc = std::make_unique<ast::PatternClass>(tok.text);
     if (peek().kind != TK::RParen) {
-      pc->args.emplace_back(parsePattern());
-      while (peek().kind == TK::Comma) { get(); if (peek().kind == TK::RParen) break; pc->args.emplace_back(parsePattern()); }
+      bool seenKw = false;
+      // Parse a sequence of positional patterns or keyword patterns name=pattern
+      for (;;) {
+        if (peek().kind == TK::Ident && ts_.peek(1).kind == TK::Equal) {
+          // keyword pattern
+          const auto nameTok = get(); get(); // '='
+          pc->kwargs.emplace_back(nameTok.text, parsePattern());
+          seenKw = true;
+        } else {
+          if (seenKw) { throw std::runtime_error("Parse error: positional pattern after keyword pattern"); }
+          pc->args.emplace_back(parsePattern());
+        }
+        if (peek().kind != TK::Comma) break; get(); if (peek().kind == TK::RParen) break;
+      }
     }
     expect(TK::RParen, "')'");
     return pc;
@@ -1342,23 +1398,41 @@ std::unique_ptr<ast::Stmt> Parser::parseImportStmt() {
   if (peek().kind == TK::Import) {
     get(); auto imp = std::make_unique<ast::Import>();
     while (true) {
-      const auto& nm = get(); if (nm.kind != TK::Ident) break; ast::Alias al{nm.text,{}};
-      if (peek().kind == TK::As) { get(); const auto& an = get(); if (an.kind == TK::Ident) al.asname = an.text; }
-      imp->names.push_back(std::move(al)); if (peek().kind != TK::Comma) break; get();
+      // dotted name
+      const auto& first = get(); if (first.kind != TK::Ident) break; std::string dotted = first.text;
+      while (peek().kind == TK::Dot) {
+        get(); const auto& nxt = get(); if (nxt.kind != TK::Ident) throw std::runtime_error("Parse error: expected ident after '.' in import");
+        dotted += "."; dotted += nxt.text;
+      }
+      ast::Alias al{dotted,{}};
+      if (peek().kind == TK::As) { get(); const auto& an = get(); if (an.kind == TK::Ident) al.asname = an.text; else throw std::runtime_error("Parse error: expected name after 'as'"); }
+      imp->names.push_back(std::move(al));
+      if (peek().kind != TK::Comma) break; get();
     }
     return imp;
   }
   // from import
-  get(); std::string module; const auto& modTok = get(); if (modTok.kind == TK::Ident) module = modTok.text; else module = "";
-  expect(TK::Import, "'import'"); auto imp = std::make_unique<ast::ImportFrom>(); imp->module = module; imp->level = 0;
-  if (peek().kind == TK::Star) { get(); }
-  else {
-    while (true) {
-      const auto& nm = get(); if (nm.kind != TK::Ident) break; ast::Alias al{nm.text,{}};
-      if (peek().kind == TK::As) { get(); const auto& an = get(); if (an.kind == TK::Ident) al.asname = an.text; }
-      imp->names.push_back(std::move(al)); if (peek().kind != TK::Comma) break; get();
+  get();
+  int level = 0;
+  while (peek().kind == TK::Dot) { get(); ++level; }
+  std::string module;
+  if (peek().kind == TK::Ident) {
+    const auto& id = get(); module = id.text;
+    while (peek().kind == TK::Dot) {
+      get(); const auto& nxt = get(); if (nxt.kind != TK::Ident) throw std::runtime_error("Parse error: expected ident after '.' in from");
+      module += "."; module += nxt.text;
     }
   }
+  expect(TK::Import, "'import'"); auto imp = std::make_unique<ast::ImportFrom>(); imp->module = module; imp->level = level;
+  if (peek().kind == TK::Star) { get(); return imp; }
+  bool paren = false; if (peek().kind == TK::LParen) { paren = true; get(); }
+  while (true) {
+    const auto& nm = get(); if (nm.kind != TK::Ident) break; ast::Alias al{nm.text,{}};
+    if (peek().kind == TK::As) { get(); const auto& an = get(); if (an.kind == TK::Ident) al.asname = an.text; else throw std::runtime_error("Parse error: expected name after 'as'"); }
+    imp->names.push_back(std::move(al));
+    if (peek().kind != TK::Comma) break; get(); if (paren && peek().kind == TK::RParen) break;
+  }
+  if (paren) expect(TK::RParen, ")'");
   return imp;
 }
 
