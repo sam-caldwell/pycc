@@ -364,8 +364,13 @@ void Parser::parseSuiteInto(std::vector<std::unique_ptr<ast::Stmt>>& out) {
         fn->decorators = std::move(decorators);
         out.emplace_back(std::make_unique<ast::DefStmt>(std::move(fn)));
         continue;
+      } else if (peek().kind == TK::Class) {
+        auto cls = parseClass();
+        cls->decorators = std::move(decorators);
+        out.emplace_back(std::move(cls));
+        continue;
       }
-      throw std::runtime_error("Parse error: decorators in class body must precede 'def'");
+      throw std::runtime_error("Parse error: decorators must precede 'def' or 'class'");
     }
     out.emplace_back(parseStatement());
   }
@@ -700,15 +705,20 @@ std::unique_ptr<ast::Expr> Parser::parsePostfix(std::unique_ptr<ast::Expr> base)
     }
     if (peek().kind == TK::LBracket) {
       get();
-      // parse subscript or slice: a[b] or a[b:c[:d]] or a[b, c]
+      // parse subscript or slice: a[b] or a[b:c[:d]] or a[b, c] or a[:]
       std::unique_ptr<ast::Expr> first;
-      if (peek().kind != TK::RBracket) first = parseExpr();
-      // handle slice a[:] or a[b:] forms
+      bool isSlice = false;
       if (peek().kind == TK::Colon) {
+        isSlice = true; // a[:...]
+      } else if (peek().kind != TK::RBracket) {
+        first = parseExpr();
+        if (peek().kind == TK::Colon) { isSlice = true; }
+      }
+      if (isSlice) {
         auto tup = std::make_unique<ast::TupleLiteral>();
         // lower
         tup->elements.emplace_back(first ? std::move(first) : std::make_unique<ast::NoneLiteral>());
-        get(); // ':'
+        if (peek().kind == TK::Colon) get(); // ':'
         // upper
         if (peek().kind != TK::Colon && peek().kind != TK::RBracket) { tup->elements.emplace_back(parseExpr()); }
         else { tup->elements.emplace_back(std::make_unique<ast::NoneLiteral>()); }
@@ -717,8 +727,21 @@ std::unique_ptr<ast::Expr> Parser::parsePostfix(std::unique_ptr<ast::Expr> base)
         expect(TK::RBracket, "]'");
         base = std::make_unique<ast::Subscript>(std::move(base), std::move(tup));
       } else {
-        expect(TK::RBracket, "]'");
-        base = std::make_unique<ast::Subscript>(std::move(base), std::move(first));
+        // multi-index a[b, c] -> TupleLiteral slice
+        if (peek().kind == TK::Comma) {
+          auto tup = std::make_unique<ast::TupleLiteral>();
+          if (first) tup->elements.emplace_back(std::move(first));
+          while (peek().kind == TK::Comma) {
+            get();
+            if (peek().kind == TK::RBracket) break;
+            tup->elements.emplace_back(parseExpr());
+          }
+          expect(TK::RBracket, "]'");
+          base = std::make_unique<ast::Subscript>(std::move(base), std::move(tup));
+        } else {
+          expect(TK::RBracket, "]'");
+          base = std::make_unique<ast::Subscript>(std::move(base), std::move(first));
+        }
       }
       continue;
     }
