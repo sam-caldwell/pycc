@@ -46,3 +46,8 @@ target_compile_definitions(pycc_core PRIVATE PYCC_RUNTIME_LIB_PATH="$<TARGET_FIL
 add_executable(bench_runtime ${CMAKE_SOURCE_DIR}/tools/bench_gc.cpp)
 target_link_libraries(bench_runtime PRIVATE pycc_runtime)
 target_include_directories(bench_runtime PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+# IR dump utility for debugging Codegen::generateIR
+add_executable(ir_dump ${CMAKE_SOURCE_DIR}/tools/ir_dump.cpp)
+target_link_libraries(ir_dump PRIVATE pycc_core)
+target_include_directories(ir_dump PRIVATE ${CMAKE_SOURCE_DIR}/include)

@@ -73,7 +73,15 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     mod = parser.parseModule();
     metrics.stop("Parse");
   } catch (const std::exception& ex) {
-    std::cerr << "pycc: parse error: " << ex.what() << "\n";
+    sema::Diagnostic pd;
+    pd.file = input;
+    pd.line = 1; pd.col = 1;
+    pd.message = std::string("parse error: ") + ex.what();
+    bool color = false;
+    if (opts.color == cli::ColorMode::Always) { color = true; }
+    else if (opts.color == cli::ColorMode::Never) { color = false; }
+    else { constexpr int kStderrFd = 2; color = (isatty(kStderrFd) != 0) || use_env_color(); }
+    print_error(pd, color, opts.diagContext);
     return 1;
   }
 

@@ -180,10 +180,15 @@ Token Lexer::scanOne(State& state) {
       endPos = p + 3; // keep parser progressing; actual content spans multiple lines
     }
     Token tok = makeTok(bytesPrefix ? TokenKind::Bytes : TokenKind::String, start, endPos);
-    // Store placeholder lexeme: prefix + quotes + ... + quotes
-    const std::string pref = line.substr(start, p - start);
-    const std::string q = triple ? std::string(3, line[p]) : std::string(1, line[p]);
-    tok.text = pref + q + (triple?"...":"") + q;
+    if (!triple) {
+      // For single-line strings, keep the real lexeme text (including quotes) for unquoting later
+      tok.text = line.substr(start, endPos - start);
+    } else {
+      // Triple-quoted placeholder to avoid multi-line scan here
+      const std::string pref = line.substr(start, p - start);
+      const std::string q = std::string(3, line[p]);
+      tok.text = pref + q + "..." + q;
+    }
     idx = endPos;
     return tok;
   };

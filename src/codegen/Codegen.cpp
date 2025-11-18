@@ -413,15 +413,11 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         };
         const uint64_t h = hash(s.value);
         std::ostringstream gname; gname << ".str_" << std::hex << h;
-        const size_t n = s.value.size() + 1; // include NUL
+        // length is available from global table; compute GEP to start
         std::ostringstream reg; reg << "%t" << temp++;
         // Allow toggling between opaque-pointer and typed-pointer GEP styles
-#ifdef PYCC_USE_OPAQUE_PTR_GEP
-        ir << "  " << reg.str() << " = getelementptr inbounds ([" << n << " x i8], ptr @" << gname.str() << ", i64 0, i64 0)\n";
-#else
-        // Typed-pointer form for broad clang compatibility
-        ir << "  " << reg.str() << " = getelementptr inbounds [" << n << " x i8], [" << n << " x i8]* @" << gname.str() << ", i64 0, i64 0\n";
-#endif
+        // Use opaque-pointer friendly GEP form
+        ir << "  " << reg.str() << " = getelementptr inbounds i8, ptr @" << gname.str() << ", i64 0\n";
         out = Value{reg.str(), ValKind::Ptr};
       }
       void visit(const ast::ObjectLiteral& obj) override { // NOLINT(readability-function-cognitive-complexity)
@@ -438,10 +434,16 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           if (v.k == ValKind::Ptr) {
             valPtr = v.s;
           } else if (v.k == ValKind::I32) {
-            std::ostringstream w, w2; w << "%t" << temp++; w2 << "%t" << temp++;
-            ir << "  " << w.str() << " = sext i32 " << v.s << " to i64\n";
-            ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")\n";
-            valPtr = w2.str();
+            if (!v.s.empty() && v.s[0] != '%') {
+              std::ostringstream w2; w2 << "%t" << temp++;
+              ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << v.s << ")\n";
+              valPtr = w2.str();
+            } else {
+              std::ostringstream w, w2; w << "%t" << temp++; w2 << "%t" << temp++;
+              ir << "  " << w.str() << " = sext i32 " << v.s << " to i64\n";
+              ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")\n";
+              valPtr = w2.str();
+            }
           } else if (v.k == ValKind::F64) {
             std::ostringstream w; w << "%t" << temp++;
             ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << v.s << ")\n";
@@ -475,10 +477,16 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           if (v.k == ValKind::Ptr) {
             elemPtr = v.s;
           } else if (v.k == ValKind::I32) {
-            std::ostringstream w, w2; w << "%t" << temp++; w2 << "%t" << temp++;
-            ir << "  " << w.str() << " = sext i32 " << v.s << " to i64\n";
-            ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")\n";
-            elemPtr = w2.str();
+            if (!v.s.empty() && v.s[0] != '%') {
+              std::ostringstream w2; w2 << "%t" << temp++;
+              ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << v.s << ")\n";
+              elemPtr = w2.str();
+            } else {
+              std::ostringstream w, w2; w << "%t" << temp++; w2 << "%t" << temp++;
+              ir << "  " << w.str() << " = sext i32 " << v.s << " to i64\n";
+              ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")\n";
+              elemPtr = w2.str();
+            }
           } else if (v.k == ValKind::F64) {
             std::ostringstream w; w << "%t" << temp++;
             ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << v.s << ")\n";
@@ -532,6 +540,11 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           if (arg0->kind == ast::NodeKind::StringLiteral) {
             const auto* strLit = dynamic_cast<const ast::StringLiteral*>(arg0);
             out = Value{std::to_string(static_cast<int>(strLit->value.size())), ValKind::I32};
+            return;
+          }
+          if (arg0->kind == ast::NodeKind::BytesLiteral) {
+            const auto* byLit = dynamic_cast<const ast::BytesLiteral*>(arg0);
+            out = Value{std::to_string(static_cast<int>(byLit->value.size())), ValKind::I32};
             return;
           }
           if (arg0->kind == ast::NodeKind::Call) {
@@ -927,6 +940,25 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
 
       void visit(const ast::ReturnStmt& r) override {
+        // Fast path: constant folding for len of literal aggregates/strings in returns
+        if (fn.returnType == ast::TypeKind::Int && r.value && r.value->kind == ast::NodeKind::Call) {
+          const auto* c = dynamic_cast<const ast::Call*>(r.value.get());
+          if (c && c->callee && c->callee->kind == ast::NodeKind::Name && c->args.size() == 1) {
+            const auto* nm = dynamic_cast<const ast::Name*>(c->callee.get());
+            if (nm && nm->id == "len") {
+              const auto* a0 = c->args[0].get();
+              int retConst = -1;
+              if (a0->kind == ast::NodeKind::TupleLiteral) {
+                retConst = static_cast<int>(static_cast<const ast::TupleLiteral*>(a0)->elements.size());
+              } else if (a0->kind == ast::NodeKind::ListLiteral) {
+                retConst = static_cast<int>(static_cast<const ast::ListLiteral*>(a0)->elements.size());
+              } else if (a0->kind == ast::NodeKind::StringLiteral) {
+                retConst = static_cast<int>(static_cast<const ast::StringLiteral*>(a0)->value.size());
+              }
+              if (retConst >= 0) { ir << "  ret i32 " << retConst << "\n"; returned = true; return; }
+            }
+          }
+        }
         if (fn.returnType == ast::TypeKind::Tuple) {
           if (!r.value || r.value->kind != ast::NodeKind::TupleLiteral) throw std::runtime_error("tuple return requires tuple literal");
           const auto* tup = dynamic_cast<const ast::TupleLiteral*>(r.value.get());

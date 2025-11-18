@@ -471,7 +471,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         if (assignStmt.value) { assignStmt.value->accept(valTyper); } else { ok = false; return; }
         if (!valTyper.ok) { ok = false; return; }
         const Type typeOut = valTyper.out;
-        const bool allowed = typeIsInt(typeOut) || typeIsBool(typeOut) || typeIsFloat(typeOut) || typeIsStr(typeOut) || typeOut == Type::List;
+        const bool allowed = typeIsInt(typeOut) || typeIsBool(typeOut) || typeIsFloat(typeOut) || typeIsStr(typeOut) || typeOut == Type::List || typeOut == Type::NoneType;
         if (!allowed) {
           addDiag(diags, "only int/bool/float/str/list variables supported", &assignStmt); ok = false; return;
         }
