@@ -570,7 +570,7 @@ std::unique_ptr<ast::Expr> Parser::parseMultiplicative() {
     if (!(kind == TK::Star || kind == TK::Slash || kind == TK::Percent || kind == TK::SlashSlash || kind == TK::StarStar)) { break; }
     auto opTok = get();
     auto rhs = parsePostfix(parseUnary());
-    ast::BinaryOperator binOp = mulOpFor(opTok.kind);
+    const ast::BinaryOperator binOp = mulOpFor(opTok.kind);
     auto node = std::make_unique<ast::Binary>(binOp, std::move(lhs), std::move(rhs));
     node->line = opTok.line; node->col = opTok.col; node->file = opTok.file;
     lhs = std::move(node);
@@ -657,7 +657,7 @@ std::unique_ptr<ast::Expr> Parser::parsePrimary() {
         if (content[i] == '{') {
           if (i+1 < n && content[i+1] == '{') { lit.push_back('{'); i += 2; continue; }
           // parse expression segment
-          size_t j = i + 1; int depth = 1; size_t exprEnd = std::string::npos; size_t pos = j; size_t topCut = std::string::npos;
+          size_t j = i + 1; int depth = 1; size_t exprEnd = std::string::npos; const size_t pos = j; size_t topCut = std::string::npos;
           while (j < n && depth > 0) {
             if (content[j] == '{') { ++depth; }
             else if (content[j] == '}') { --depth; if (depth == 0) break; }
@@ -666,7 +666,7 @@ std::unique_ptr<ast::Expr> Parser::parsePrimary() {
           }
           if (j >= n || depth != 0) { throw std::runtime_error("Parse error: unclosed f-string expression"); }
           exprEnd = (topCut != std::string::npos ? topCut : j);
-          std::string exprText = content.substr(pos, exprEnd - pos);
+          const std::string exprText = content.substr(pos, exprEnd - pos);
           flush_lit();
           ast::FStringSegment seg; seg.isExpr = true; seg.expr = parseExprFromString(exprText, "<fexpr>"); fs->parts.push_back(std::move(seg));
           i = j + 1; // skip closing '}'
@@ -779,13 +779,13 @@ std::string Parser::unquoteString(std::string text) {
   if (i+2 < text.size() && (text[i]=='\'' || text[i]=='"') && text[i]==text[i+1] && text[i]==text[i+2]) {
     // triple quoted
     const char q = text[i];
-    size_t start = i+3; size_t end = text.size();
+    const size_t start = i+3; size_t end = text.size();
     if (end >= 3 && text[end-1]==q && text[end-2]==q && text[end-3]==q) end -= 3; // trim
     if (end >= start) return text.substr(start, end-start);
     return {};
   }
   if (text[i]=='\'' || text[i]=='"') {
-    const char q=text[i]; size_t start=i+1; size_t end=text.size(); if (end>i+1 && text[end-1]==q) --end; if (end>=start) return text.substr(start, end-start);
+    const char q=text[i]; const size_t start=i+1; size_t end=text.size(); if (end>i+1 && text[end-1]==q) --end; if (end>=start) return text.substr(start, end-start);
   }
   return text;
 }

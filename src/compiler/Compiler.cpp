@@ -14,6 +14,7 @@
 #include "optimizer/AlgebraicSimplify.h"
 #include "optimizer/ConstantFold.h"
 #include "optimizer/DCE.h"
+#include "optimizer/SimplifyCFG.h"
 #include "optimizer/Optimizer.h"
 #include "parser/Parser.h"
 #include "sema/Sema.h"
@@ -143,6 +144,15 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     metrics.setOptimizerStat("algebraic", static_cast<uint64_t>(rewrites));
     for (const auto& [key, count] : algebraic.stats()) { metrics.incOptimizerBreakdown("algebraic", key, count); }
     metrics.stop("Algebraic");
+  }
+
+  if (opts.optCFG) {
+    metrics.start("CFG");
+    opt::SimplifyCFG cfg; // NOLINT(misc-const-correctness)
+    auto pruned = cfg.run(*mod);
+    metrics.setOptimizerStat("cfg_pruned", static_cast<uint64_t>(pruned));
+    for (const auto& [key, count] : cfg.stats()) { metrics.incOptimizerBreakdown("cfg", key, count); }
+    metrics.stop("CFG");
   }
 
   if (opts.optDCE) {

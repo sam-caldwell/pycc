@@ -23,6 +23,7 @@ namespace pycc::cli {
         bool optConstFold{false};     // --opt-const-fold
         bool optAlgebraic{false};     // --opt-algebraic
         bool optDCE{false};           // --opt-dce
+        bool optCFG{false};           // --opt-cfg
         std::string outputFile{"a.out"};
         std::vector<std::string> inputs{};
         ColorMode color{ColorMode::Auto};

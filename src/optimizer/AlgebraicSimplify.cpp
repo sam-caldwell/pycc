@@ -39,6 +39,41 @@ static inline bool isOne(const Expr* expr) {
   return false;
 }
 
+static inline const BoolLiteral* asBool(const Expr* e) {
+  return (e && e->kind == NodeKind::BoolLiteral) ? static_cast<const BoolLiteral*>(e) : nullptr;
+}
+static inline const IntLiteral* asInt(const Expr* e) {
+  return (e && e->kind == NodeKind::IntLiteral) ? static_cast<const IntLiteral*>(e) : nullptr;
+}
+
+// Shallow structural equality for a small subset of expressions where
+// canonical keys may not be available yet: names and literals.
+static bool shallowEqualSimple(const Expr* a, const Expr* b) {
+  if (a == nullptr || b == nullptr) { return false; }
+  if (a->kind != b->kind) { return false; }
+  switch (a->kind) {
+    case NodeKind::Name: {
+      const auto* na = static_cast<const Name*>(a);
+      const auto* nb = static_cast<const Name*>(b);
+      return na->id == nb->id;
+    }
+    case NodeKind::IntLiteral: {
+      return static_cast<const IntLiteral*>(a)->value == static_cast<const IntLiteral*>(b)->value;
+    }
+    case NodeKind::FloatLiteral: {
+      return static_cast<const FloatLiteral*>(a)->value == static_cast<const FloatLiteral*>(b)->value;
+    }
+    case NodeKind::BoolLiteral: {
+      return static_cast<const BoolLiteral*>(a)->value == static_cast<const BoolLiteral*>(b)->value;
+    }
+    default: break;
+  }
+  // Fall back to canonical keys when both present
+  const auto& ca = a->canonical();
+  const auto& cb = b->canonical();
+  return ca && cb && *ca == *cb;
+}
+
 namespace {
 
 struct SimplifyVisitor : public ast::VisitorBase {
@@ -138,6 +173,59 @@ struct SimplifyVisitor : public ast::VisitorBase {
           }
         }
       }
+      // Boolean algebra (requires literal on either side)
+      if (bin->op == BinaryOperator::And || bin->op == BinaryOperator::Or) {
+        const BoolLiteral* lb = asBool(left);
+        const BoolLiteral* rb = asBool(right);
+        if (bin->op == BinaryOperator::And) {
+          if (lb) { replacement = lb->value ? std::move(bin->rhs) : std::make_unique<BoolLiteral>(false); }
+          else if (rb) { replacement = rb->value ? std::move(bin->lhs) : std::make_unique<BoolLiteral>(false); }
+        } else { // Or
+          if (lb) { replacement = lb->value ? std::make_unique<BoolLiteral>(true) : std::move(bin->rhs); }
+          else if (rb) { replacement = rb->value ? std::make_unique<BoolLiteral>(true) : std::move(bin->lhs); }
+        }
+        if (replacement) { ++changes; stats["algebraic_bool"]++; slot = exprSlot; *slot = std::move(replacement); return; }
+      }
+      // Bitwise identities for ints
+      if (bin->op == BinaryOperator::BitAnd || bin->op == BinaryOperator::BitOr || bin->op == BinaryOperator::BitXor) {
+        const IntLiteral* li = asInt(left);
+        const IntLiteral* ri = asInt(right);
+        // x & 0 -> 0 ; 0 & x -> 0
+        if (bin->op == BinaryOperator::BitAnd) {
+          if ((li && li->value == 0) || (ri && ri->value == 0)) {
+            replacement = std::make_unique<IntLiteral>(0);
+          } else if ((li && li->value == -1)) {
+            replacement = std::move(bin->rhs);
+          } else if ((ri && ri->value == -1)) {
+            replacement = std::move(bin->lhs);
+          } else if (shallowEqualSimple(left, right)) {
+            // x & x -> x
+            replacement = std::move(bin->lhs);
+          }
+        }
+        // x | 0 -> x ; 0 | x -> x ; x | x -> x
+        else if (bin->op == BinaryOperator::BitOr) {
+          if ((li && li->value == 0)) { replacement = std::move(bin->rhs); }
+          else if ((ri && ri->value == 0)) { replacement = std::move(bin->lhs); }
+          else if (shallowEqualSimple(left, right)) { replacement = std::move(bin->lhs); }
+        }
+        // x ^ 0 -> x ; 0 ^ x -> x ; x ^ x -> 0
+        else if (bin->op == BinaryOperator::BitXor) {
+          if ((li && li->value == 0)) { replacement = std::move(bin->rhs); }
+          else if ((ri && ri->value == 0)) { replacement = std::move(bin->lhs); }
+          else if (shallowEqualSimple(left, right)) { replacement = std::make_unique<IntLiteral>(0); }
+        }
+        if (replacement) { ++changes; stats["algebraic_bitwise"]++; slot = exprSlot; *slot = std::move(replacement); return; }
+      }
+      // Shifts by zero: x << 0 -> x; x >> 0 -> x
+      if (bin->op == BinaryOperator::LShift || bin->op == BinaryOperator::RShift) {
+        const IntLiteral* ri = asInt(right);
+        if (ri && ri->value == 0) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_shift"]++; slot = exprSlot; *slot = std::move(replacement); return; }
+      }
+      // Exponentiation identity: x ** 1 -> x (safe for int/float)
+      if (bin->op == BinaryOperator::Pow) {
+        if (isOne(right)) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_pow"]++; slot = exprSlot; *slot = std::move(replacement); return; }
+      }
     }
   }
 
@@ -149,6 +237,13 @@ struct SimplifyVisitor : public ast::VisitorBase {
       auto* inner = static_cast<Unary*>(unaryNode->operand.get());
       if (inner->op == UnaryOperator::Neg && inner->operand) {
         slot = exprSlot; *slot = std::move(inner->operand); ++changes; stats["double_neg"]++;
+        return;
+      }
+    }
+    if (unaryNode->op == UnaryOperator::Not && unaryNode->operand && unaryNode->operand->kind == NodeKind::UnaryExpr) {
+      auto* inner = static_cast<Unary*>(unaryNode->operand.get());
+      if (inner->op == UnaryOperator::Not && inner->operand) {
+        slot = exprSlot; *slot = std::move(inner->operand); ++changes; stats["double_not"]++;
         return;
       }
     }

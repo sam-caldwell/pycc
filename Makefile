@@ -24,8 +24,11 @@ build:
 	@$(CMAKE) --build $(OUTDIR) --parallel $(JOBS)
 
 test:
+	@# Ensure the main build tree exists and is configured
+	@CC=$(CC) CXX=$(CXX) CMAKE_C_COMPILER=$(CC) CMAKE_CXX_COMPILER=$(CXX) $(CMAKE) -S . -B $(OUTDIR) -G Ninja
 	@$(CMAKE) --build $(OUTDIR) --parallel $(JOBS)
-	@ctest --test-dir $(OUTDIR) --output-on-failure
+	@# Run tests with progress, verbose streaming, and a hard 300s timeout
+	@ctest --test-dir $(OUTDIR) --output-on-failure --progress -VV --timeout 300
 
 clean:
 	@rm -rf build build-lint cmake-build-*

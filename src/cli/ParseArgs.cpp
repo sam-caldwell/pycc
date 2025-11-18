@@ -50,6 +50,7 @@ static bool applySimpleBoolFlags(std::string_view arg, Options& out) {
   if (isFlag(arg, "--opt-const-fold")) { out.optConstFold = true; return true; }
   if (isFlag(arg, "--opt-algebraic")) { out.optAlgebraic = true; return true; }
   if (isFlag(arg, "--opt-dce")) { out.optDCE = true; return true; }
+  if (isFlag(arg, "--opt-cfg")) { out.optCFG = true; return true; }
   if (isFlag(arg, "--log-lexer")) { out.logLexer = true; return true; }
   if (isFlag(arg, "--log-ast")) { out.logAst = true; return true; }
   if (isFlag(arg, "--log-codegen")) { out.logCodegen = true; return true; }

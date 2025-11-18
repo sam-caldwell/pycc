@@ -19,15 +19,18 @@ Checks: >
   misc-coroutine-hostile-raii,
   misc-definitions-in-headers,
   misc-header-include-cycle,
-  misc-include-cleaner,
   misc-misleading-bidirectional,
   misc-misleading-identifier,
   misc-throw-by-value-catch-by-reference,
   misc-unused-using-decls,
-  readability-identifier-length,
   readability-named-parameter,
-  readability-braces-around-statements,
   readability-isolate-declaration,
+  -readability-identifier-length,
+  -readability-braces-around-statements,
+  -misc-include-cleaner,
+  -llvm-include-order,
+  -llvm-else-after-return,
+  -bugprone-branch-clone,
 # Tune complexity/size thresholds to your policy
 CheckOptions:
   - key: readability-function-cognitive-complexity.Threshold

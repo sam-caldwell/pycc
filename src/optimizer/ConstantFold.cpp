@@ -85,19 +85,26 @@ struct FoldVisitor : public ast::VisitorBase {
   void visit(const Unary& unary) override {
     (void)unary;
     auto* unaryNode = static_cast<Unary*>(slot->get());
+    // First rewrite the operand to expose literals; keep a handle to this node's slot
+    auto* exprSlot = slot;
+    rewrite(unaryNode->operand);
     if (unaryNode->op == UnaryOperator::Neg && unaryNode->operand) {
       if (isInt(unaryNode->operand.get())) {
         auto* lit = static_cast<IntLiteral*>(unaryNode->operand.get());
         auto rep = std::make_unique<IntLiteral>(-lit->value);
-        assignLoc(*rep, *unaryNode); *slot = std::move(rep); ++changes; bumpUnary(); return;
+        assignLoc(*rep, *unaryNode); slot = exprSlot; *slot = std::move(rep); ++changes; bumpUnary(); return;
       }
       if (isFloat(unaryNode->operand.get())) {
         auto* lit = static_cast<FloatLiteral*>(unaryNode->operand.get());
         auto rep = std::make_unique<FloatLiteral>(-lit->value);
-        assignLoc(*rep, *unaryNode); *slot = std::move(rep); ++changes; bumpUnary(); return;
+        assignLoc(*rep, *unaryNode); slot = exprSlot; *slot = std::move(rep); ++changes; bumpUnary(); return;
       }
     }
-    rewrite(unaryNode->operand);
+    if (unaryNode->op == UnaryOperator::Not && unaryNode->operand && unaryNode->operand->kind == NodeKind::BoolLiteral) {
+      auto* bl = static_cast<BoolLiteral*>(unaryNode->operand.get());
+      auto rep = std::make_unique<BoolLiteral>(!bl->value);
+      assignLoc(*rep, *unaryNode); slot = exprSlot; *slot = std::move(rep); ++changes; bumpUnary(); return;
+    }
   }
 
   bool foldIntArith(Binary& bin, long long lhs, long long rhs) {
@@ -108,6 +115,14 @@ struct FoldVisitor : public ast::VisitorBase {
       case BinaryOperator::Mul: res = lhs * rhs; break;
       case BinaryOperator::Div: if (rhs == 0) { return false; } res = lhs / rhs; break;
       case BinaryOperator::Mod: if (rhs == 0) { return false; } res = lhs % rhs; break;
+      case BinaryOperator::FloorDiv: if (rhs == 0) { return false; } res = lhs / rhs; break;
+      case BinaryOperator::Pow: {
+        if (rhs < 0) { return false; }
+        long long acc = 1;
+        for (long long i = 0; i < rhs; ++i) { acc *= lhs; }
+        res = acc;
+        break;
+      }
       default: return false;
     }
     bumpBinInt();
@@ -134,6 +149,12 @@ struct FoldVisitor : public ast::VisitorBase {
       case BinaryOperator::Sub: res = lhs - rhs; break;
       case BinaryOperator::Mul: res = lhs * rhs; break;
       case BinaryOperator::Div: if (rhs == 0.0) { return false; } res = lhs / rhs; break;
+      case BinaryOperator::Pow: {
+        if (rhs < 0.0) { return false; }
+        double acc = 1.0;
+        for (int i = 0; i < static_cast<int>(rhs); ++i) { acc *= lhs; }
+        res = acc; break;
+      }
       default: return false;
     }
     bumpBinFloat();
@@ -170,13 +191,43 @@ struct FoldVisitor : public ast::VisitorBase {
       if (foldFloatArith(bin, lhs, rhs)) { return; }
       (void)foldFloatCmp(bin, lhs, rhs);
     }
+    // Bitwise and shifts for int literals
+    if (left && right && left->kind == NodeKind::IntLiteral && right->kind == NodeKind::IntLiteral) {
+      const auto lhs = static_cast<IntLiteral*>(left)->value;
+      const auto rhs = static_cast<IntLiteral*>(right)->value;
+      long long res = 0; bool ok = true;
+      switch (bin.op) {
+        case BinaryOperator::BitAnd: res = lhs & rhs; break;
+        case BinaryOperator::BitOr: res = lhs | rhs; break;
+        case BinaryOperator::BitXor: res = lhs ^ rhs; break;
+        case BinaryOperator::LShift: res = lhs << rhs; break;
+        case BinaryOperator::RShift: res = lhs >> rhs; break;
+        default: ok = false; break;
+      }
+      if (ok) {
+        auto rep = std::make_unique<IntLiteral>(res);
+        assignLoc(*rep, bin); *slot = std::move(rep); ++changes; bumpBinInt(); return;
+      }
+    }
+    // Boolean logic when both literals
+    if (left && right && left->kind == NodeKind::BoolLiteral && right->kind == NodeKind::BoolLiteral) {
+      const bool lb = static_cast<BoolLiteral*>(left)->value;
+      const bool rb = static_cast<BoolLiteral*>(right)->value;
+      std::unique_ptr<Expr> rep;
+      if (bin.op == BinaryOperator::And) rep = std::make_unique<BoolLiteral>(lb && rb);
+      else if (bin.op == BinaryOperator::Or) rep = std::make_unique<BoolLiteral>(lb || rb);
+      if (rep) { assignLoc(*rep, bin); *slot = std::move(rep); ++changes; bumpUnary(); return; }
+    }
   }
 
   void visit(const Binary& binary) override {
     (void)binary;
     auto* bin = static_cast<Binary*>(slot->get());
+    // Save current slot so replacements affect this node, not the last child visited
+    auto* exprSlot = slot;
     if (bin->lhs) { rewrite(bin->lhs); }
     if (bin->rhs) { rewrite(bin->rhs); }
+    slot = exprSlot;
     tryFoldBinary(*bin);
   }
 
@@ -224,11 +275,17 @@ struct FoldVisitor : public ast::VisitorBase {
 } // namespace
 
 size_t ConstantFold::run(Module& module) {
-  size_t changes = 0;
+  size_t totalChanges = 0;
   stats_.clear();
-  FoldVisitor vis(stats_, changes);
-  for (auto& func : module.functions) { vis.walkBlock(func->body); }
-  return changes;
+  // Iterate to a fixed point so that newly exposed literals are folded
+  for (int iter = 0; iter < 4; ++iter) { // small hard cap to avoid infinite loops
+    size_t iterationChanges = 0;
+    FoldVisitor vis(stats_, iterationChanges);
+    for (auto& func : module.functions) { vis.walkBlock(func->body); }
+    totalChanges += iterationChanges;
+    if (iterationChanges == 0) { break; }
+  }
+  return totalChanges;
 }
 
 } // namespace pycc::opt

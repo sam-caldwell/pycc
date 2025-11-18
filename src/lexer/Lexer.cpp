@@ -169,7 +169,7 @@ Token Lexer::scanOne(State& state) {
     size_t p = start;
     // gather optional second prefix (f/r/b) already accounted outside; if prefix char then move one
     if ((first=='b'||first=='B'||first=='f'||first=='F'||first=='r'||first=='R') && p+1 < line.size()) { ++p; }
-    char quote = line[p]; bool triple = false;
+    const char quote = line[p]; bool triple = false;
     if (p+2 < line.size() && line[p]==line[p+1] && line[p]==line[p+2] && (line[p]=='"'||line[p]=='\'')) { triple = true; }
     // advance idx conservatively to end of current line token extent
     size_t endPos;
@@ -181,8 +181,8 @@ Token Lexer::scanOne(State& state) {
     }
     Token tok = makeTok(bytesPrefix ? TokenKind::Bytes : TokenKind::String, start, endPos);
     // Store placeholder lexeme: prefix + quotes + ... + quotes
-    std::string pref = line.substr(start, p - start);
-    std::string q = triple ? std::string(3, line[p]) : std::string(1, line[p]);
+    const std::string pref = line.substr(start, p - start);
+    const std::string q = triple ? std::string(3, line[p]) : std::string(1, line[p]);
     tok.text = pref + q + (triple?"...":"") + q;
     idx = endPos;
     return tok;
