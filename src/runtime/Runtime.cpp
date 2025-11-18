@@ -16,6 +16,8 @@
 #include <pthread.h>
 #include <thread>
 #include <vector>
+#include <cstdio>
+#include <cstdlib>
 
 namespace pycc::rt {
 
@@ -60,6 +62,10 @@ static std::condition_variable g_bg_cv; // NOLINT(cppcoreguidelines-avoid-non-co
 static std::mutex g_bg_mu; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 static std::thread g_bg_thread; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 static bool g_bg_started = false; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+// Synchronous collection coordination (for gc_collect when background is enabled)
+static std::mutex g_gc_done_mu; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static std::condition_variable g_gc_done_cv; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static std::atomic<uint64_t> g_gc_completed_count{0}; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 // Reserved for future phase tracking in background GC
 enum class GCPhase { Idle, Mark, Sweep };
@@ -76,9 +82,11 @@ static std::atomic<uint64_t> g_last_time_ms{0}; // NOLINT(cppcoreguidelines-avoi
 static double g_ewma_alloc_rate = 0.0; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables) bytes/ms
 static double g_ewma_pressure = 0.0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 static std::atomic<int> g_barrier_mode{0}; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables) 0=incremental-update, 1=SATB
+static bool g_debug = (std::getenv("PYCC_RT_DEBUG") != nullptr); // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 // Forward decl for adaptive controller
 static void adapt_controller();
+static void start_bg_thread_if_needed();
 
 // Request background GC if pressure is above the threshold.
 // Requires caller to hold g_mu; avoids synchronous collection during allocation
@@ -86,6 +94,7 @@ static void adapt_controller();
 static inline void maybe_request_bg_gc_unlocked() {
   if (g_stats.bytesLive <= g_threshold) { return; }
   if (!g_bg_enabled.load(std::memory_order_relaxed)) { return; }
+  if (!g_bg_started) { start_bg_thread_if_needed(); }
   g_bg_requested.store(true, std::memory_order_relaxed);
   const std::lock_guard<std::mutex> nlk(g_bg_mu);
   g_bg_cv.notify_one();
@@ -111,6 +120,7 @@ static void* alloc_raw(std::size_t size, TypeTag tag) {
 static void free_obj(ObjectHeader* header) {
   g_stats.numFreed++;
   g_stats.bytesLive -= header->size;
+  if (g_debug) { std::fprintf(stderr, "[runtime] free_obj tag=%u size=%zu\n", header->tag, header->size); }
   ::operator delete(header);
 }
 
@@ -297,13 +307,21 @@ static void sweep() {
 }
 
 void gc_collect() {
-  const std::lock_guard<std::mutex> lock(g_mu);
+  // If background GC is enabled, request a cycle and wait until one completes
   if (g_bg_enabled.load(std::memory_order_relaxed)) {
-    g_bg_requested.store(true, std::memory_order_relaxed);
-    const std::lock_guard<std::mutex> lock2(g_bg_mu);
-    g_bg_cv.notify_one();
-    return; // quick return; background will service GC
+    if (!g_bg_started) { start_bg_thread_if_needed(); }
+    const uint64_t prev = g_gc_completed_count.load(std::memory_order_acquire);
+    {
+      const std::lock_guard<std::mutex> qlk(g_bg_mu);
+      g_bg_requested.store(true, std::memory_order_relaxed);
+      g_bg_cv.notify_one();
+    }
+    std::unique_lock<std::mutex> lk(g_gc_done_mu);
+    g_gc_done_cv.wait(lk, [&]{ return g_gc_completed_count.load(std::memory_order_acquire) > prev; });
+    return;
   }
+  // Synchronous collection path
+  const std::lock_guard<std::mutex> lock(g_mu);
   g_stats.numCollections++;
   mark_from_roots();
   if (g_conservative) { mark_from_stack(); }
@@ -387,6 +405,12 @@ static void start_bg_thread_if_needed() {
       }
       adapt_controller();
       // Done sweep
+      // Notify any synchronous waiters that a GC completed
+      {
+        std::lock_guard<std::mutex> lk(g_gc_done_mu);
+        g_gc_completed_count.fetch_add(1, std::memory_order_release);
+      }
+      g_gc_done_cv.notify_all();
     }
   });
   g_bg_thread.detach();
@@ -477,6 +501,7 @@ void* string_new(const char* data, std::size_t len) {
   const std::lock_guard<std::mutex> lock(g_mu);
   const std::size_t payloadSize = sizeof(StringPayload) + len + 1; // include NUL
   auto* payloadBytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::String));
+  if (g_debug) { std::fprintf(stderr, "[runtime] string_new(len=%zu) g_head=%p\n", len, static_cast<void*>(g_head)); }
   void* payloadVoid = static_cast<void*>(payloadBytes);
   auto* plen = static_cast<std::size_t*>(payloadVoid);
   *plen = len;
@@ -541,8 +566,7 @@ bool box_bool_value(void* obj) {
 }
 
 // Lists
-void* list_new(std::size_t capacity) {
-  const std::lock_guard<std::mutex> lock(g_mu);
+static void* list_new_locked(std::size_t capacity) {
   const std::size_t payloadSize = (sizeof(std::size_t) * 2) + (capacity * sizeof(void*)); // len, cap, items[]
   auto* bytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::List));
   auto* meta = reinterpret_cast<std::size_t*>(bytes); // NOLINT
@@ -553,12 +577,17 @@ void* list_new(std::size_t capacity) {
   return bytes;
 }
 
+void* list_new(std::size_t capacity) {
+  const std::lock_guard<std::mutex> lock(g_mu);
+  return list_new_locked(capacity);
+}
+
 void list_push_slot(void** list_slot, void* elem) {
   if (list_slot == nullptr) { return; }
   const std::lock_guard<std::mutex> lock(g_mu);
   auto* list = *list_slot;
   if (list == nullptr) {
-    list = list_new(kDefaultListCapacity);
+    list = list_new_locked(kDefaultListCapacity);
     // update slot with barrier
     gc_pre_barrier(list_slot);
     gc_write_barrier(list_slot, list);

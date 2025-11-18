@@ -28,7 +28,7 @@ test:
 	@CC=$(CC) CXX=$(CXX) CMAKE_C_COMPILER=$(CC) CMAKE_CXX_COMPILER=$(CXX) $(CMAKE) -S . -B $(OUTDIR) -G Ninja
 	@$(CMAKE) --build $(OUTDIR) --parallel $(JOBS)
 	@# Run tests with progress, verbose streaming, and a hard 300s timeout
-	@ctest --test-dir $(OUTDIR) --output-on-failure --progress -VV --timeout 300
+	@ctest --test-dir $(OUTDIR) --output-on-failure --progress -VV --timeout 300 --stop-on-failure
 
 clean:
 	@rm -rf build build-lint cmake-build-*

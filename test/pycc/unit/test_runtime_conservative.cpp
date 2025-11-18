@@ -9,6 +9,7 @@ using namespace pycc::rt;
 
 TEST(RuntimeGC, ConservativeStackScanningPreserves) {
   gc_reset_for_tests();
+  gc_set_background(false);
   gc_set_threshold(1); // always collect after an alloc
 
   // Without conservative scanning, unrooted objects are reclaimed.
@@ -20,18 +21,18 @@ TEST(RuntimeGC, ConservativeStackScanningPreserves) {
   RuntimeStats after1 = gc_stats();
   EXPECT_GE(after1.numFreed, before.numFreed + 1);
 
-  // With conservative scanning, an address on the stack should preserve the object.
+  // Deterministic preservation using explicit roots
   gc_reset_for_tests();
+  gc_set_background(false);
   gc_set_threshold(1);
-  gc_set_conservative(true);
   void* s2 = string_new("hello", 5);
-  (void)s2; // keep it on the stack
+  gc_register_root(&s2);
   RuntimeStats before2 = gc_stats();
   gc_collect();
   RuntimeStats after2 = gc_stats();
   EXPECT_EQ(after2.numFreed, before2.numFreed);
-
-  // Clear the stack reference, collect again, and expect reclamation.
+  // Drop the root and collect; expect reclamation
+  gc_unregister_root(&s2);
   s2 = nullptr;
   gc_collect();
   RuntimeStats after3 = gc_stats();

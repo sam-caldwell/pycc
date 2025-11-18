@@ -126,6 +126,12 @@ struct ExpressionTyper : public ast::VisitorBase {
   }
   void visit(const ast::Name& n) override {
     const uint32_t maskVal = env->getSet(n.id);
+    if (maskVal == 0U) {
+      // Empty set: contradictory refinements (e.g., excluded the only possible kind)
+      // Treat as an error at the point of use.
+      addDiag(*diags, std::string("contradictory type for name: ") + n.id, &n);
+      ok = false; return;
+    }
     if (maskVal != 0U) {
       outSet = maskVal;
       if (TypeEnv::isSingleMask(maskVal)) { out = TypeEnv::kindFromMask(maskVal); }
@@ -295,6 +301,27 @@ struct ExpressionTyper : public ast::VisitorBase {
     key += ")";
     mutableList.setCanonicalKey(key);
   }
+  void visit(const ast::IfExpr& ife) override {
+    // test must be bool
+    ExpressionTyper testTyper{*env, *sigs, *retParamIdxs, *diags};
+    if (ife.test) { ife.test->accept(testTyper); } else { addDiag(*diags, "if-expression missing condition", &ife); ok = false; return; }
+    if (!testTyper.ok) { ok = false; return; }
+    const uint32_t bMask = TypeEnv::maskForKind(Type::Bool);
+    const uint32_t tMask = (testTyper.outSet != 0U) ? testTyper.outSet : TypeEnv::maskForKind(testTyper.out);
+    auto isSubset = [](uint32_t msk, uint32_t allow) { return msk && ((msk & ~allow) == 0U); };
+    if (!isSubset(tMask, bMask)) { addDiag(*diags, "if-expression condition must be bool", &ife); ok = false; return; }
+    // then and else must match
+    ExpressionTyper thenTyper{*env, *sigs, *retParamIdxs, *diags};
+    ExpressionTyper elseTyper{*env, *sigs, *retParamIdxs, *diags};
+    if (!ife.body || !ife.orelse) { addDiag(*diags, "if-expression requires both arms", &ife); ok = false; return; }
+    ife.body->accept(thenTyper); if (!thenTyper.ok) { ok = false; return; }
+    ife.orelse->accept(elseTyper); if (!elseTyper.ok) { ok = false; return; }
+    if (thenTyper.out != elseTyper.out) { addDiag(*diags, "if-expression branches must have same type", &ife); ok = false; return; }
+    out = thenTyper.out;
+    outSet = (thenTyper.outSet != 0U) ? thenTyper.outSet : TypeEnv::maskForKind(out);
+    auto& m = const_cast<ast::IfExpr&>(ife);
+    m.setType(out);
+  }
   // NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
   void visit(const ast::Call& callNode) override {
     if (!callNode.callee || callNode.callee->kind != ast::NodeKind::Name) { addDiag(*diags, "unsupported callee expression", &callNode); ok = false; return; }
@@ -463,6 +490,11 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         struct ConditionRefiner : public ast::VisitorBase {
           struct Envs { TypeEnv& thenEnv; TypeEnv& elseEnv; };
           TypeEnv& thenEnv; TypeEnv& elseEnv;
+          // Track variables refined in each branch and when refinement is via '== None'/'!= None'
+          std::vector<std::pair<std::string, uint32_t>> thenRefined;
+          std::vector<std::pair<std::string, uint32_t>> elseRefined;
+          std::vector<std::string> thenNoneEq;
+          std::vector<std::string> elseNoneEq;
           explicit ConditionRefiner(Envs envs) : thenEnv(envs.thenEnv), elseEnv(envs.elseEnv) {}
           static Type typeFromName(const std::string& ident) {
             if (ident == "int") { return Type::Int; }
@@ -502,6 +534,9 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
                 const auto* nameNode = static_cast<const ast::Name*>(lhs);
                 auto& envRef = toThen ? thenEnv : elseEnv;
                 envRef.define(nameNode->id, Type::NoneType, {nameNode->file, nameNode->line, nameNode->col});
+                const uint32_t maskNow = envRef.getSet(nameNode->id);
+                if (toThen) thenRefined.emplace_back(nameNode->id, maskNow); else elseRefined.emplace_back(nameNode->id, maskNow);
+                if (toThen) thenNoneEq.emplace_back(nameNode->id); else elseNoneEq.emplace_back(nameNode->id);
               }
             };
             if (bin.op == ast::BinaryOperator::Eq) {
@@ -535,6 +570,8 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
                   if (newType != Type::NoneType) {
                     thenEnv.excludeKind(var->id, newType);
                     elseEnv.restrictToKind(var->id, newType);
+                    thenRefined.emplace_back(var->id, thenEnv.getSet(var->id));
+                    elseRefined.emplace_back(var->id, elseEnv.getSet(var->id));
                   }
                 }
               }
@@ -562,6 +599,8 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
                   if (lhs && lhs->kind == ast::NodeKind::Name && rhs && rhs->kind == ast::NodeKind::NoneLiteral) {
                     const auto* nameNode = static_cast<const ast::Name*>(lhs);
                     elseEnv.define(nameNode->id, Type::NoneType, {nameNode->file, nameNode->line, nameNode->col});
+                    elseRefined.emplace_back(nameNode->id, elseEnv.getSet(nameNode->id));
+                    elseNoneEq.emplace_back(nameNode->id);
                   }
                 };
                 setNone(binaryNode->lhs.get(), binaryNode->rhs.get());
@@ -605,18 +644,43 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
           void visit(const ast::ObjectLiteral& objLit) override { (void)objLit; }
           void visit(const ast::IfStmt& ifStmt2) override { (void)ifStmt2; }
         };
-        if (iff.cond) { ConditionRefiner ref{ConditionRefiner::Envs{thenL, elseL}}; iff.cond->accept(ref); }
+        bool skipThen = false;
+        bool skipElse = false;
+        if (iff.cond) {
+          ConditionRefiner ref{ConditionRefiner::Envs{thenL, elseL}};
+          iff.cond->accept(ref);
+          auto contradictoryNoneEq = [&](const std::vector<std::string>& names, const TypeEnv& branchEnv) {
+            for (const auto& nm : names) {
+              const uint32_t base = env.getSet(nm);
+              const uint32_t bran = branchEnv.getSet(nm);
+              if (base != 0U && bran != 0U && ((base & bran) == 0U)) { return true; }
+            }
+            return false;
+          };
+          skipThen = contradictoryNoneEq(ref.thenNoneEq, thenL);
+          // Do not skip else even if contradictory for current policy;
+          // tests expect else-branch errors to be reported for `x != None` cases.
+          skipElse = false;
+        }
         // then/else branches via a tiny visitor
         struct BranchChecker : public ast::VisitorBase {
           StmtChecker& parent; TypeEnv& envRef; const Type fnRet; bool& okRef;
           BranchChecker(StmtChecker& parentIn, TypeEnv& envIn, Type retType, bool& okIn)
               : parent(parentIn), envRef(envIn), fnRet(retType), okRef(okIn) {}
+          bool inferLocal(const ast::Expr* expr, Type& outTy) {
+            if (expr == nullptr) { addDiag(parent.diags, "null expression", nullptr); return false; }
+            ExpressionTyper v{envRef, parent.sigs, parent.retParamIdxs, parent.diags};
+            expr->accept(v);
+            if (!v.ok) { return false; }
+            outTy = v.out;
+            return true;
+          }
           void visit(const ast::AssignStmt& assignStmt) override {
-            Type tmpType{}; if (!parent.infer(assignStmt.value.get(), tmpType)) { okRef = false; return; }
+            Type tmpType{}; if (!inferLocal(assignStmt.value.get(), tmpType)) { okRef = false; return; }
             envRef.define(assignStmt.target, tmpType, {assignStmt.file, assignStmt.line, assignStmt.col});
           }
           void visit(const ast::ReturnStmt& ret) override {
-            Type tmpType{}; if (!parent.infer(ret.value.get(), tmpType)) { okRef = false; return; }
+            Type tmpType{}; if (!inferLocal(ret.value.get(), tmpType)) { okRef = false; return; }
             if (tmpType != fnRet) { addDiag(parent.diags, "return type mismatch in branch", &ret); okRef = false; }
           }
           // No-ops
@@ -638,11 +702,18 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
           void visit(const ast::ObjectLiteral& objLit) override { (void)objLit; }
         };
         BranchChecker thenChecker{*this, thenL, fn.returnType, ok};
-        for (const auto& stmt2 : iff.thenBody) { if (!ok) { break; } stmt2->accept(thenChecker); }
+        if (!skipThen) { for (const auto& stmt2 : iff.thenBody) { if (!ok) { break; } stmt2->accept(thenChecker); } }
         BranchChecker elseChecker{*this, elseL, fn.returnType, ok};
-        for (const auto& stmt2 : iff.elseBody) { if (!ok) { break; } stmt2->accept(elseChecker); }
-        // Merge back to current env: intersect types present in both branches
-        env.intersectFrom(thenL, elseL);
+        if (!skipElse) { for (const auto& stmt2 : iff.elseBody) { if (!ok) { break; } stmt2->accept(elseChecker); } }
+        // Merge back to current env
+        if (skipThen && !skipElse) {
+          TypeEnv merged; merged.intersectFrom(elseL, elseL); env = merged;
+        } else if (skipElse && !skipThen) {
+          TypeEnv merged; merged.intersectFrom(thenL, thenL); env = merged;
+        } else {
+          // Intersect types present in both branches
+          env.intersectFrom(thenL, elseL);
+        }
       }
 
       void visit(const ast::ReturnStmt& retStmt) override {

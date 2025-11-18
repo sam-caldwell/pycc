@@ -6,10 +6,12 @@
 #include "runtime/Runtime.h"
 #include <vector>
 #include <string>
+#include "../../util/Heartbeat.h"
 
 using namespace pycc::rt;
 
 TEST(RuntimeGC, StressAllocationsStats) {
+  testutil::Heartbeat hb("RuntimeGC.StressAllocationsStats");
   gc_reset_for_tests();
   gc_set_threshold(1024); // small threshold to trigger collections frequently
 
@@ -27,6 +29,8 @@ TEST(RuntimeGC, StressAllocationsStats) {
     (void)box_bool((i & 1) != 0);
   }
 
+  // Ensure collections are serviced before inspecting stats
+  gc_collect();
   RuntimeStats st1 = gc_stats();
   EXPECT_GE(st1.numCollections, 1u);
   EXPECT_GE(st1.bytesAllocated, st1.bytesLive);
@@ -39,4 +43,3 @@ TEST(RuntimeGC, StressAllocationsStats) {
   EXPECT_GE(st2.numFreed, st1.numFreed);
   EXPECT_GE(st2.lastReclaimedBytes, 0u);
 }
-
