@@ -74,13 +74,14 @@ struct ExpressionTyper : public ast::VisitorBase {
   // retParamIdxs: mapping of function name -> parameter index when return is trivially forwarded
   ExpressionTyper(const TypeEnv& env_, const std::unordered_map<std::string, Sig>& sigs_,
                   const std::unordered_map<std::string, int>& retParamIdxs_, std::vector<Diagnostic>& diags_,
-                  PolyPtrs polyIn = {})
-    : env(&env_), sigs(&sigs_), retParamIdxs(&retParamIdxs_), diags(&diags_), polyTargets(polyIn) {}
+                  PolyPtrs polyIn = {}, const std::vector<const TypeEnv*>* outerScopes_ = nullptr)
+    : env(&env_), sigs(&sigs_), retParamIdxs(&retParamIdxs_), diags(&diags_), polyTargets(polyIn), outers(outerScopes_) {}
   const TypeEnv* env{nullptr};
   const std::unordered_map<std::string, Sig>* sigs{nullptr};
   const std::unordered_map<std::string, int>* retParamIdxs{nullptr};
   std::vector<Diagnostic>* diags{nullptr};
   PolyPtrs polyTargets{};
+  const std::vector<const TypeEnv*>* outers{nullptr};
   Type out{Type::NoneType};
   uint32_t outSet{0};
   bool ok{true};
@@ -141,7 +142,10 @@ struct ExpressionTyper : public ast::VisitorBase {
     m.setCanonicalKey("obj");
   }
   void visit(const ast::Name& n) override {
-    const uint32_t maskVal = env->getSet(n.id);
+    uint32_t maskVal = env->getSet(n.id);
+    if (maskVal == 0U && outers != nullptr) {
+      for (const auto* o : *outers) { if (!o) continue; uint32_t m = o->getSet(n.id); if (m != 0U) { maskVal = m; break; } }
+    }
     if (maskVal == 0U) {
       // Empty set: contradictory refinements (e.g., excluded the only possible kind)
       // Treat as an error at the point of use.
@@ -205,8 +209,14 @@ struct ExpressionTyper : public ast::VisitorBase {
     if (binaryNode.op == ast::BinaryOperator::Add || binaryNode.op == ast::BinaryOperator::Sub || binaryNode.op == ast::BinaryOperator::Mul || binaryNode.op == ast::BinaryOperator::Div || binaryNode.op == ast::BinaryOperator::Mod || binaryNode.op == ast::BinaryOperator::FloorDiv || binaryNode.op == ast::BinaryOperator::Pow) {
       const uint32_t iMask = TypeEnv::maskForKind(Type::Int);
       const uint32_t fMask = TypeEnv::maskForKind(Type::Float);
+      const uint32_t sMask = TypeEnv::maskForKind(Type::Str);
       const uint32_t lMask = (lhsTyper.outSet != 0U) ? lhsTyper.outSet : TypeEnv::maskForKind(lhsTyper.out);
       const uint32_t rMask = (rhsTyper.outSet != 0U) ? rhsTyper.outSet : TypeEnv::maskForKind(rhsTyper.out);
+      // String concatenation: only allow '+' for str + str
+      if (binaryNode.op == ast::BinaryOperator::Add && lMask == sMask && rMask == sMask) {
+        out = Type::Str; outSet = sMask; auto& mb = const_cast<ast::Binary&>(binaryNode); mb.setType(out);
+        return;
+      }
       if (lMask == iMask && rMask == iMask) { out = Type::Int; outSet = iMask; return; }
       if (binaryNode.op != ast::BinaryOperator::Mod && lMask == fMask && rMask == fMask) { out = Type::Float; outSet = fMask; return; }
       const uint32_t numMask = iMask | fMask;
@@ -238,10 +248,19 @@ struct ExpressionTyper : public ast::VisitorBase {
       }
       const uint32_t iMask = TypeEnv::maskForKind(Type::Int);
       const uint32_t fMask = TypeEnv::maskForKind(Type::Float);
+      const uint32_t sMask = TypeEnv::maskForKind(Type::Str);
       const uint32_t lMask = (lhsTyper.outSet != 0U) ? lhsTyper.outSet : TypeEnv::maskForKind(lhsTyper.out);
       const uint32_t rMask = (rhsTyper.outSet != 0U) ? rhsTyper.outSet : TypeEnv::maskForKind(rhsTyper.out);
       const bool bothInt = (lMask == iMask) && (rMask == iMask);
       const bool bothFloat = (lMask == fMask) && (rMask == fMask);
+      const bool bothStr = (lMask == sMask) && (rMask == sMask);
+      if (bothStr) {
+        // Allow only eq/ne for strings
+        if (binaryNode.op == ast::BinaryOperator::Eq || binaryNode.op == ast::BinaryOperator::Ne) {
+          out = Type::Bool; auto& mb = const_cast<ast::Binary&>(binaryNode); mb.setType(out); return;
+        }
+        addDiag(*diags, "only '==' and '!=' are allowed for string comparisons in this subset", &binaryNode); ok = false; return;
+      }
       if (!(bothInt || bothFloat)) { addDiag(*diags, "comparison operands must both be int or both be float", &binaryNode); ok = false; return; }
       out = Type::Bool; auto& mutableBinary = const_cast<ast::Binary&>(binaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       mutableBinary.setType(out);
@@ -478,9 +497,9 @@ static bool inferExprType(const ast::Expr* expr,
                          const std::unordered_map<std::string, int>& retParamIdxs,
                          Type& outType,
                          std::vector<Diagnostic>& diags,
-                         PolyPtrs poly = {}) {
+                         PolyPtrs poly = {}, const std::vector<const TypeEnv*>* outers = nullptr) {
   if (expr == nullptr) { addDiag(diags, "null expression", nullptr); return false; }
-  ExpressionTyper exprTyper{env, sigs, retParamIdxs, diags, poly};
+  ExpressionTyper exprTyper{env, sigs, retParamIdxs, diags, poly, outers};
   expr->accept(exprTyper);
   if (!exprTyper.ok) { return false; }
   outType = exprTyper.out;
@@ -550,8 +569,8 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
     struct StmtChecker : public ast::VisitorBase {
       StmtChecker(const ast::FunctionDef& fn_, const std::unordered_map<std::string, Sig>& sigs_,
                   const std::unordered_map<std::string, int>& retParamIdxs_, TypeEnv& env_, std::vector<Diagnostic>& diags_,
-                  PolyRefs polyRefs_)
-        : fn(fn_), sigs(sigs_), retParamIdxs(retParamIdxs_), env(env_), diags(diags_), polyRefs(polyRefs_) {}
+                  PolyRefs polyRefs_, std::vector<TypeEnv*> outerScopes_ = {})
+        : fn(fn_), sigs(sigs_), retParamIdxs(retParamIdxs_), env(env_), diags(diags_), polyRefs(polyRefs_), outerScopes(std::move(outerScopes_)) {}
       const ast::FunctionDef& fn; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
       const std::unordered_map<std::string, Sig>& sigs; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
       const std::unordered_map<std::string, int>& retParamIdxs; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
@@ -562,8 +581,14 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
       // global/nonlocal intent (subset): names declared here are not treated as locals
       std::unordered_set<std::string> globals;
       std::unordered_set<std::string> nonlocals;
+      std::unordered_map<std::string, TypeEnv*> nonlocalTargets; // nonlocal name -> outer env
+      std::vector<TypeEnv*> outerScopes; // nearest first
 
-      bool infer(const ast::Expr* expr, Type& out) { return inferExprType(expr, env, sigs, retParamIdxs, out, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}); }
+      bool infer(const ast::Expr* expr, Type& out) {
+        std::vector<const TypeEnv*> ovec; ovec.reserve(outerScopes.size());
+        for (auto* p : outerScopes) { ovec.push_back(p); }
+        return inferExprType(expr, env, sigs, retParamIdxs, out, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}, &ovec);
+      }
 
       void visit(const ast::AssignStmt& assignStmt) override {
         // Monkey-patching as polymorphism: allow aliasing a function name within known code
@@ -585,35 +610,68 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
             }
           }
         }
-        // Attribute-based monkey patching: module.attr = function
-        if (assignStmt.value && assignStmt.value->kind == ast::NodeKind::Name && !assignStmt.targets.empty()) {
-          const auto* rhs = static_cast<const ast::Name*>(assignStmt.value.get());
-          auto it = sigs.find(rhs->id);
-          if (it != sigs.end()) {
+        // Attribute-based monkey patching: module.attr = function or alias (including alias-of-alias and attr-of-attr)
+        if (assignStmt.value && !assignStmt.targets.empty()) {
+          if (assignStmt.value->kind == ast::NodeKind::Name) {
+            const auto* rhs = static_cast<const ast::Name*>(assignStmt.value.get());
+            auto it = sigs.find(rhs->id);
+            std::unordered_set<std::string> rhsTargets;
+            if (it != sigs.end()) { rhsTargets.insert(rhs->id); }
+            else {
+              // Pull from variable alias map if present
+              auto itAlias = polyRefs.vars.find(rhs->id);
+              if (itAlias != polyRefs.vars.end()) { rhsTargets.insert(itAlias->second.begin(), itAlias->second.end()); }
+            }
+            if (!rhsTargets.empty()) {
+              for (const auto& tgt : assignStmt.targets) {
+                if (tgt && tgt->kind == ast::NodeKind::Attribute) {
+                  const auto* attr = static_cast<const ast::Attribute*>(tgt.get());
+                  if (attr->value && attr->value->kind == ast::NodeKind::Name) {
+                    const auto* mod = static_cast<const ast::Name*>(attr->value.get());
+                    const std::string key = mod->id + std::string(".") + attr->attr;
+                    for (const auto& fn : rhsTargets) { polyRefs.attrs[key].insert(fn); }
+                    isPolyAlias = true;
+                  }
+                }
+              }
+            } else {
+              // RHS is not a known function/alias; for attribute patching, disallow
+              for (const auto& tgt : assignStmt.targets) {
+                if (tgt && tgt->kind == ast::NodeKind::Attribute) {
+                  addDiag(diags, std::string("monkey patch target not found in known code: ") + rhs->id, assignStmt.value.get());
+                  ok = false; return;
+                }
+              }
+            }
+          } else if (assignStmt.value->kind == ast::NodeKind::Attribute) {
+            // module.attr = other.attr (copy existing attribute target set)
+            const auto* rhsAttr = static_cast<const ast::Attribute*>(assignStmt.value.get());
+            if (!(rhsAttr->value && rhsAttr->value->kind == ast::NodeKind::Name)) {
+              addDiag(diags, "monkey patch rhs attribute must be module.attr", assignStmt.value.get()); ok = false; return;
+            }
+            const auto* rhsMod = static_cast<const ast::Name*>(rhsAttr->value.get());
+            const std::string rhsKey = rhsMod->id + std::string(".") + rhsAttr->attr;
+            auto itSet = polyRefs.attrs.find(rhsKey);
+            if (itSet == polyRefs.attrs.end() || itSet->second.empty()) {
+              addDiag(diags, std::string("monkey patch source attribute not found: ") + rhsKey, assignStmt.value.get()); ok = false; return;
+            }
             for (const auto& tgt : assignStmt.targets) {
               if (tgt && tgt->kind == ast::NodeKind::Attribute) {
                 const auto* attr = static_cast<const ast::Attribute*>(tgt.get());
                 if (attr->value && attr->value->kind == ast::NodeKind::Name) {
                   const auto* mod = static_cast<const ast::Name*>(attr->value.get());
                   const std::string key = mod->id + std::string(".") + attr->attr;
-                  polyRefs.attrs[key].insert(rhs->id);
+                  polyRefs.attrs[key].insert(itSet->second.begin(), itSet->second.end());
                   isPolyAlias = true;
                 }
-              }
-            }
-          } else {
-            // RHS is not a known function; for attribute patching, keep it disallowed
-            for (const auto& tgt : assignStmt.targets) {
-              if (tgt && tgt->kind == ast::NodeKind::Attribute) {
-                addDiag(diags, std::string("monkey patch target not found in known code: ") + rhs->id, assignStmt.value.get());
-                ok = false; return;
               }
             }
           }
         }
         if (isPolyAlias) { return; }
         // Infer value with set awareness for normal assignments
-        ExpressionTyper valTyper{env, sigs, retParamIdxs, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}};
+        std::vector<const TypeEnv*> ovec; ovec.reserve(outerScopes.size()); for (auto* p : outerScopes) { ovec.push_back(p); }
+        ExpressionTyper valTyper{env, sigs, retParamIdxs, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}, &ovec};
         if (assignStmt.value) { assignStmt.value->accept(valTyper); } else { ok = false; return; }
         if (!valTyper.ok) { ok = false; return; }
         const Type typeOut = valTyper.out;
@@ -621,8 +679,14 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         if (!allowed) {
           addDiag(diags, "only int/bool/float/str/list variables supported", &assignStmt); ok = false; return;
         }
-        // Define from set if available, else exact kind, unless 'global'/'nonlocal' intent was declared
-        if (globals.find(assignStmt.target) == globals.end() && nonlocals.find(assignStmt.target) == nonlocals.end()) {
+        // Define in correct scope
+        if (nonlocals.find(assignStmt.target) != nonlocals.end()) {
+          auto itN = nonlocalTargets.find(assignStmt.target);
+          if (itN != nonlocalTargets.end() && itN->second != nullptr) {
+            const uint32_t maskVal = (valTyper.outSet != 0U) ? valTyper.outSet : TypeEnv::maskForKind(typeOut);
+            itN->second->defineSet(assignStmt.target, maskVal, {assignStmt.file, assignStmt.line, assignStmt.col});
+          } else { addDiag(diags, std::string("nonlocal target not found in outer scope: ") + assignStmt.target, &assignStmt); ok = false; return; }
+        } else if (globals.find(assignStmt.target) == globals.end()) {
           const uint32_t maskVal = (valTyper.outSet != 0U) ? valTyper.outSet : TypeEnv::maskForKind(typeOut);
           env.defineSet(assignStmt.target, maskVal, {assignStmt.file, assignStmt.line, assignStmt.col});
         }
@@ -833,7 +897,8 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
               : parent(parentIn), envRef(envIn), fnRet(retType), okRef(okIn) {}
           bool inferLocal(const ast::Expr* expr, Type& outTy) {
             if (expr == nullptr) { addDiag(parent.diags, "null expression", nullptr); return false; }
-            ExpressionTyper v{envRef, parent.sigs, parent.retParamIdxs, parent.diags, PolyPtrs{&parent.polyRefs.vars, &parent.polyRefs.attrs}};
+            std::vector<const TypeEnv*> ovec; ovec.reserve(parent.outerScopes.size()); for (auto* p : parent.outerScopes) { ovec.push_back(p); }
+            ExpressionTyper v{envRef, parent.sigs, parent.retParamIdxs, parent.diags, PolyPtrs{&parent.polyRefs.vars, &parent.polyRefs.attrs}, &ovec};
             expr->accept(v);
             if (!v.ok) { return false; }
             outTy = v.out;
@@ -858,33 +923,70 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
                 // Not a function alias; treat as normal variable assignment handled below
               }
             }
-            if (assignStmt.value && assignStmt.value->kind == ast::NodeKind::Name && !assignStmt.targets.empty()) {
-              const auto* rhs = static_cast<const ast::Name*>(assignStmt.value.get());
-              auto it = parent.sigs.find(rhs->id);
-              if (it != parent.sigs.end()) {
+            if (assignStmt.value && !assignStmt.targets.empty()) {
+              if (assignStmt.value->kind == ast::NodeKind::Name) {
+                const auto* rhs = static_cast<const ast::Name*>(assignStmt.value.get());
+                std::unordered_set<std::string> rhsTargets;
+                auto it = parent.sigs.find(rhs->id);
+                if (it != parent.sigs.end()) { rhsTargets.insert(rhs->id); }
+                else {
+                  auto itAlias = parent.polyRefs.vars.find(rhs->id);
+                  if (itAlias != parent.polyRefs.vars.end()) { rhsTargets.insert(itAlias->second.begin(), itAlias->second.end()); }
+                }
+                if (!rhsTargets.empty()) {
+                  for (const auto& tgt : assignStmt.targets) {
+                    if (tgt && tgt->kind == ast::NodeKind::Attribute) {
+                      const auto* attr = static_cast<const ast::Attribute*>(tgt.get());
+                      if (attr->value && attr->value->kind == ast::NodeKind::Name) {
+                        const auto* mod = static_cast<const ast::Name*>(attr->value.get());
+                        const std::string key = mod->id + std::string(".") + attr->attr;
+                        for (const auto& fn : rhsTargets) { parent.polyRefs.attrs[key].insert(fn); }
+                        isPolyAlias = true;
+                      }
+                    }
+                  }
+                } else {
+                  for (const auto& tgt : assignStmt.targets) {
+                    if (tgt && tgt->kind == ast::NodeKind::Attribute) {
+                      addDiag(parent.diags, std::string("monkey patch target not found in known code: ") + rhs->id, assignStmt.value.get());
+                      okRef = false; return;
+                    }
+                  }
+                }
+              } else if (assignStmt.value->kind == ast::NodeKind::Attribute) {
+                const auto* rhsAttr = static_cast<const ast::Attribute*>(assignStmt.value.get());
+                if (!(rhsAttr->value && rhsAttr->value->kind == ast::NodeKind::Name)) {
+                  addDiag(parent.diags, "monkey patch rhs attribute must be module.attr", assignStmt.value.get()); okRef = false; return;
+                }
+                const auto* rhsMod = static_cast<const ast::Name*>(rhsAttr->value.get());
+                const std::string rhsKey = rhsMod->id + std::string(".") + rhsAttr->attr;
+                auto itSet = parent.polyRefs.attrs.find(rhsKey);
+                if (itSet == parent.polyRefs.attrs.end() || itSet->second.empty()) {
+                  addDiag(parent.diags, std::string("monkey patch source attribute not found: ") + rhsKey, assignStmt.value.get()); okRef = false; return;
+                }
                 for (const auto& tgt : assignStmt.targets) {
                   if (tgt && tgt->kind == ast::NodeKind::Attribute) {
                     const auto* attr = static_cast<const ast::Attribute*>(tgt.get());
                     if (attr->value && attr->value->kind == ast::NodeKind::Name) {
                       const auto* mod = static_cast<const ast::Name*>(attr->value.get());
                       const std::string key = mod->id + std::string(".") + attr->attr;
-                      parent.polyRefs.attrs[key].insert(rhs->id);
+                      parent.polyRefs.attrs[key].insert(itSet->second.begin(), itSet->second.end());
                       isPolyAlias = true;
                     }
-                  }
-                }
-              } else {
-                for (const auto& tgt : assignStmt.targets) {
-                  if (tgt && tgt->kind == ast::NodeKind::Attribute) {
-                    addDiag(parent.diags, std::string("monkey patch target not found in known code: ") + rhs->id, assignStmt.value.get());
-                    okRef = false; return;
                   }
                 }
               }
             }
             if (isPolyAlias) { return; }
             Type tmpType{}; if (!inferLocal(assignStmt.value.get(), tmpType)) { okRef = false; return; }
-            envRef.define(assignStmt.target, tmpType, {assignStmt.file, assignStmt.line, assignStmt.col});
+            if (parent.nonlocals.find(assignStmt.target) != parent.nonlocals.end()) {
+              auto itN = parent.nonlocalTargets.find(assignStmt.target);
+              if (itN != parent.nonlocalTargets.end() && itN->second != nullptr) {
+                itN->second->define(assignStmt.target, tmpType, {assignStmt.file, assignStmt.line, assignStmt.col});
+              } else { okRef = false; return; }
+            } else {
+              envRef.define(assignStmt.target, tmpType, {assignStmt.file, assignStmt.line, assignStmt.col});
+            }
           }
           void visit(const ast::ReturnStmt& ret) override {
             Type tmpType{}; if (!inferLocal(ret.value.get(), tmpType)) { okRef = false; return; }
@@ -930,12 +1032,18 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
 
       void visit(const ast::ExprStmt& stmt) override { if (stmt.value) { Type tmp{}; (void)infer(stmt.value.get(), tmp); } }
 
-      // Subset handling: record intent only; full module/nonlocal binding semantics are outside current scope
       void visit(const ast::GlobalStmt& gs) override {
         for (const auto& n : gs.names) { globals.insert(n); }
       }
       void visit(const ast::NonlocalStmt& ns) override {
-        for (const auto& n : ns.names) { nonlocals.insert(n); }
+        for (const auto& n : ns.names) {
+          bool found = false;
+          for (auto* o : outerScopes) {
+            if (!o) continue;
+            if (o->getSet(n) != 0U) { nonlocals.insert(n); nonlocalTargets[n] = o; found = true; break; }
+          }
+          if (!found) { addDiag(diags, std::string("nonlocal name not found in enclosing scope: ") + n, &ns); ok = false; return; }
+        }
       }
 
       // Conservative loop handling: check body/else but do not change outer env
@@ -994,7 +1102,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         // Finally suite: evaluate but do not leak new bindings (conservative); could add checks here
         if (!ts.finalbody.empty()) {
           TypeEnv finEnv = merged;
-          StmtChecker inner{fn, sigs, retParamIdxs, finEnv, diags, polyRefs};
+          StmtChecker inner{fn, sigs, retParamIdxs, finEnv, diags, polyRefs, outerScopes};
           for (const auto& st : ts.finalbody) { if (!inner.ok) break; st->accept(inner); }
           if (!inner.ok) { ok = false; return; }
         }
@@ -1003,7 +1111,16 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
 
       // Unused in stmt context; name parameters for readability
       void visit(const ast::Module& moduleNode) override { (void)moduleNode; }
-      void visit(const ast::FunctionDef& functionNode) override { (void)functionNode; }
+      void visit(const ast::FunctionDef& innerFn) override {
+        // Analyze nested function with access to outer scopes for nonlocal/read-only captures
+        TypeEnv childEnv;
+        for (const auto& p : innerFn.params) { childEnv.define(p.name, p.type, {innerFn.name, 0, 0}); }
+        std::vector<TypeEnv*> childOuters; childOuters.push_back(&env); for (auto* p : outerScopes) childOuters.push_back(p);
+        std::unordered_map<std::string, std::unordered_set<std::string>> poly; std::unordered_map<std::string, std::unordered_set<std::string>> polyAttr;
+        StmtChecker nested{innerFn, sigs, retParamIdxs, childEnv, diags, PolyRefs{poly, polyAttr}, std::move(childOuters)};
+        for (const auto& st : innerFn.body) { if (!nested.ok) break; st->accept(nested); }
+        if (!nested.ok) { ok = false; }
+      }
       void visit(const ast::IntLiteral& intNode) override { (void)intNode; }
       void visit(const ast::BoolLiteral& boolNode) override { (void)boolNode; }
       void visit(const ast::FloatLiteral& floatNode) override { (void)floatNode; }
@@ -1020,7 +1137,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
 
     std::unordered_map<std::string, std::unordered_set<std::string>> poly; // per-function polymorphic call targets
     std::unordered_map<std::string, std::unordered_set<std::string>> polyAttr; // per-function polymorphic attribute call targets
-    StmtChecker checker{*func, sigs, retParamIdxs, env, diags, PolyRefs{poly, polyAttr}};
+    StmtChecker checker{*func, sigs, retParamIdxs, env, diags, PolyRefs{poly, polyAttr}, {}};
     for (const auto& stmt : func->body) {
       stmt->accept(checker);
       if (!checker.ok) { return false; }

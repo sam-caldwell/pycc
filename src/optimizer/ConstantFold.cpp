@@ -88,6 +88,12 @@ struct FoldVisitor : public ast::VisitorBase {
     // First rewrite the operand to expose literals; keep a handle to this node's slot
     auto* exprSlot = slot;
     rewrite(unaryNode->operand);
+    // Bitwise not of integer literal
+    if (unaryNode->op == UnaryOperator::BitNot && unaryNode->operand && unaryNode->operand->kind == NodeKind::IntLiteral) {
+      auto* lit = static_cast<IntLiteral*>(unaryNode->operand.get());
+      auto rep = std::make_unique<IntLiteral>(~lit->value);
+      assignLoc(*rep, *unaryNode); slot = exprSlot; *slot = std::move(rep); ++changes; bumpUnary(); return;
+    }
     if (unaryNode->op == UnaryOperator::Neg && unaryNode->operand) {
       if (isInt(unaryNode->operand.get())) {
         auto* lit = static_cast<IntLiteral*>(unaryNode->operand.get());
@@ -178,6 +184,15 @@ struct FoldVisitor : public ast::VisitorBase {
   void tryFoldBinary(Binary& bin) {
     auto* left = bin.lhs.get();
     auto* right = bin.rhs.get();
+    // None comparisons when both sides are None
+    if (left && right && left->kind == NodeKind::NoneLiteral && right->kind == NodeKind::NoneLiteral) {
+      if (bin.op == BinaryOperator::Eq) {
+        auto rep = std::make_unique<BoolLiteral>(true); assignLoc(*rep, bin); *slot = std::move(rep); ++changes; return;
+      }
+      if (bin.op == BinaryOperator::Ne) {
+        auto rep = std::make_unique<BoolLiteral>(false); assignLoc(*rep, bin); *slot = std::move(rep); ++changes; return;
+      }
+    }
     if (isInt(left) && isInt(right)) {
       const auto lhs = static_cast<IntLiteral*>(left)->value;
       const auto rhs = static_cast<IntLiteral*>(right)->value;
@@ -236,6 +251,45 @@ struct FoldVisitor : public ast::VisitorBase {
     auto* call = static_cast<Call*>(slot->get());
     if (call->callee) { rewrite(call->callee); }
     for (auto& arg : call->args) { rewrite(arg); }
+    // Attempt to fold built-ins on literal arguments
+    if (call->callee && call->callee->kind == NodeKind::Name) {
+      const auto* nm = static_cast<const Name*>(call->callee.get());
+      if (nm->id == "len" && call->args.size() == 1 && call->args[0]) {
+        if (call->args[0]->kind == NodeKind::TupleLiteral) {
+          auto* tup = static_cast<TupleLiteral*>(call->args[0].get());
+          auto rep = std::make_unique<IntLiteral>(static_cast<long long>(tup->elements.size()));
+          assignLoc(*rep, *call); *slot = std::move(rep); ++changes; return;
+        }
+        if (call->args[0]->kind == NodeKind::ListLiteral) {
+          auto* lst = static_cast<ListLiteral*>(call->args[0].get());
+          auto rep = std::make_unique<IntLiteral>(static_cast<long long>(lst->elements.size()));
+          assignLoc(*rep, *call); *slot = std::move(rep); ++changes; return;
+        }
+        if (call->args[0]->kind == NodeKind::StringLiteral) {
+          auto* s = static_cast<StringLiteral*>(call->args[0].get());
+          auto rep = std::make_unique<IntLiteral>(static_cast<long long>(s->value.size()));
+          assignLoc(*rep, *call); *slot = std::move(rep); ++changes; return;
+        }
+      }
+      if (nm->id == "isinstance" && call->args.size() == 2 && call->args[0] && call->args[1] && call->args[1]->kind == NodeKind::Name) {
+        const auto* tname = static_cast<const Name*>(call->args[1].get());
+        auto toKind = [&](const Expr* e) -> const char* {
+          if (!e) return "";
+          switch (e->kind) {
+            case NodeKind::IntLiteral: return "int";
+            case NodeKind::BoolLiteral: return "bool";
+            case NodeKind::FloatLiteral: return "float";
+            default: return "";
+          }
+        };
+        const char* k = toKind(call->args[0].get());
+        if (*k != '\0') {
+          bool match = (std::string(k) == tname->id);
+          auto rep = std::make_unique<BoolLiteral>(match);
+          assignLoc(*rep, *call); *slot = std::move(rep); ++changes; return;
+        }
+      }
+    }
   }
 
   // Stmt visitors

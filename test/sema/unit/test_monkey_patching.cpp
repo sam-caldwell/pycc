@@ -167,3 +167,59 @@ def main() -> int:
   sema::Sema S; std::vector<sema::Diagnostic> diags;
   EXPECT_FALSE(S.check(*mod, diags));
 }
+
+TEST(MonkeyPatching, AttrAliasFromVarAliasChain) {
+  const char* src = R"PY(
+def f(x: int) -> int:
+  return x
+def main() -> int:
+  h = f
+  math.add = h
+  return math.add(9)
+)PY";
+  auto mod = parseSrc(src);
+  sema::Sema S; std::vector<sema::Diagnostic> diags;
+  EXPECT_TRUE(S.check(*mod, diags)) << (diags.empty() ? "" : diags[0].message);
+}
+
+TEST(MonkeyPatching, AttrOfAttrChainResolves) {
+  const char* src = R"PY(
+def f(x: int) -> int:
+  return x
+def main() -> int:
+  math.add = f
+  util.sum = math.add
+  return util.sum(10)
+)PY";
+  auto mod = parseSrc(src);
+  sema::Sema S; std::vector<sema::Diagnostic> diags;
+  EXPECT_TRUE(S.check(*mod, diags)) << (diags.empty() ? "" : diags[0].message);
+}
+
+TEST(MonkeyPatching, AttrOfAttrMixedSignaturesRejected) {
+  const char* src = R"PY(
+def f(x: int) -> int:
+  return x
+def g(x: str) -> int:
+  return 0
+def main() -> int:
+  math.add = f
+  util.sum = math.add
+  util.sum = g
+  return util.sum(1)
+)PY";
+  auto mod = parseSrc(src);
+  sema::Sema S; std::vector<sema::Diagnostic> diags;
+  EXPECT_FALSE(S.check(*mod, diags));
+}
+
+TEST(MonkeyPatching, AttrRhsUnknownAttrRejected) {
+  const char* src = R"PY(
+def main() -> int:
+  util.sum = other.add
+  return util.sum(1)
+)PY";
+  auto mod = parseSrc(src);
+  sema::Sema S; std::vector<sema::Diagnostic> diags;
+  EXPECT_FALSE(S.check(*mod, diags));
+}
