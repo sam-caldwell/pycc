@@ -154,7 +154,6 @@ struct ExpressionTyper : public ast::VisitorBase {
     }
     auto resolvedType = env->get(n.id);
     if (!resolvedType && outSet == 0U) { addDiag(*diags, std::string("undefined name: ") + n.id, &n); ok = false; return; }
-    if (outSet == 0U && resolvedType) { out = *resolvedType; outSet = TypeEnv::maskForKind(out); }
     if (TypeEnv::isSingleMask(outSet)) { out = TypeEnv::kindFromMask(outSet); }
     auto& mutableName = const_cast<ast::Name&>(n); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     mutableName.setType(out); mutableName.setCanonicalKey(std::string("n:") + n.id);
@@ -179,6 +178,14 @@ struct ExpressionTyper : public ast::VisitorBase {
       if (unaryNode.operand) { const auto& can = unaryNode.operand->canonical(); if (can) { mutableUnary.setCanonicalKey("u:neg:(" + *can + ")"); } }
       return;
     }
+    if (unaryNode.op == ast::UnaryOperator::BitNot) {
+      if (!isSubset(maskVal, iMask)) { addDiag(*diags, "bitwise '~' requires int", &unaryNode); ok = false; return; }
+      out = Type::Int; outSet = iMask;
+      auto& mutableUnaryBN = const_cast<ast::Unary&>(unaryNode);
+      mutableUnaryBN.setType(out);
+      if (unaryNode.operand) { const auto& can = unaryNode.operand->canonical(); if (can) { mutableUnaryBN.setCanonicalKey("u:bitnot:(" + *can + ")"); } }
+      return;
+    }
     // 'not'
     if (!isSubset(maskVal, bMask)) { addDiag(*diags, "'not' requires bool", &unaryNode); ok = false; return; }
     out = Type::Bool; outSet = bMask;
@@ -194,8 +201,8 @@ struct ExpressionTyper : public ast::VisitorBase {
     if (!lhsTyper.ok) { ok = false; return; }
     binaryNode.rhs->accept(rhsTyper);
     if (!rhsTyper.ok) { ok = false; return; }
-    // Arithmetic
-    if (binaryNode.op == ast::BinaryOperator::Add || binaryNode.op == ast::BinaryOperator::Sub || binaryNode.op == ast::BinaryOperator::Mul || binaryNode.op == ast::BinaryOperator::Div || binaryNode.op == ast::BinaryOperator::Mod) {
+    // Arithmetic (incl. floor-div and pow)
+    if (binaryNode.op == ast::BinaryOperator::Add || binaryNode.op == ast::BinaryOperator::Sub || binaryNode.op == ast::BinaryOperator::Mul || binaryNode.op == ast::BinaryOperator::Div || binaryNode.op == ast::BinaryOperator::Mod || binaryNode.op == ast::BinaryOperator::FloorDiv || binaryNode.op == ast::BinaryOperator::Pow) {
       const uint32_t iMask = TypeEnv::maskForKind(Type::Int);
       const uint32_t fMask = TypeEnv::maskForKind(Type::Float);
       const uint32_t lMask = (lhsTyper.outSet != 0U) ? lhsTyper.outSet : TypeEnv::maskForKind(lhsTyper.out);
@@ -207,10 +214,18 @@ struct ExpressionTyper : public ast::VisitorBase {
       if (subMask(lMask, numMask) && subMask(rMask, numMask)) { addDiag(*diags, "ambiguous numeric types; both operands must be int or both float", &binaryNode); ok = false; return; }
       addDiag(*diags, "arithmetic operands must both be int or both be float (mod only for int)", &binaryNode); ok = false; return;
     }
+    // Bitwise and shifts: require ints
+    if (binaryNode.op == ast::BinaryOperator::BitAnd || binaryNode.op == ast::BinaryOperator::BitOr || binaryNode.op == ast::BinaryOperator::BitXor || binaryNode.op == ast::BinaryOperator::LShift || binaryNode.op == ast::BinaryOperator::RShift) {
+      const uint32_t iMask = TypeEnv::maskForKind(Type::Int);
+      const uint32_t lMask = (lhsTyper.outSet != 0U) ? lhsTyper.outSet : TypeEnv::maskForKind(lhsTyper.out);
+      const uint32_t rMask = (rhsTyper.outSet != 0U) ? rhsTyper.outSet : TypeEnv::maskForKind(rhsTyper.out);
+      if (lMask == iMask && rMask == iMask) { out = Type::Int; outSet = iMask; return; }
+      addDiag(*diags, "bitwise/shift operands must be int", &binaryNode); ok = false; return;
+    }
     // Comparisons
-    if (binaryNode.op == ast::BinaryOperator::Eq || binaryNode.op == ast::BinaryOperator::Ne || binaryNode.op == ast::BinaryOperator::Lt || binaryNode.op == ast::BinaryOperator::Le || binaryNode.op == ast::BinaryOperator::Gt || binaryNode.op == ast::BinaryOperator::Ge) {
+    if (binaryNode.op == ast::BinaryOperator::Eq || binaryNode.op == ast::BinaryOperator::Ne || binaryNode.op == ast::BinaryOperator::Lt || binaryNode.op == ast::BinaryOperator::Le || binaryNode.op == ast::BinaryOperator::Gt || binaryNode.op == ast::BinaryOperator::Ge || binaryNode.op == ast::BinaryOperator::Is || binaryNode.op == ast::BinaryOperator::IsNot) {
       // Allow eq/ne None comparisons regardless of other type
-      if ((binaryNode.op == ast::BinaryOperator::Eq || binaryNode.op == ast::BinaryOperator::Ne) &&
+      if ((binaryNode.op == ast::BinaryOperator::Eq || binaryNode.op == ast::BinaryOperator::Ne || binaryNode.op == ast::BinaryOperator::Is || binaryNode.op == ast::BinaryOperator::IsNot) &&
           (binaryNode.lhs->kind == ast::NodeKind::NoneLiteral || binaryNode.rhs->kind == ast::NodeKind::NoneLiteral)) {
         out = Type::Bool; auto& mutableBinary = const_cast<ast::Binary&>(binaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
         mutableBinary.setType(out);
@@ -237,6 +252,13 @@ struct ExpressionTyper : public ast::VisitorBase {
       }
       return;
     }
+    // Membership tests: type as bool in this subset
+    if (binaryNode.op == ast::BinaryOperator::In || binaryNode.op == ast::BinaryOperator::NotIn) {
+      out = Type::Bool; outSet = TypeEnv::maskForKind(Type::Bool);
+      auto& mut = const_cast<ast::Binary&>(binaryNode);
+      mut.setType(out);
+      return;
+    }
     // Logical
     if (binaryNode.op == ast::BinaryOperator::And || binaryNode.op == ast::BinaryOperator::Or) {
       const uint32_t bMask = TypeEnv::maskForKind(Type::Bool);
@@ -254,7 +276,7 @@ struct ExpressionTyper : public ast::VisitorBase {
       return;
     }
     // Arithmetic (typed) — set canonical for safe recognition
-    if ((binaryNode.op == ast::BinaryOperator::Add || binaryNode.op == ast::BinaryOperator::Sub || binaryNode.op == ast::BinaryOperator::Mul || binaryNode.op == ast::BinaryOperator::Div || binaryNode.op == ast::BinaryOperator::Mod) && ( (typeIsInt(lhsTyper.out)&&typeIsInt(rhsTyper.out)) || (typeIsFloat(lhsTyper.out)&&typeIsFloat(rhsTyper.out)) )) {
+    if ((binaryNode.op == ast::BinaryOperator::Add || binaryNode.op == ast::BinaryOperator::Sub || binaryNode.op == ast::BinaryOperator::Mul || binaryNode.op == ast::BinaryOperator::Div || binaryNode.op == ast::BinaryOperator::Mod || binaryNode.op == ast::BinaryOperator::FloorDiv || binaryNode.op == ast::BinaryOperator::Pow) && ( (typeIsInt(lhsTyper.out)&&typeIsInt(rhsTyper.out)) || (typeIsFloat(lhsTyper.out)&&typeIsFloat(rhsTyper.out)) )) {
       auto& mutableBinary3 = const_cast<ast::Binary&>(binaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       mutableBinary3.setType(typeIsInt(lhsTyper.out) ? Type::Int : Type::Float);
       if (binaryNode.lhs && binaryNode.rhs) {
@@ -552,6 +574,15 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
           if (it != sigs.end()) {
             polyRefs.vars[assignStmt.target].insert(rhs->id);
             isPolyAlias = true;
+          } else {
+            // Support alias-of-alias: h = k where k already aliases known functions
+            auto itAlias = polyRefs.vars.find(rhs->id);
+            if (itAlias != polyRefs.vars.end() && !itAlias->second.empty()) {
+              for (const auto& tgt : itAlias->second) {
+                if (sigs.find(tgt) != sigs.end()) { polyRefs.vars[assignStmt.target].insert(tgt); }
+              }
+              isPolyAlias = true;
+            }
           }
         }
         // Attribute-based monkey patching: module.attr = function
@@ -632,7 +663,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
             const Type newType = typeFromName(tnm->id);
             if (newType != Type::NoneType) { thenEnv.restrictToKind(var->id, newType); thenEnv.define(var->id, newType, {var->file, var->line, var->col}); }
           }
-          // x == None => then x: NoneType; x != None => else x: NoneType
+          // x == None or x is None => then x: NoneType; x != None or x is not None => else x: NoneType
           // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
           void visit(const ast::Binary& bin) override {
             // Logical approximations:
@@ -656,10 +687,10 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
                 if (toThen) thenNoneEq.emplace_back(nameNode->id); else elseNoneEq.emplace_back(nameNode->id);
               }
             };
-            if (bin.op == ast::BinaryOperator::Eq) {
+            if (bin.op == ast::BinaryOperator::Eq || bin.op == ast::BinaryOperator::Is) {
               refineEq(bin.lhs.get(), bin.rhs.get(), true);
               refineEq(bin.rhs.get(), bin.lhs.get(), true);
-            } else if (bin.op == ast::BinaryOperator::Ne) {
+            } else if (bin.op == ast::BinaryOperator::Ne || bin.op == ast::BinaryOperator::IsNot) {
               refineEq(bin.lhs.get(), bin.rhs.get(), false);
               refineEq(bin.rhs.get(), bin.lhs.get(), false);
             }
@@ -697,7 +728,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
             if (!expr) { return; }
             if (expr->kind == ast::NodeKind::BinaryExpr) {
               const auto* binaryNode = static_cast<const ast::Binary*>(expr);
-              if (binaryNode->op == ast::BinaryOperator::Eq) {
+              if (binaryNode->op == ast::BinaryOperator::Eq || binaryNode->op == ast::BinaryOperator::Is) {
                 auto setNN = [&](const ast::Expr* lhs, const ast::Expr* rhs) {
                   if (lhs && lhs->kind == ast::NodeKind::Name && rhs && rhs->kind == ast::NodeKind::NoneLiteral) {
                     const auto* nameNode = static_cast<const ast::Name*>(lhs);
@@ -708,7 +739,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
                 setNN(binaryNode->rhs.get(), binaryNode->lhs.get());
                 return;
               }
-              if (binaryNode->op == ast::BinaryOperator::Ne) {
+              if (binaryNode->op == ast::BinaryOperator::Ne || binaryNode->op == ast::BinaryOperator::IsNot) {
                 auto setNone = [&](const ast::Expr* lhs, const ast::Expr* rhs) {
                   if (lhs && lhs->kind == ast::NodeKind::Name && rhs && rhs->kind == ast::NodeKind::NoneLiteral) {
                     const auto* nameNode = static_cast<const ast::Name*>(lhs);
@@ -763,6 +794,25 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         if (iff.cond) {
           ConditionRefiner ref{ConditionRefiner::Envs{thenL, elseL}};
           iff.cond->accept(ref);
+          // Fallback simple-pattern refine for not isinstance(x,T) if visitor missed
+          if (iff.cond->kind == ast::NodeKind::UnaryExpr) {
+            const auto* un = static_cast<const ast::Unary*>(iff.cond.get());
+            if (un->op == ast::UnaryOperator::Not && un->operand && un->operand->kind == ast::NodeKind::Call) {
+              const auto* call = static_cast<const ast::Call*>(un->operand.get());
+              if (call->callee && call->callee->kind == ast::NodeKind::Name && call->args.size() == 2 && call->args[0] && call->args[0]->kind == ast::NodeKind::Name && call->args[1] && call->args[1]->kind == ast::NodeKind::Name) {
+                const auto* callee = static_cast<const ast::Name*>(call->callee.get());
+                if (callee->id == "isinstance") {
+                  const auto* var = static_cast<const ast::Name*>(call->args[0].get());
+                  const auto* tnm = static_cast<const ast::Name*>(call->args[1].get());
+                  Type ty = ConditionRefiner::typeFromName(tnm->id);
+                  if (ty != Type::NoneType) {
+                    thenL.excludeKind(var->id, ty);
+                    elseL.restrictToKind(var->id, ty);
+                  }
+                }
+              }
+            }
+          }
           auto contradictoryNoneEq = [&](const std::vector<std::string>& names, const TypeEnv& branchEnv) {
             for (const auto& nm : names) {
               const uint32_t base = env.getSet(nm);
@@ -797,6 +847,14 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
               auto it = parent.sigs.find(rhs->id);
               if (it != parent.sigs.end()) { parent.polyRefs.vars[assignStmt.target].insert(rhs->id); isPolyAlias = true; }
               else {
+                // alias-of-alias in branch
+                auto itAlias = parent.polyRefs.vars.find(rhs->id);
+                if (itAlias != parent.polyRefs.vars.end() && !itAlias->second.empty()) {
+                  for (const auto& tgt : itAlias->second) {
+                    if (parent.sigs.find(tgt) != parent.sigs.end()) { parent.polyRefs.vars[assignStmt.target].insert(tgt); }
+                  }
+                  isPolyAlias = true;
+                }
                 // Not a function alias; treat as normal variable assignment handled below
               }
             }
@@ -878,6 +936,69 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
       }
       void visit(const ast::NonlocalStmt& ns) override {
         for (const auto& n : ns.names) { nonlocals.insert(n); }
+      }
+
+      // Conservative loop handling: check body/else but do not change outer env
+      void visit(const ast::WhileStmt& ws) override {
+        Type condType{}; if (!(ws.cond && infer(ws.cond.get(), condType))) { ok = false; return; }
+        if (!typeIsBool(condType)) { addDiag(diags, "while condition must be bool", &ws); ok = false; return; }
+        // Evaluate then/else suites; do not leak definitions out
+        for (const auto& st : ws.thenBody) { if (!ok) break; st->accept(*this); }
+        for (const auto& st : ws.elseBody) { if (!ok) break; st->accept(*this); }
+        // Do not propagate loop-defined names out (conservative)
+      }
+
+      void visit(const ast::ForStmt& fs) override {
+        // Check iterable expression for now; target assignment typing is not deep in this subset
+        if (fs.iterable) { Type tmp{}; (void)infer(fs.iterable.get(), tmp); }
+        for (const auto& st : fs.thenBody) { if (!ok) break; st->accept(*this); }
+        for (const auto& st : fs.elseBody) { if (!ok) break; st->accept(*this); }
+        // Do not propagate loop-defined names out
+      }
+
+      void visit(const ast::TryStmt& ts) override {
+        // Evaluate try body
+        TypeEnv tryEnv = env;
+        {
+          StmtChecker inner{fn, sigs, retParamIdxs, tryEnv, diags, polyRefs};
+          for (const auto& st : ts.body) { if (!inner.ok) break; st->accept(inner); }
+          if (!inner.ok) { ok = false; return; }
+        }
+        // Evaluate except handlers
+        std::vector<TypeEnv> handlerEnvs;
+        for (const auto& ehPtr : ts.handlers) {
+          if (!ehPtr) continue;
+          TypeEnv he = env; // start from original env
+          StmtChecker inner{fn, sigs, retParamIdxs, he, diags, polyRefs};
+          for (const auto& st : ehPtr->body) { if (!inner.ok) break; st->accept(inner); }
+          if (!inner.ok) { ok = false; return; }
+          handlerEnvs.push_back(he);
+        }
+        // Optional else suite (runs if no exception)
+        TypeEnv elseEnv = tryEnv;
+        if (!ts.orelse.empty()) {
+          StmtChecker inner{fn, sigs, retParamIdxs, elseEnv, diags, polyRefs};
+          for (const auto& st : ts.orelse) { if (!inner.ok) break; st->accept(inner); }
+          if (!inner.ok) { ok = false; return; }
+        }
+        // Merge all possible continuation envs conservatively: intersect across try, else, handlers
+        TypeEnv merged;
+        bool first = true;
+        auto mergeWith = [&](const TypeEnv& next) {
+          if (first) { merged.intersectFrom(next, next); first = false; }
+          else { TypeEnv tmp; tmp.intersectFrom(merged, next); merged = tmp; }
+        };
+        mergeWith(tryEnv);
+        if (!ts.orelse.empty()) { mergeWith(elseEnv); }
+        for (const auto& he : handlerEnvs) { mergeWith(he); }
+        // Finally suite: evaluate but do not leak new bindings (conservative); could add checks here
+        if (!ts.finalbody.empty()) {
+          TypeEnv finEnv = merged;
+          StmtChecker inner{fn, sigs, retParamIdxs, finEnv, diags, polyRefs};
+          for (const auto& st : ts.finalbody) { if (!inner.ok) break; st->accept(inner); }
+          if (!inner.ok) { ok = false; return; }
+        }
+        env = merged;
       }
 
       // Unused in stmt context; name parameters for readability
