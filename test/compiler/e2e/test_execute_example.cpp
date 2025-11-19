@@ -9,14 +9,16 @@
 #include <sys/wait.h>
 
 TEST(ExecuteExample, ReturnsFive) {
-  const char* srcPath = "e2e_run_tmp.py";
-  {
-    std::ofstream out(srcPath);
-    out << "def main() -> int:\n";
-    out << "  return 5\n";
-  }
+  // Use demos/minimal.py
+  namespace fs = std::filesystem;
+  std::vector<fs::path> candidates = {fs::path("../../../demos"), fs::path("../../demos"), fs::path("demos")};
+  fs::path demosDir;
+  for (const auto& c : candidates) { if (fs::exists(c)) { demosDir = c; break; } }
+  ASSERT_FALSE(demosDir.empty());
+  const auto srcPath = (demosDir / "minimal.py").string();
   // Build the program
-  int rc = std::system("../pycc -o e2e_app e2e_run_tmp.py > /dev/null 2>&1");
+  std::string cmd = std::string("../pycc -o e2e_app ") + srcPath + " > /dev/null 2>&1";
+  int rc = std::system(cmd.c_str());
   ASSERT_EQ(rc, 0) << "pycc failed to compile example";
 
   // Execute the result and check exit status

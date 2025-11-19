@@ -9,15 +9,14 @@
 #include <sys/wait.h>
 
 TEST(ExecuteObjectGet, ReturnsFieldStringLen) {
-  const char* srcPath = "e2e_run_objget.py";
-  {
-    std::ofstream out(srcPath);
-    out << "def main() -> int:\n";
-    out << "  o = object(\"hello\")\n";
-    out << "  s = obj_get(o, 0)\n";
-    out << "  return len(s)\n";
-  }
-  int rc = std::system("../pycc -o e2e_objget e2e_run_objget.py > /dev/null 2>&1");
+  namespace fs = std::filesystem;
+  std::vector<fs::path> candidates = {fs::path("../../../demos"), fs::path("../../demos"), fs::path("demos")};
+  fs::path demosDir;
+  for (const auto& c : candidates) { if (fs::exists(c)) { demosDir = c; break; } }
+  ASSERT_FALSE(demosDir.empty());
+  const auto srcPath = (demosDir / "e2e_objget.py").string();
+  std::string cmd = std::string("../pycc -o e2e_objget ") + srcPath + " > /dev/null 2>&1";
+  int rc = std::system(cmd.c_str());
   if (rc != 0) { GTEST_SKIP() << "Skipping: pycc failed to compile object-get example"; }
 
   rc = std::system("./e2e_objget > /dev/null 2>&1");

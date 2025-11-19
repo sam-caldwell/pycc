@@ -9,14 +9,14 @@
 #include <sys/wait.h>
 
 TEST(ExecuteListLen, ReturnsThree) {
-  const char* srcPath = "e2e_run_listlen.py";
-  {
-    std::ofstream out(srcPath);
-    out << "def main() -> int:\n";
-    out << "  a = [1,2,3]\n";
-    out << "  return len(a)\n";
-  }
-  int rc = std::system("../pycc -o e2e_listlen e2e_run_listlen.py > /dev/null 2>&1");
+  namespace fs = std::filesystem;
+  std::vector<fs::path> candidates = {fs::path("../../../demos"), fs::path("../../demos"), fs::path("demos")};
+  fs::path demosDir;
+  for (const auto& c : candidates) { if (fs::exists(c)) { demosDir = c; break; } }
+  ASSERT_FALSE(demosDir.empty());
+  const auto srcPath = (demosDir / "e2e_run_listlen.py").string();
+  std::string cmd = std::string("../pycc -o e2e_listlen ") + srcPath + " > /dev/null 2>&1";
+  int rc = std::system(cmd.c_str());
   ASSERT_EQ(rc, 0) << "pycc failed to compile list-len example";
 
   rc = std::system("./e2e_listlen > /dev/null 2>&1");
@@ -28,4 +28,3 @@ TEST(ExecuteListLen, ReturnsThree) {
   EXPECT_EQ(rc, 3 << 8);
 #endif
 }
-

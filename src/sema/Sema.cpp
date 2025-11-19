@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "ast/AssignStmt.h"
+#include "ast/Attribute.h"
 #include "ast/Binary.h"
 #include "ast/BinaryOperator.h"
 #include "ast/BoolLiteral.h"
@@ -45,6 +46,18 @@ using Type = ast::TypeKind;
 
 struct Sig { Type ret{Type::NoneType}; std::vector<Type> params; };
 
+namespace {
+// Group polymorphic target maps to avoid adjacent, easily-swappable parameters.
+struct PolyPtrs {
+  const std::unordered_map<std::string, std::unordered_set<std::string>>* vars{nullptr};
+  const std::unordered_map<std::string, std::unordered_set<std::string>>* attrs{nullptr};
+};
+struct PolyRefs {
+  std::unordered_map<std::string, std::unordered_set<std::string>>& vars;
+  std::unordered_map<std::string, std::unordered_set<std::string>>& attrs;
+};
+} // namespace
+
 static bool typeIsInt(Type typeVal) { return typeVal == Type::Int; }
 static bool typeIsBool(Type typeVal) { return typeVal == Type::Bool; }
 static bool typeIsFloat(Type typeVal) { return typeVal == Type::Float; }
@@ -61,13 +74,13 @@ struct ExpressionTyper : public ast::VisitorBase {
   // retParamIdxs: mapping of function name -> parameter index when return is trivially forwarded
   ExpressionTyper(const TypeEnv& env_, const std::unordered_map<std::string, Sig>& sigs_,
                   const std::unordered_map<std::string, int>& retParamIdxs_, std::vector<Diagnostic>& diags_,
-                  const std::unordered_map<std::string, std::unordered_set<std::string>>* callTargets_ = nullptr)
-    : env(&env_), sigs(&sigs_), retParamIdxs(&retParamIdxs_), diags(&diags_), callTargets(callTargets_) {}
+                  PolyPtrs polyIn = {})
+    : env(&env_), sigs(&sigs_), retParamIdxs(&retParamIdxs_), diags(&diags_), polyTargets(polyIn) {}
   const TypeEnv* env{nullptr};
   const std::unordered_map<std::string, Sig>* sigs{nullptr};
   const std::unordered_map<std::string, int>* retParamIdxs{nullptr};
   std::vector<Diagnostic>* diags{nullptr};
-  const std::unordered_map<std::string, std::unordered_set<std::string>>* callTargets{nullptr};
+  PolyPtrs polyTargets{};
   Type out{Type::NoneType};
   uint32_t outSet{0};
   bool ok{true};
@@ -117,7 +130,7 @@ struct ExpressionTyper : public ast::VisitorBase {
     out = Type::NoneType;
     for (const auto& field : obj.fields) {
       if (field) {
-        ExpressionTyper sub{*env, *sigs, *retParamIdxs, *diags, callTargets};
+        ExpressionTyper sub{*env, *sigs, *retParamIdxs, *diags, polyTargets};
         field->accept(sub);
         if (!sub.ok) { ok = false; return; }
       }
@@ -150,7 +163,7 @@ struct ExpressionTyper : public ast::VisitorBase {
   void visit(const ast::Unary& unaryNode) override {
     const ast::Expr* operandExpr = unaryNode.operand.get();
     if (operandExpr == nullptr) { addDiag(*diags, "null operand", &unaryNode); ok = false; return; }
-    ExpressionTyper sub{*env, *sigs, *retParamIdxs, *diags, callTargets};
+    ExpressionTyper sub{*env, *sigs, *retParamIdxs, *diags, polyTargets};
     operandExpr->accept(sub); if (!sub.ok) { ok = false; return; }
     const uint32_t iMask = TypeEnv::maskForKind(Type::Int);
     const uint32_t fMask = TypeEnv::maskForKind(Type::Float);
@@ -175,8 +188,8 @@ struct ExpressionTyper : public ast::VisitorBase {
   }
   // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
   void visit(const ast::Binary& binaryNode) override {
-    ExpressionTyper lhsTyper{*env, *sigs, *retParamIdxs, *diags, callTargets};
-    ExpressionTyper rhsTyper{*env, *sigs, *retParamIdxs, *diags, callTargets};
+    ExpressionTyper lhsTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets};
+    ExpressionTyper rhsTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets};
     binaryNode.lhs->accept(lhsTyper);
     if (!lhsTyper.ok) { ok = false; return; }
     binaryNode.rhs->accept(rhsTyper);
@@ -268,7 +281,7 @@ struct ExpressionTyper : public ast::VisitorBase {
   void visit(const ast::TupleLiteral& tupleLiteral) override {
     // Infer element types; mark this as a tuple
     for (const auto& element : tupleLiteral.elements) {
-      ExpressionTyper elemTyper{*env, *sigs, *retParamIdxs, *diags, callTargets};
+      ExpressionTyper elemTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets};
       element->accept(elemTyper);
       if (!elemTyper.ok) { ok = false; return; }
     }
@@ -287,7 +300,7 @@ struct ExpressionTyper : public ast::VisitorBase {
   }
   void visit(const ast::ListLiteral& listLiteral) override {
     for (const auto& element : listLiteral.elements) {
-      ExpressionTyper elemTyper{*env, *sigs, *retParamIdxs, *diags, callTargets};
+      ExpressionTyper elemTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets};
       element->accept(elemTyper);
       if (!elemTyper.ok) { ok = false; return; }
     }
@@ -306,7 +319,7 @@ struct ExpressionTyper : public ast::VisitorBase {
   }
   void visit(const ast::IfExpr& ife) override {
     // test must be bool
-    ExpressionTyper testTyper{*env, *sigs, *retParamIdxs, *diags, callTargets};
+    ExpressionTyper testTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets};
     if (ife.test) { ife.test->accept(testTyper); } else { addDiag(*diags, "if-expression missing condition", &ife); ok = false; return; }
     if (!testTyper.ok) { ok = false; return; }
     const uint32_t bMask = TypeEnv::maskForKind(Type::Bool);
@@ -314,8 +327,8 @@ struct ExpressionTyper : public ast::VisitorBase {
     auto isSubset = [](uint32_t msk, uint32_t allow) { return msk && ((msk & ~allow) == 0U); };
     if (!isSubset(tMask, bMask)) { addDiag(*diags, "if-expression condition must be bool", &ife); ok = false; return; }
     // then and else must match
-    ExpressionTyper thenTyper{*env, *sigs, *retParamIdxs, *diags, callTargets};
-    ExpressionTyper elseTyper{*env, *sigs, *retParamIdxs, *diags, callTargets};
+    ExpressionTyper thenTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets};
+    ExpressionTyper elseTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets};
     if (!ife.body || !ife.orelse) { addDiag(*diags, "if-expression requires both arms", &ife); ok = false; return; }
     ife.body->accept(thenTyper); if (!thenTyper.ok) { ok = false; return; }
     ife.orelse->accept(elseTyper); if (!elseTyper.ok) { ok = false; return; }
@@ -327,6 +340,41 @@ struct ExpressionTyper : public ast::VisitorBase {
   }
   // NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
   void visit(const ast::Call& callNode) override {
+    // Attribute-based call: module.func(...)
+    if (callNode.callee && callNode.callee->kind == ast::NodeKind::Attribute) {
+      const auto* attr = static_cast<const ast::Attribute*>(callNode.callee.get());
+      if (!(attr->value && attr->value->kind == ast::NodeKind::Name)) { addDiag(*diags, "unsupported callee expression", &callNode); ok = false; return; }
+      const auto* mod = static_cast<const ast::Name*>(attr->value.get());
+      const std::string key = mod->id + std::string(".") + attr->attr;
+      Sig polySig; bool havePoly = false;
+      if (polyTargets.attrs != nullptr) {
+        auto it = polyTargets.attrs->find(key);
+        if (it != polyTargets.attrs->end() && !it->second.empty()) {
+          const Sig* base = nullptr;
+          for (const auto& tgt : it->second) {
+            auto sIt = sigs->find(tgt);
+            if (sIt == sigs->end()) { addDiag(*diags, std::string("monkey patch target not found in known code: ") + tgt, &callNode); ok = false; return; }
+            const Sig& sg = sIt->second;
+            if (base == nullptr) { base = &sg; polySig = sg; }
+            else {
+              if (!(sg.ret == base->ret && sg.params.size() == base->params.size())) { addDiag(*diags, std::string("incompatible monkey-patch signatures for: ") + key, &callNode); ok = false; return; }
+              for (size_t i = 0; i < sg.params.size(); ++i) { if (sg.params[i] != base->params[i]) { addDiag(*diags, std::string("incompatible monkey-patch signatures for: ") + key, &callNode); ok = false; return; } }
+            }
+          }
+          havePoly = (base != nullptr);
+        }
+      }
+      if (!havePoly) { addDiag(*diags, std::string("unknown function: ") + key, &callNode); ok = false; return; }
+      const Sig& sig = polySig;
+      if (sig.params.size() != callNode.args.size()) { addDiag(*diags, std::string("arity mismatch calling function: ") + key, &callNode); ok = false; return; }
+      for (size_t i = 0; i < callNode.args.size(); ++i) {
+        ExpressionTyper argTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets}; callNode.args[i]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
+        if (argTyper.out != sig.params[i]) { addDiag(*diags, "call argument type mismatch", callNode.args[i].get()); ok = false; return; }
+      }
+      out = sig.ret; auto& mutableCall = const_cast<ast::Call&>(callNode); // NOLINT
+      mutableCall.setType(out);
+      return;
+    }
     if (!callNode.callee || callNode.callee->kind != ast::NodeKind::Name) { addDiag(*diags, "unsupported callee expression", &callNode); ok = false; return; }
     const auto* nameNode = static_cast<const ast::Name*>(callNode.callee.get());
     // Builtins: len(x) -> int; isinstance(x, T) -> bool
@@ -334,7 +382,7 @@ struct ExpressionTyper : public ast::VisitorBase {
     if (nameNode->id == "exec") { addDiag(*diags, "exec() is not allowed for security reasons", &callNode); ok = false; return; }
     if (nameNode->id == "len") {
       if (callNode.args.size() != 1) { addDiag(*diags, "len() takes exactly one argument", &callNode); ok = false; return; }
-      ExpressionTyper argTyper{*env, *sigs, *retParamIdxs, *diags, callTargets}; callNode.args[0]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
+      ExpressionTyper argTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets}; callNode.args[0]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
       // Allow len of tuple/list/str; others will be flagged later if desired
       out = Type::Int; const_cast<ast::Call&>(callNode).setType(out); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       return;
@@ -342,7 +390,7 @@ struct ExpressionTyper : public ast::VisitorBase {
     if (nameNode->id == "obj_get") {
       if (callNode.args.size() != 2) { addDiag(*diags, "obj_get() takes two arguments", &callNode); ok = false; return; }
       // First arg is an object pointer (opaque), second must be int index
-      ExpressionTyper idxTyper{*env, *sigs, *retParamIdxs, *diags, callTargets}; callNode.args[1]->accept(idxTyper); if (!idxTyper.ok) { ok = false; return; }
+      ExpressionTyper idxTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets}; callNode.args[1]->accept(idxTyper); if (!idxTyper.ok) { ok = false; return; }
       if (!typeIsInt(idxTyper.out)) { addDiag(*diags, "obj_get index must be int", callNode.args[1].get()); ok = false; return; }
       out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); // NOLINT(cppcoreguidelines-pro-type-const-cast) treat as string pointer result
       return;
@@ -356,9 +404,9 @@ struct ExpressionTyper : public ast::VisitorBase {
     auto sigIt = sigs->find(nameNode->id);
     // Polymorphism for monkey-patching: resolve via callTargets if callee is not a declared function
     Sig polySig; bool usePoly = false;
-    if (sigIt == sigs->end() && callTargets != nullptr) {
-      auto it = callTargets->find(nameNode->id);
-      if (it != callTargets->end() && !it->second.empty()) {
+    if (sigIt == sigs->end() && polyTargets.vars != nullptr) {
+      auto it = polyTargets.vars->find(nameNode->id);
+      if (it != polyTargets.vars->end() && !it->second.empty()) {
         const Sig* base = nullptr;
         for (const auto& tgt : it->second) {
           auto sIt = sigs->find(tgt);
@@ -377,7 +425,7 @@ struct ExpressionTyper : public ast::VisitorBase {
     const auto& sig = usePoly ? polySig : sigIt->second;
     if (sig.params.size() != callNode.args.size()) { addDiag(*diags, std::string("arity mismatch calling function: ") + nameNode->id, &callNode); ok = false; return; }
     for (size_t i = 0; i < callNode.args.size(); ++i) {
-      ExpressionTyper argTyper{*env, *sigs, *retParamIdxs, *diags, callTargets}; callNode.args[i]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
+      ExpressionTyper argTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets}; callNode.args[i]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
       if (argTyper.out != sig.params[i]) { addDiag(*diags, "call argument type mismatch", callNode.args[i].get()); ok = false; return; }
     }
     out = sig.ret; auto& mutableCall = const_cast<ast::Call&>(callNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
@@ -408,9 +456,9 @@ static bool inferExprType(const ast::Expr* expr,
                          const std::unordered_map<std::string, int>& retParamIdxs,
                          Type& outType,
                          std::vector<Diagnostic>& diags,
-                         const std::unordered_map<std::string, std::unordered_set<std::string>>* callTargets = nullptr) {
+                         PolyPtrs poly = {}) {
   if (expr == nullptr) { addDiag(diags, "null expression", nullptr); return false; }
-  ExpressionTyper exprTyper{env, sigs, retParamIdxs, diags, callTargets};
+  ExpressionTyper exprTyper{env, sigs, retParamIdxs, diags, poly};
   expr->accept(exprTyper);
   if (!exprTyper.ok) { return false; }
   outType = exprTyper.out;
@@ -480,17 +528,20 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
     struct StmtChecker : public ast::VisitorBase {
       StmtChecker(const ast::FunctionDef& fn_, const std::unordered_map<std::string, Sig>& sigs_,
                   const std::unordered_map<std::string, int>& retParamIdxs_, TypeEnv& env_, std::vector<Diagnostic>& diags_,
-                  std::unordered_map<std::string, std::unordered_set<std::string>>& poly_)
-        : fn(fn_), sigs(sigs_), retParamIdxs(retParamIdxs_), env(env_), diags(diags_), poly(poly_) {}
+                  PolyRefs polyRefs_)
+        : fn(fn_), sigs(sigs_), retParamIdxs(retParamIdxs_), env(env_), diags(diags_), polyRefs(polyRefs_) {}
       const ast::FunctionDef& fn; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
       const std::unordered_map<std::string, Sig>& sigs; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
       const std::unordered_map<std::string, int>& retParamIdxs; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
       TypeEnv& env; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
       std::vector<Diagnostic>& diags; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
-      std::unordered_map<std::string, std::unordered_set<std::string>>& poly; // name -> set of candidate callee functions
+      PolyRefs polyRefs; // grouped polymorphic targets
       bool ok{true};
+      // global/nonlocal intent (subset): names declared here are not treated as locals
+      std::unordered_set<std::string> globals;
+      std::unordered_set<std::string> nonlocals;
 
-      bool infer(const ast::Expr* expr, Type& out) { return inferExprType(expr, env, sigs, retParamIdxs, out, diags, &poly); }
+      bool infer(const ast::Expr* expr, Type& out) { return inferExprType(expr, env, sigs, retParamIdxs, out, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}); }
 
       void visit(const ast::AssignStmt& assignStmt) override {
         // Monkey-patching as polymorphism: allow aliasing a function name within known code
@@ -499,13 +550,39 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
           const auto* rhs = static_cast<const ast::Name*>(assignStmt.value.get());
           auto it = sigs.find(rhs->id);
           if (it != sigs.end()) {
-            poly[assignStmt.target].insert(rhs->id);
+            polyRefs.vars[assignStmt.target].insert(rhs->id);
             isPolyAlias = true;
+          }
+        }
+        // Attribute-based monkey patching: module.attr = function
+        if (assignStmt.value && assignStmt.value->kind == ast::NodeKind::Name && !assignStmt.targets.empty()) {
+          const auto* rhs = static_cast<const ast::Name*>(assignStmt.value.get());
+          auto it = sigs.find(rhs->id);
+          if (it != sigs.end()) {
+            for (const auto& tgt : assignStmt.targets) {
+              if (tgt && tgt->kind == ast::NodeKind::Attribute) {
+                const auto* attr = static_cast<const ast::Attribute*>(tgt.get());
+                if (attr->value && attr->value->kind == ast::NodeKind::Name) {
+                  const auto* mod = static_cast<const ast::Name*>(attr->value.get());
+                  const std::string key = mod->id + std::string(".") + attr->attr;
+                  polyRefs.attrs[key].insert(rhs->id);
+                  isPolyAlias = true;
+                }
+              }
+            }
+          } else {
+            // RHS is not a known function; for attribute patching, keep it disallowed
+            for (const auto& tgt : assignStmt.targets) {
+              if (tgt && tgt->kind == ast::NodeKind::Attribute) {
+                addDiag(diags, std::string("monkey patch target not found in known code: ") + rhs->id, assignStmt.value.get());
+                ok = false; return;
+              }
+            }
           }
         }
         if (isPolyAlias) { return; }
         // Infer value with set awareness for normal assignments
-        ExpressionTyper valTyper{env, sigs, retParamIdxs, diags, &poly};
+        ExpressionTyper valTyper{env, sigs, retParamIdxs, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}};
         if (assignStmt.value) { assignStmt.value->accept(valTyper); } else { ok = false; return; }
         if (!valTyper.ok) { ok = false; return; }
         const Type typeOut = valTyper.out;
@@ -513,9 +590,11 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         if (!allowed) {
           addDiag(diags, "only int/bool/float/str/list variables supported", &assignStmt); ok = false; return;
         }
-        // Define from set if available, else exact kind
-        const uint32_t maskVal = (valTyper.outSet != 0U) ? valTyper.outSet : TypeEnv::maskForKind(typeOut);
-        env.defineSet(assignStmt.target, maskVal, {assignStmt.file, assignStmt.line, assignStmt.col});
+        // Define from set if available, else exact kind, unless 'global'/'nonlocal' intent was declared
+        if (globals.find(assignStmt.target) == globals.end() && nonlocals.find(assignStmt.target) == nonlocals.end()) {
+          const uint32_t maskVal = (valTyper.outSet != 0U) ? valTyper.outSet : TypeEnv::maskForKind(typeOut);
+          env.defineSet(assignStmt.target, maskVal, {assignStmt.file, assignStmt.line, assignStmt.col});
+        }
       }
 
       // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
@@ -585,19 +664,12 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
               refineEq(bin.rhs.get(), bin.lhs.get(), false);
             }
           }
-          // not(<expr>): swap then/else refinements for eq/ne None
+          // not(<expr>): swap then/else refinements for the operand expression (handles Eq/Ne/And/Or/Call)
           // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
           void visit(const ast::Unary& unary) override {
             if (unary.op != ast::UnaryOperator::Not || !unary.operand) { return; }
-            if (unary.operand->kind == ast::NodeKind::BinaryExpr) {
-              const auto* bin = static_cast<const ast::Binary*>(unary.operand.get());
-              if (bin->op == ast::BinaryOperator::Eq || bin->op == ast::BinaryOperator::Ne) {
-                // Create a temporary refiner with swapped envs
-                ConditionRefiner swapped{ConditionRefiner::Envs{elseEnv, thenEnv}};
-                unary.operand->accept(swapped);
-              }
-            } else if (unary.operand->kind == ast::NodeKind::Call) {
-              // not isinstance(x,T): then exclude T; else restrict to T
+            // Special-case: not isinstance(x,T)
+            if (unary.operand->kind == ast::NodeKind::Call) {
               const auto* call = static_cast<const ast::Call*>(unary.operand.get());
               if (call->callee && call->callee->kind == ast::NodeKind::Name && call->args.size() == 2 && call->args[0] && call->args[0]->kind == ast::NodeKind::Name && call->args[1] && call->args[1]->kind == ast::NodeKind::Name) {
                 const auto* callee = static_cast<const ast::Name*>(call->callee.get());
@@ -610,10 +682,14 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
                     elseEnv.restrictToKind(var->id, newType);
                     thenRefined.emplace_back(var->id, thenEnv.getSet(var->id));
                     elseRefined.emplace_back(var->id, elseEnv.getSet(var->id));
+                    return;
                   }
                 }
               }
             }
+            // General case: swap then/else for the operand
+            ConditionRefiner swapped{ConditionRefiner::Envs{elseEnv, thenEnv}};
+            unary.operand->accept(swapped);
           }
           // Apply negation refinement to a subexpression (for else-branch of OR)
           // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
@@ -707,7 +783,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
               : parent(parentIn), envRef(envIn), fnRet(retType), okRef(okIn) {}
           bool inferLocal(const ast::Expr* expr, Type& outTy) {
             if (expr == nullptr) { addDiag(parent.diags, "null expression", nullptr); return false; }
-            ExpressionTyper v{envRef, parent.sigs, parent.retParamIdxs, parent.diags, &parent.poly};
+            ExpressionTyper v{envRef, parent.sigs, parent.retParamIdxs, parent.diags, PolyPtrs{&parent.polyRefs.vars, &parent.polyRefs.attrs}};
             expr->accept(v);
             if (!v.ok) { return false; }
             outTy = v.out;
@@ -719,9 +795,33 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
             if (assignStmt.value && assignStmt.value->kind == ast::NodeKind::Name && !assignStmt.target.empty()) {
               const auto* rhs = static_cast<const ast::Name*>(assignStmt.value.get());
               auto it = parent.sigs.find(rhs->id);
-              if (it != parent.sigs.end()) { parent.poly[assignStmt.target].insert(rhs->id); isPolyAlias = true; }
+              if (it != parent.sigs.end()) { parent.polyRefs.vars[assignStmt.target].insert(rhs->id); isPolyAlias = true; }
               else {
                 // Not a function alias; treat as normal variable assignment handled below
+              }
+            }
+            if (assignStmt.value && assignStmt.value->kind == ast::NodeKind::Name && !assignStmt.targets.empty()) {
+              const auto* rhs = static_cast<const ast::Name*>(assignStmt.value.get());
+              auto it = parent.sigs.find(rhs->id);
+              if (it != parent.sigs.end()) {
+                for (const auto& tgt : assignStmt.targets) {
+                  if (tgt && tgt->kind == ast::NodeKind::Attribute) {
+                    const auto* attr = static_cast<const ast::Attribute*>(tgt.get());
+                    if (attr->value && attr->value->kind == ast::NodeKind::Name) {
+                      const auto* mod = static_cast<const ast::Name*>(attr->value.get());
+                      const std::string key = mod->id + std::string(".") + attr->attr;
+                      parent.polyRefs.attrs[key].insert(rhs->id);
+                      isPolyAlias = true;
+                    }
+                  }
+                }
+              } else {
+                for (const auto& tgt : assignStmt.targets) {
+                  if (tgt && tgt->kind == ast::NodeKind::Attribute) {
+                    addDiag(parent.diags, std::string("monkey patch target not found in known code: ") + rhs->id, assignStmt.value.get());
+                    okRef = false; return;
+                  }
+                }
               }
             }
             if (isPolyAlias) { return; }
@@ -772,6 +872,14 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
 
       void visit(const ast::ExprStmt& stmt) override { if (stmt.value) { Type tmp{}; (void)infer(stmt.value.get(), tmp); } }
 
+      // Subset handling: record intent only; full module/nonlocal binding semantics are outside current scope
+      void visit(const ast::GlobalStmt& gs) override {
+        for (const auto& n : gs.names) { globals.insert(n); }
+      }
+      void visit(const ast::NonlocalStmt& ns) override {
+        for (const auto& n : ns.names) { nonlocals.insert(n); }
+      }
+
       // Unused in stmt context; name parameters for readability
       void visit(const ast::Module& moduleNode) override { (void)moduleNode; }
       void visit(const ast::FunctionDef& functionNode) override { (void)functionNode; }
@@ -790,7 +898,8 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
     };
 
     std::unordered_map<std::string, std::unordered_set<std::string>> poly; // per-function polymorphic call targets
-    StmtChecker checker{*func, sigs, retParamIdxs, env, diags, poly};
+    std::unordered_map<std::string, std::unordered_set<std::string>> polyAttr; // per-function polymorphic attribute call targets
+    StmtChecker checker{*func, sigs, retParamIdxs, env, diags, PolyRefs{poly, polyAttr}};
     for (const auto& stmt : func->body) {
       stmt->accept(checker);
       if (!checker.ok) { return false; }

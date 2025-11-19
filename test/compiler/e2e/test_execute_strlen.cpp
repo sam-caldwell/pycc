@@ -9,14 +9,14 @@
 #include <sys/wait.h>
 
 TEST(ExecuteExample, ReturnsStringLen) {
-  const char* srcPath = "e2e_run_strlen.py";
-  {
-    std::ofstream out(srcPath);
-    out << "def main() -> int:\n";
-    out << "  s = \"hello\"\n";
-    out << "  return len(s)\n";
-  }
-  int rc = std::system("../pycc -o e2e_strlen e2e_run_strlen.py > /dev/null 2>&1");
+  namespace fs = std::filesystem;
+  std::vector<fs::path> candidates = {fs::path("../../../demos"), fs::path("../../demos"), fs::path("demos")};
+  fs::path demosDir;
+  for (const auto& c : candidates) { if (fs::exists(c)) { demosDir = c; break; } }
+  ASSERT_FALSE(demosDir.empty());
+  const auto srcPath = (demosDir / "e2e_strlen.py").string();
+  std::string cmd = std::string("../pycc -o e2e_strlen ") + srcPath + " > /dev/null 2>&1";
+  int rc = std::system(cmd.c_str());
   if (rc != 0) { GTEST_SKIP() << "Skipping: pycc failed to compile example"; }
 
   rc = std::system("./e2e_strlen > /dev/null 2>&1");

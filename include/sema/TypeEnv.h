@@ -62,7 +62,8 @@ class TypeEnv {
     auto it = sets_.find(name);
     return (it == sets_.end()) ? 0U : it->second;
   }
-  // Intersect current env with two branch envs (then/else): for names present in both, keep common kinds
+  // Intersect current env with two branch envs (then/else): for names present in both, keep common kinds.
+  // If the intersection is empty (contradictory), record a zero mask so that use sites will flag an error.
   void intersectFrom(const TypeEnv& a, const TypeEnv& b) {
     for (const auto& kv : a.sets_) {
       const std::string& name = kv.first;
@@ -70,10 +71,8 @@ class TypeEnv {
       uint32_t bm = b.getSet(name);
       if (am != 0U && bm != 0U) {
         uint32_t inter = am & bm;
-        if (inter != 0U) {
-          sets_[name] = inter;
-          if (isSingle(inter)) { types_[name] = kindFor(inter); }
-        }
+        sets_[name] = inter; // may be zero: contradictory
+        if (inter != 0U && isSingle(inter)) { types_[name] = kindFor(inter); }
       }
     }
     for (const auto& kv : b.sets_) {
@@ -83,10 +82,8 @@ class TypeEnv {
       uint32_t am = a.getSet(name);
       if (am != 0U && bm != 0U) {
         uint32_t inter = am & bm;
-        if (inter != 0U) {
-          sets_[name] = inter;
-          if (isSingle(inter)) { types_[name] = kindFor(inter); }
-        }
+        sets_[name] = inter;
+        if (inter != 0U && isSingle(inter)) { types_[name] = kindFor(inter); }
       }
     }
   }

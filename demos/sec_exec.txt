@@ -1,0 +1,1 @@
+sh: ../pycc: is a directory

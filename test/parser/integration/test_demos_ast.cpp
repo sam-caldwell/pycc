@@ -63,6 +63,8 @@ TEST(DemosAst, AllDemosParseAndMatchExpectedAstStructures) {
     const auto path = entry.path();
     if (path.extension() != ".py") continue;
     const auto name = path.filename().string();
+    // Skip tiny parsing-exercise snippets that are not full demo programs
+    if (name.rfind("pe_", 0) == 0) { continue; }
     SCOPED_TRACE(std::string("demo=") + name);
 
     // 1) Lex the file
