@@ -254,12 +254,15 @@ struct ExpressionTyper : public ast::VisitorBase {
       const bool bothInt = (lMask == iMask) && (rMask == iMask);
       const bool bothFloat = (lMask == fMask) && (rMask == fMask);
       const bool bothStr = (lMask == sMask) && (rMask == sMask);
+      // Identity comparisons allowed only with None in this subset
+      if ((binaryNode.op == ast::BinaryOperator::Is || binaryNode.op == ast::BinaryOperator::IsNot) && !(binaryNode.lhs->kind == ast::NodeKind::NoneLiteral || binaryNode.rhs->kind == ast::NodeKind::NoneLiteral)) {
+        addDiag(*diags, "'is'/'is not' supported only with None in this subset", &binaryNode); ok = false; return;
+      }
       if (bothStr) {
-        // Allow only eq/ne for strings
-        if (binaryNode.op == ast::BinaryOperator::Eq || binaryNode.op == ast::BinaryOperator::Ne) {
+        // Allow all standard comparisons for strings (Eq/Ne/Lt/Le/Gt/Ge)
+        if (binaryNode.op == ast::BinaryOperator::Eq || binaryNode.op == ast::BinaryOperator::Ne || binaryNode.op == ast::BinaryOperator::Lt || binaryNode.op == ast::BinaryOperator::Le || binaryNode.op == ast::BinaryOperator::Gt || binaryNode.op == ast::BinaryOperator::Ge) {
           out = Type::Bool; auto& mb = const_cast<ast::Binary&>(binaryNode); mb.setType(out); return;
         }
-        addDiag(*diags, "only '==' and '!=' are allowed for string comparisons in this subset", &binaryNode); ok = false; return;
       }
       if (!(bothInt || bothFloat)) { addDiag(*diags, "comparison operands must both be int or both be float", &binaryNode); ok = false; return; }
       out = Type::Bool; auto& mutableBinary = const_cast<ast::Binary&>(binaryNode); // NOLINT(cppcoreguidelines-pro-type-const-cast)
@@ -271,11 +274,36 @@ struct ExpressionTyper : public ast::VisitorBase {
       }
       return;
     }
-    // Membership tests: type as bool in this subset
+    // Membership tests: lhs in rhs -> bool, with limited type validation
     if (binaryNode.op == ast::BinaryOperator::In || binaryNode.op == ast::BinaryOperator::NotIn) {
+      const uint32_t sMask = TypeEnv::maskForKind(Type::Str);
+      const uint32_t lMaskList = TypeEnv::maskForKind(Type::List);
+      const uint32_t lMask = (lhsTyper.outSet != 0U) ? lhsTyper.outSet : TypeEnv::maskForKind(lhsTyper.out);
+      const uint32_t rMask = (rhsTyper.outSet != 0U) ? rhsTyper.outSet : TypeEnv::maskForKind(rhsTyper.out);
+      auto isSubset = [](uint32_t msk, uint32_t allow) { return msk && ((msk & ~allow) == 0U); };
+      if (rMask == sMask) {
+        if (!isSubset(lMask, sMask)) { addDiag(*diags, "left operand must be str when right is str for 'in'", &binaryNode); ok = false; return; }
+      } else if (rMask == lMaskList) {
+        // If RHS is a name bound to a list with known element set, enforce lhs within element set
+        uint32_t elemMask = 0U;
+        if (binaryNode.rhs->kind == ast::NodeKind::Name) {
+          const auto* nm = static_cast<const ast::Name*>(binaryNode.rhs.get());
+          elemMask = env->getListElems(nm->id);
+        } else if (binaryNode.rhs->kind == ast::NodeKind::ListLiteral) {
+          const auto* lst = static_cast<const ast::ListLiteral*>(binaryNode.rhs.get());
+          for (const auto& el : lst->elements) {
+            if (!el) continue; ExpressionTyper et{*env, *sigs, *retParamIdxs, *diags, polyTargets, outers}; el->accept(et); if (!et.ok) { ok = false; return; }
+            const uint32_t em = (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out);
+            elemMask |= em;
+          }
+        }
+        if (elemMask != 0U) {
+          if (!isSubset(lMask, elemMask)) { addDiag(*diags, "left operand not permitted for membership in list", &binaryNode); ok = false; return; }
+        }
+      } else {
+        addDiag(*diags, "right operand of 'in' must be str or list", &binaryNode); ok = false; return; }
       out = Type::Bool; outSet = TypeEnv::maskForKind(Type::Bool);
-      auto& mut = const_cast<ast::Binary&>(binaryNode);
-      mut.setType(out);
+      auto& mut = const_cast<ast::Binary&>(binaryNode); mut.setType(out);
       return;
     }
     // Logical
@@ -563,8 +591,18 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
     if (!(typeIsInt(func->returnType) || typeIsBool(func->returnType) || typeIsFloat(func->returnType) || typeIsStr(func->returnType) || func->returnType == Type::Tuple)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/tuple returns supported"; diags.push_back(std::move(diagVar)); return false; }
     TypeEnv env;
     for (const auto& param : func->params) {
-      if (!(typeIsInt(param.type) || typeIsBool(param.type) || typeIsFloat(param.type) || typeIsStr(param.type))) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str params supported"; diags.push_back(std::move(diagVar)); return false; }
-      env.define(param.name, param.type, {func->name, 0, 0});
+      if (!(typeIsInt(param.type) || typeIsBool(param.type) || typeIsFloat(param.type) || typeIsStr(param.type) || param.type == Type::List)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/list params supported"; diags.push_back(std::move(diagVar)); return false; }
+      // Apply union/optional modeling via type sets
+      uint32_t mask = 0U;
+      if (!param.unionTypes.empty()) {
+        for (auto tk : param.unionTypes) { mask |= TypeEnv::maskForKind(tk); }
+      } else {
+        mask = TypeEnv::maskForKind(param.type);
+      }
+      env.defineSet(param.name, mask, {func->name, 0, 0});
+      if (param.type == Type::List && param.listElemType != Type::NoneType) {
+        env.defineListElems(param.name, TypeEnv::maskForKind(param.listElemType));
+      }
     }
     struct StmtChecker : public ast::VisitorBase {
       StmtChecker(const ast::FunctionDef& fn_, const std::unordered_map<std::string, Sig>& sigs_,
@@ -685,10 +723,28 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
           if (itN != nonlocalTargets.end() && itN->second != nullptr) {
             const uint32_t maskVal = (valTyper.outSet != 0U) ? valTyper.outSet : TypeEnv::maskForKind(typeOut);
             itN->second->defineSet(assignStmt.target, maskVal, {assignStmt.file, assignStmt.line, assignStmt.col});
+            // Propagate list element set for list literals and aliases
+            if (assignStmt.value->kind == ast::NodeKind::ListLiteral) {
+              // compute element union
+              uint32_t elemMask = 0U; const auto* lst = static_cast<const ast::ListLiteral*>(assignStmt.value.get());
+              for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{env, sigs, retParamIdxs, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}, &ovec}; el->accept(et); if (!et.ok) { ok = false; return; } elemMask |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); }
+              itN->second->defineListElems(assignStmt.target, elemMask);
+            } else if (assignStmt.value->kind == ast::NodeKind::Name) {
+              const auto* rhsn = static_cast<const ast::Name*>(assignStmt.value.get());
+              const uint32_t e = env.getListElems(rhsn->id); if (e != 0U) { itN->second->defineListElems(assignStmt.target, e); }
+            }
           } else { addDiag(diags, std::string("nonlocal target not found in outer scope: ") + assignStmt.target, &assignStmt); ok = false; return; }
         } else if (globals.find(assignStmt.target) == globals.end()) {
           const uint32_t maskVal = (valTyper.outSet != 0U) ? valTyper.outSet : TypeEnv::maskForKind(typeOut);
           env.defineSet(assignStmt.target, maskVal, {assignStmt.file, assignStmt.line, assignStmt.col});
+          if (assignStmt.value->kind == ast::NodeKind::ListLiteral) {
+            uint32_t elemMask = 0U; const auto* lst = static_cast<const ast::ListLiteral*>(assignStmt.value.get());
+            for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{env, sigs, retParamIdxs, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}, &ovec}; el->accept(et); if (!et.ok) { ok = false; return; } elemMask |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); }
+            env.defineListElems(assignStmt.target, elemMask);
+          } else if (assignStmt.value->kind == ast::NodeKind::Name) {
+            const auto* rhsn = static_cast<const ast::Name*>(assignStmt.value.get());
+            const uint32_t e = env.getListElems(rhsn->id); if (e != 0U) { env.defineListElems(assignStmt.target, e); }
+          }
         }
       }
 

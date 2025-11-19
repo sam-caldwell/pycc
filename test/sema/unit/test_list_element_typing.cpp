@@ -1,6 +1,6 @@
 /***
- * Name: test_string_type_semantics
- * Purpose: Validate string typing for concatenation, comparisons, and membership.
+ * Name: test_list_element_typing
+ * Purpose: Type-check membership against list variables with known element type sets.
  */
 #include <gtest/gtest.h>
 #include "lexer/Lexer.h"
@@ -10,33 +10,43 @@
 using namespace pycc;
 
 static std::unique_ptr<ast::Module> parseSrc(const char* src) {
-  lex::Lexer L; L.pushString(src, "str_types.py");
+  lex::Lexer L; L.pushString(src, "list_elem.py");
   parse::Parser P(L);
   return P.parseModule();
 }
 
-TEST(SemaStr, ConcatOk) {
+TEST(SemaListElem, IntListAllowsIntMembership) {
   const char* src = R"PY(
-def f(x: str, y: str) -> str:
-  return x + y
+def f() -> int:
+  xs = [1,2,3]
+  if 2 in xs:
+    return 1
+  else:
+    return 0
 )PY";
   auto mod = parseSrc(src);
   sema::Sema S; std::vector<sema::Diagnostic> diags; EXPECT_TRUE(S.check(*mod, diags)) << (diags.empty()?"":diags[0].message);
 }
 
-TEST(SemaStr, ConcatMismatchFails) {
+TEST(SemaListElem, IntListRejectsStrMembership) {
   const char* src = R"PY(
-def f(x: str) -> str:
-  return x + 1
+def f() -> int:
+  xs = [1,2,3]
+  if 'a' in xs:
+    return 1
+  else:
+    return 0
 )PY";
   auto mod = parseSrc(src);
   sema::Sema S; std::vector<sema::Diagnostic> diags; EXPECT_FALSE(S.check(*mod, diags));
 }
 
-TEST(SemaStr, EqCompareOk) {
+TEST(SemaListElem, AliasCopiesElemSet) {
   const char* src = R"PY(
-def f(x: str, y: str) -> int:
-  if x == y:
+def f() -> int:
+  xs = [1,2]
+  ys = xs
+  if 1 in ys:
     return 1
   else:
     return 0
@@ -45,22 +55,11 @@ def f(x: str, y: str) -> int:
   sema::Sema S; std::vector<sema::Diagnostic> diags; EXPECT_TRUE(S.check(*mod, diags)) << (diags.empty()?"":diags[0].message);
 }
 
-TEST(SemaStr, OrderingCompareOk) {
+TEST(SemaListElem, UnionElementSet) {
   const char* src = R"PY(
-def f(x: str, y: str) -> int:
-  if x < y:
-    return 1
-  else:
-    return 0
-)PY";
-  auto mod = parseSrc(src);
-  sema::Sema S; std::vector<sema::Diagnostic> diags; EXPECT_TRUE(S.check(*mod, diags)) << (diags.empty()?"":diags[0].message);
-}
-
-TEST(SemaStr, MembershipInConditionOk) {
-  const char* src = R"PY(
-def f(x: str) -> int:
-  if 'a' in x:
+def f() -> int:
+  xs = [1, 'a']
+  if 'a' in xs:
     return 1
   else:
     return 0

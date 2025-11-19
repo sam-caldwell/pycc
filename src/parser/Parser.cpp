@@ -317,25 +317,34 @@ void Parser::parseOptionalParamType(ast::Param& param) {
   const auto& pTypeTok = get();
   if (pTypeTok.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected type ident after ':'"); }
   param.type = toTypeKind(pTypeTok.text);
+  param.unionTypes.clear();
+  param.unionTypes.push_back(param.type);
   // Accept generic shape like list[int], dict[str, int], tuple[int, str]
   if (peek().kind == TK::LBracket) {
-    int depth = 0;
-    // consume '[' ... ']'
-    do {
+    // capture a simple single-type generic parameter for list[T]
+    get(); // '['
+    if (peek().kind == TK::TypeIdent) {
+      const auto& inner = get();
+      auto innerKind = toTypeKind(inner.text);
+      if (param.type == ast::TypeKind::List) { param.listElemType = innerKind; }
+    }
+    // consume until ']'
+    int depth = 1;
+    while (depth > 0) {
       const auto& t = get();
-      if (t.kind == TK::LBracket) { ++depth; }
-      else if (t.kind == TK::RBracket) { --depth; }
-      else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) { break; }
-    } while (depth > 0);
+      if (t.kind == TK::LBracket) ++depth; else if (t.kind == TK::RBracket) --depth; else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break;
+    }
   }
   // Accept union pipe chain: T | U | V (shape-only)
   while (peek().kind == TK::Pipe) {
     get();
     const auto& nextTok = get();
     if (nextTok.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected type ident after '|'"); }
+    param.unionTypes.push_back(toTypeKind(nextTok.text));
     // Optional bracketed shape
     if (peek().kind == TK::LBracket) {
-      int d = 0; do { const auto& t = get(); if (t.kind == TK::LBracket) ++d; else if (t.kind == TK::RBracket) --d; else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break; } while (d > 0);
+      int d = 1; get();
+      while (d > 0) { const auto& t = get(); if (t.kind == TK::LBracket) ++d; else if (t.kind == TK::RBracket) --d; else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break; }
     }
   }
 }

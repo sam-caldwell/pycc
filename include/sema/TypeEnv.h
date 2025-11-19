@@ -58,6 +58,11 @@ class TypeEnv {
     auto it = types_.find(name);
     if (it == types_.end()) return std::nullopt; return it->second;
   }
+  void defineListElems(const std::string& name, uint32_t elemMask) { listElemSets_[name] = elemMask; }
+  uint32_t getListElems(const std::string& name) const {
+    auto it = listElemSets_.find(name);
+    return (it == listElemSets_.end()) ? 0U : it->second;
+  }
   uint32_t getSet(const std::string& name) const {
     auto it = sets_.find(name);
     return (it == sets_.end()) ? 0U : it->second;
@@ -124,6 +129,7 @@ class TypeEnv {
   std::unordered_map<std::string, Provenance> prov_;
   std::unordered_map<std::string, bool> nonNone_;
   std::unordered_map<std::string, uint32_t> sets_;
+  std::unordered_map<std::string, uint32_t> listElemSets_;
 };
 
 } // namespace pycc::sema
