@@ -39,6 +39,16 @@ static inline bool isOne(const Expr* expr) {
   if (expr->kind == NodeKind::FloatLiteral) { return static_cast<const FloatLiteral*>(expr)->value == 1.0; }
   return false;
 }
+// Treat a unary-negated float literal as a float participant in arithmetic simplifications.
+static inline bool isFloatLike(const Expr* expr) {
+  if (expr == nullptr) return false;
+  if (expr->kind == NodeKind::FloatLiteral) return true;
+  if (expr->kind == NodeKind::UnaryExpr) {
+    const auto* u = static_cast<const Unary*>(expr);
+    return u->op == UnaryOperator::Neg && u->operand && u->operand->kind == NodeKind::FloatLiteral;
+  }
+  return false;
+}
 
 static inline const BoolLiteral* asBool(const Expr* e) {
   return (e && e->kind == NodeKind::BoolLiteral) ? static_cast<const BoolLiteral*>(e) : nullptr;
@@ -156,8 +166,8 @@ struct SimplifyVisitor : public ast::VisitorBase {
           default: break;
         }
       }
-      // Float rules
-      if (left->kind == NodeKind::FloatLiteral || right->kind == NodeKind::FloatLiteral) {
+      // Float rules (includes unary-negated float literal)
+      if (isFloatLike(left) || isFloatLike(right)) {
         switch (bin->op) {
           case BinaryOperator::Add:
             if (isZero(left)) { replacement = std::move(bin->rhs); } else if (isZero(right)) { replacement = std::move(bin->lhs); }
@@ -180,6 +190,19 @@ struct SimplifyVisitor : public ast::VisitorBase {
               const auto* rf = dynamic_cast<const FloatLiteral*>(right);
               if (lf && lf->value == -1.0) { auto neg = std::make_unique<Unary>(UnaryOperator::Neg, std::move(bin->rhs)); replacement = std::move(neg); }
               else if (rf && rf->value == -1.0) { auto neg = std::make_unique<Unary>(UnaryOperator::Neg, std::move(bin->lhs)); replacement = std::move(neg); }
+              else if (left->kind == NodeKind::UnaryExpr) {
+                const auto* ul = static_cast<const Unary*>(left);
+                if (ul->op == UnaryOperator::Neg && ul->operand && ul->operand->kind == NodeKind::FloatLiteral) {
+                  const auto* one = static_cast<const FloatLiteral*>(ul->operand.get());
+                  if (one->value == 1.0) { auto neg = std::make_unique<Unary>(UnaryOperator::Neg, std::move(bin->rhs)); replacement = std::move(neg); }
+                }
+              } else if (right->kind == NodeKind::UnaryExpr) {
+                const auto* ur = static_cast<const Unary*>(right);
+                if (ur->op == UnaryOperator::Neg && ur->operand && ur->operand->kind == NodeKind::FloatLiteral) {
+                  const auto* one = static_cast<const FloatLiteral*>(ur->operand.get());
+                  if (one->value == 1.0) { auto neg = std::make_unique<Unary>(UnaryOperator::Neg, std::move(bin->lhs)); replacement = std::move(neg); }
+                }
+              }
             }
             if (replacement) { ++changes; stats["algebraic_float"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
@@ -188,6 +211,13 @@ struct SimplifyVisitor : public ast::VisitorBase {
             {
               const auto* rf = dynamic_cast<const FloatLiteral*>(right);
               if (rf && rf->value == -1.0) { auto neg = std::make_unique<Unary>(UnaryOperator::Neg, std::move(bin->lhs)); replacement = std::move(neg); }
+              else if (right->kind == NodeKind::UnaryExpr) {
+                const auto* ur = static_cast<const Unary*>(right);
+                if (ur->op == UnaryOperator::Neg && ur->operand && ur->operand->kind == NodeKind::FloatLiteral) {
+                  const auto* one = static_cast<const FloatLiteral*>(ur->operand.get());
+                  if (one->value == 1.0) { auto neg = std::make_unique<Unary>(UnaryOperator::Neg, std::move(bin->lhs)); replacement = std::move(neg); }
+                }
+              }
             }
             if (replacement) { ++changes; stats["algebraic_float"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;

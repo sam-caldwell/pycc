@@ -354,7 +354,7 @@ std::unique_ptr<ast::Stmt> Parser::parseIfStmt() {
   auto cond = parseExpr();
   expect(TK::Colon, ":'");
   expect(TK::Newline, "newline");
-  expect(TK::Indent, "indent");
+  if (peek().kind == TK::Indent) { get(); }
   auto ifs = std::make_unique<ast::IfStmt>(std::move(cond));
   parseSuiteInto(ifs->thenBody);
   // elif chain as nested IfStmt in else
@@ -364,7 +364,7 @@ std::unique_ptr<ast::Stmt> Parser::parseIfStmt() {
     auto econd = parseExpr();
     expect(TK::Colon, ":'");
     expect(TK::Newline, "newline");
-    expect(TK::Indent, "indent");
+    if (peek().kind == TK::Indent) { get(); }
     auto elifNode = std::make_unique<ast::IfStmt>(std::move(econd));
     parseSuiteInto(elifNode->thenBody);
     cur->elseBody.emplace_back(std::move(elifNode));
@@ -374,15 +374,19 @@ std::unique_ptr<ast::Stmt> Parser::parseIfStmt() {
     get();
     expect(TK::Colon, ":'");
     expect(TK::Newline, "newline");
-    expect(TK::Indent, "indent");
+    if (peek().kind == TK::Indent) { get(); }
     parseSuiteInto(cur->elseBody);
   }
   return ifs;
 }
 
 void Parser::parseSuiteInto(std::vector<std::unique_ptr<ast::Stmt>>& out) {
+  // Allow a stray Indent to appear after skipping blank/comment lines
+  if (peek().kind == TK::Indent) { get(); }
   while (peek().kind != TK::Dedent && peek().kind != TK::End) {
     if (peek().kind == TK::Newline) { get(); continue; }
+    // Tolerate an Indent token that may arrive after leading comments
+    if (peek().kind == TK::Indent) { get(); continue; }
     if (peek().kind == TK::At) {
       auto decorators = parseDecorators();
       if (peek().kind == TK::Def) {

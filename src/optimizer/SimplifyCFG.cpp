@@ -53,6 +53,15 @@ static bool evalBoolExpr(const Expr* e, bool& out) {
   }
   return false;
 }
+static bool isEffectivelyEmpty(const std::vector<std::unique_ptr<Stmt>>& body) {
+  if (body.empty()) return true;
+  for (const auto& s : body) {
+    if (!s) continue;
+    if (s->kind != NodeKind::PassStmt) { return false; }
+  }
+  return true;
+}
+
 static void simplifyBlock(std::vector<std::unique_ptr<Stmt>>& body, size_t& pruned) {
   std::vector<std::unique_ptr<Stmt>> out;
   out.reserve(body.size());
@@ -68,19 +77,25 @@ static void simplifyBlock(std::vector<std::unique_ptr<Stmt>>& body, size_t& prun
         ++pruned;
         continue;
       }
+      // Treat branches consisting only of 'pass' as empty
+      const bool thenEmpty = isEffectivelyEmpty(ifs->thenBody);
+      const bool elseEmpty = isEffectivelyEmpty(ifs->elseBody);
       // If both branches are empty, drop the if entirely
-      if (ifs->thenBody.empty() && ifs->elseBody.empty()) {
+      if (thenEmpty && elseEmpty) {
+        ifs->thenBody.clear(); ifs->elseBody.clear();
         ++pruned; // removed empty if
         continue;
       }
       // If then is empty but else is not, invert condition and swap bodies to canonicalize
-      if (ifs->thenBody.empty() && !ifs->elseBody.empty()) {
+      if (thenEmpty && !elseEmpty) {
         if (ifs->cond) {
           std::unique_ptr<Expr> old = std::move(ifs->cond);
           auto inv = std::make_unique<Unary>(UnaryOperator::Not, std::move(old));
           ifs->cond = std::move(inv);
         }
         std::swap(ifs->thenBody, ifs->elseBody);
+        // drop pass-only (now-else) body
+        ifs->elseBody.clear();
         ++pruned; // count as a simplification
       }
       out.emplace_back(std::move(s));

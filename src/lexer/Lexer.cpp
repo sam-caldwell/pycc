@@ -133,6 +133,12 @@ Token Lexer::scanOne(State& state) {
     tok.col = static_cast<int>(start + 1);
     return tok;
   };
+  // Inline comment: treat rest of line as comment and emit newline
+  if (line[idx] == '#') {
+    idx = line.size();
+    Token newlineTok; newlineTok.kind = TokenKind::Newline; newlineTok.text = "\n"; newlineTok.file = state.src->name(); newlineTok.line = state.lineNo; newlineTok.col = static_cast<int>(line.size() + 1);
+    return newlineTok;
+  }
 
   const char chr = line[idx];
   if (chr == ' ' || chr == '\t') { ++idx; return scanOne(state); }

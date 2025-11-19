@@ -4,6 +4,9 @@ import json, os, subprocess, sys
 BUILD = os.environ.get('PYCC_BUILD_DIR', 'build')
 PROFDB = os.path.join(BUILD, 'coverage.profdata')
 MIN_PCT = float(os.environ.get('PYCC_COVERAGE_MIN', '95'))
+# Optional filters: comma-separated phase names and/or path substrings
+FILTER_PHASES = [p.strip() for p in os.environ.get('PYCC_COVERAGE_PHASES', '').split(',') if p.strip()]
+FILTER_PATHS = [p.strip() for p in os.environ.get('PYCC_COVERAGE_ONLY_PATHS', '').split(',') if p.strip()]
 
 def run(cmd):
     return subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -16,12 +19,12 @@ def main():
             print('[coverage] no .profraw found — run tests first')
             return 0
         run(['llvm-profdata', 'merge', '-sparse', '-o', PROFDB] + profraws)
-        # Export JSON from all binaries
+        # Export JSON from all binaries (file-level granularity needed for filtering)
         objs = [os.path.join(BUILD, x) for x in ['pycc','test_unit','test_integration','test_e2e'] if os.path.exists(os.path.join(BUILD,x))]
         if not objs:
             print('[coverage] no binaries found')
             return 0
-        p = run(['llvm-cov', 'export', '--summary-only', '--format=text', f'--instr-profile={PROFDB}'] + objs)
+        p = run(['llvm-cov', 'export', '--format=json', f'--instr-profile={PROFDB}'] + objs)
         data = json.loads(p.stdout)
         # Aggregate by top-level phase directories
         groups = {
@@ -32,12 +35,14 @@ def main():
             'codegen':{'files':[], 'cov':0, 'tot':0},
             'optimizer':{'files':[], 'cov':0, 'tot':0},
             'observability':{'files':[], 'cov':0, 'tot':0},
+            'runtime':{'files':[], 'cov':0, 'tot':0},
             'compiler':{'files':[], 'cov':0, 'tot':0},
             'ast': {'files':[], 'cov':0, 'tot':0},
             'other':{'files':[], 'cov':0, 'tot':0},
         }
         total_cov = 0
         total_tot = 0
+        files_accum = []  # (path, cov, tot, group)
         for el in data.get('data', []):
             for f in el.get('files', []):
                 path = f.get('filename','')
@@ -54,6 +59,7 @@ def main():
                 groups[grp]['cov'] += lines_cov
                 groups[grp]['tot'] += lines_tot
                 groups[grp]['files'].append(path)
+                files_accum.append((path, lines_cov, lines_tot, grp))
         # Print ASCII table
         print('\n== Coverage by Phase ==')
         print(f"{'Phase':<15} {'Covered':>10} {'Total':>10} {'Percent':>9}")
@@ -65,8 +71,30 @@ def main():
         print('-'*48)
         pct_tot = (100.0*total_cov/total_tot) if total_tot else 0.0
         print(f"{'TOTAL':<15} {total_cov:>10} {total_tot:>10} {pct_tot:>8.1f}%")
+
+        # Optional filtered gating
+        filt_cov = 0
+        filt_tot = 0
+        def include(path, grp):
+            if FILTER_PHASES and grp not in FILTER_PHASES:
+                return False
+            if FILTER_PATHS:
+                return any(s in path for s in FILTER_PATHS)
+            return True
+        if FILTER_PHASES or FILTER_PATHS:
+            for path, cov, tot, grp in files_accum:
+                if include(path, grp):
+                    filt_cov += cov
+                    filt_tot += tot
+            pct_filt = (100.0*filt_cov/filt_tot) if filt_tot else 0.0
+            print(f"Filtered TOTAL: {filt_cov:>10} {filt_tot:>10} {pct_filt:>8.1f}%  (filters: phases={FILTER_PHASES}, paths={FILTER_PATHS})")
+            gate_pct = pct_filt
+            gate_cov, gate_tot = filt_cov, filt_tot
+        else:
+            gate_pct = pct_tot
+            gate_cov, gate_tot = total_cov, total_tot
         print(f"Threshold: {MIN_PCT:.1f}%")
-        ok = pct_tot >= MIN_PCT
+        ok = gate_pct >= MIN_PCT
         print('[coverage] PASS' if ok else '[coverage] FAIL')
         return 0 if ok else 2
     except Exception as e:

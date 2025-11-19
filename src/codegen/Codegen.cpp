@@ -11,6 +11,9 @@
 #include "ast/FloatLiteral.h"
 #include "ast/FunctionDef.h"
 #include "ast/IfStmt.h"
+#include "ast/WhileStmt.h"
+#include "ast/ForStmt.h"
+#include "ast/TryStmt.h"
 #include "ast/IntLiteral.h"
 #include "ast/ListLiteral.h"
 #include "ast/Module.h"
@@ -83,6 +86,9 @@ std::string Codegen::emit(const ast::Module& mod, const std::string& outBase,
   {
     std::ostringstream cmd;
     cmd << "clang -c " << (emitLL_ ? result.llPath : std::string("-x ir -")) << " -o " << result.objPath;
+    if (std::getenv("PYCC_COVERAGE") || std::getenv("LLVM_PROFILE_FILE")) {
+      cmd << " -fprofile-instr-generate -fcoverage-mapping";
+    }
     if (!runCmd(cmd.str(), err)) { return err; }
   }
 
@@ -100,6 +106,9 @@ std::string Codegen::emit(const ast::Module& mod, const std::string& outBase,
     cmd << PYCC_RUNTIME_LIB_PATH << ' ';
 #endif
     cmd << "-pthread -o " << result.binPath;
+    if (std::getenv("PYCC_COVERAGE") || std::getenv("LLVM_PROFILE_FILE")) {
+      cmd << " -fprofile-instr-generate -fcoverage-mapping";
+    }
     if (!runCmd(cmd.str(), err)) { return err; }
   }
 
@@ -133,6 +142,10 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   irStream << "declare ptr @pycc_box_int(i64)\n";
   irStream << "declare ptr @pycc_box_float(double)\n";
   irStream << "declare ptr @pycc_box_bool(i1)\n\n";
+  // Selected LLVM intrinsics used by codegen
+  irStream << "declare double @llvm.powi.f64(double, i32)\n";
+  irStream << "declare double @llvm.pow.f64(double, double)\n";
+  irStream << "declare double @llvm.floor.f64(double)\n\n";
 
   // Pre-scan functions to gather signatures
   struct Sig { ast::TypeKind ret{ast::TypeKind::NoneType}; std::vector<ast::TypeKind> params; };
@@ -702,6 +715,11 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           } else {
             throw std::runtime_error("unsupported '-' on bool");
           }
+        } else if (u.op == ast::UnaryOperator::BitNot) {
+          if (V.k != ValKind::I32) { throw std::runtime_error("bitwise '~' requires int"); }
+          std::ostringstream reg; reg << "%t" << temp++;
+          ir << "  " << reg.str() << " = xor i32 " << V.s << ", -1\n";
+          out = Value{reg.str(), ValKind::I32};
         } else {
           auto VB = toBool(V);
           std::ostringstream reg; reg << "%t" << temp++;
@@ -710,13 +728,14 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         }
       }
       void visit(const ast::Binary& b) override {
-        // Handle None comparisons to constants if possible
+        // Handle None comparisons to constants if possible (Eq/Ne/Is/IsNot)
         bool isCmp = (b.op == ast::BinaryOperator::Eq || b.op == ast::BinaryOperator::Ne ||
                       b.op == ast::BinaryOperator::Lt || b.op == ast::BinaryOperator::Le ||
-                      b.op == ast::BinaryOperator::Gt || b.op == ast::BinaryOperator::Ge);
+                      b.op == ast::BinaryOperator::Gt || b.op == ast::BinaryOperator::Ge ||
+                      b.op == ast::BinaryOperator::Is || b.op == ast::BinaryOperator::IsNot);
         if (isCmp && (b.lhs->kind == ast::NodeKind::NoneLiteral || b.rhs->kind == ast::NodeKind::NoneLiteral)) {
           bool bothNone = (b.lhs->kind == ast::NodeKind::NoneLiteral && b.rhs->kind == ast::NodeKind::NoneLiteral);
-          bool eq = (b.op == ast::BinaryOperator::Eq);
+          bool eq = (b.op == ast::BinaryOperator::Eq || b.op == ast::BinaryOperator::Is);
           if (bothNone) { out = Value{ eq ? std::string("true") : std::string("false"), ValKind::I1 }; return; }
           const ast::Expr* other = (b.lhs->kind == ast::NodeKind::NoneLiteral) ? b.rhs.get() : b.lhs.get();
           if (other && other->type() && *other->type() != ast::TypeKind::NoneType) {
@@ -730,7 +749,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         // Comparisons
         isCmp = (b.op == ast::BinaryOperator::Eq || b.op == ast::BinaryOperator::Ne ||
                       b.op == ast::BinaryOperator::Lt || b.op == ast::BinaryOperator::Le ||
-                      b.op == ast::BinaryOperator::Gt || b.op == ast::BinaryOperator::Ge);
+                      b.op == ast::BinaryOperator::Gt || b.op == ast::BinaryOperator::Ge ||
+                      b.op == ast::BinaryOperator::Is || b.op == ast::BinaryOperator::IsNot);
         if (isCmp) {
           std::ostringstream r1; r1 << "%t" << temp++;
           if (LV.k == ValKind::I32 && RV.k == ValKind::I32) {
@@ -742,6 +762,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
               case ast::BinaryOperator::Le: pred = "sle"; break;
               case ast::BinaryOperator::Gt: pred = "sgt"; break;
               case ast::BinaryOperator::Ge: pred = "sge"; break;
+              case ast::BinaryOperator::Is: pred = "eq"; break;
+              case ast::BinaryOperator::IsNot: pred = "ne"; break;
               default: break;
             }
             ir << "  " << r1.str() << " = icmp " << pred << " i32 " << LV.s << ", " << RV.s << "\n";
@@ -754,14 +776,78 @@ std::string Codegen::generateIR(const ast::Module& mod) {
               case ast::BinaryOperator::Le: pred = "ole"; break;
               case ast::BinaryOperator::Gt: pred = "ogt"; break;
               case ast::BinaryOperator::Ge: pred = "oge"; break;
+              case ast::BinaryOperator::Is: pred = "oeq"; break;
+              case ast::BinaryOperator::IsNot: pred = "one"; break;
               default: break;
             }
             ir << "  " << r1.str() << " = fcmp " << pred << " double " << LV.s << ", " << RV.s << "\n";
+          } else if (LV.k == ValKind::Ptr && RV.k == ValKind::Ptr) {
+            const char* pred = (b.op == ast::BinaryOperator::Is || b.op == ast::BinaryOperator::Eq) ? "eq" : (b.op == ast::BinaryOperator::IsNot || b.op == ast::BinaryOperator::Ne) ? "ne" : nullptr;
+            if (!pred) throw std::runtime_error("unsupported pointer comparison predicate");
+            ir << "  " << r1.str() << " = icmp " << pred << " ptr " << LV.s << ", " << RV.s << "\n";
           } else {
             throw std::runtime_error("mismatched types in comparison");
           }
           out = Value{r1.str(), ValKind::I1};
           return;
+        }
+        // Bitwise and shifts (ints only)
+        if (b.op == ast::BinaryOperator::BitAnd || b.op == ast::BinaryOperator::BitOr || b.op == ast::BinaryOperator::BitXor || b.op == ast::BinaryOperator::LShift || b.op == ast::BinaryOperator::RShift) {
+          if (!(LV.k == ValKind::I32 && RV.k == ValKind::I32)) { throw std::runtime_error("bitwise/shift requires int operands"); }
+          std::ostringstream r; r << "%t" << temp++;
+          const char* op = nullptr;
+          switch (b.op) {
+            case ast::BinaryOperator::BitAnd: op = "and"; break;
+            case ast::BinaryOperator::BitOr:  op = "or";  break;
+            case ast::BinaryOperator::BitXor: op = "xor"; break;
+            case ast::BinaryOperator::LShift: op = "shl"; break;
+            case ast::BinaryOperator::RShift: op = "ashr"; break; // arithmetic right shift
+            default: break;
+          }
+          ir << "  " << r.str() << " = " << op << " i32 " << LV.s << ", " << RV.s << "\n";
+          out = Value{r.str(), ValKind::I32};
+          return;
+        }
+        // FloorDiv and Pow
+        if (b.op == ast::BinaryOperator::FloorDiv || b.op == ast::BinaryOperator::Pow) {
+          // Ints
+          if (LV.k == ValKind::I32 && RV.k == ValKind::I32) {
+            if (b.op == ast::BinaryOperator::FloorDiv) {
+              std::ostringstream r; r << "%t" << temp++;
+              ir << "  " << r.str() << " = sdiv i32 " << LV.s << ", " << RV.s << "\n";
+              out = Value{r.str(), ValKind::I32};
+              return;
+            }
+            // pow for ints: cast to double, call powi, cast back to i32
+            std::ostringstream a, r, back;
+            a << "%t" << temp++; r << "%t" << temp++; back << "%t" << temp++;
+            ir << "  " << a.str() << " = sitofp i32 " << LV.s << " to double\n";
+            ir << "  " << r.str() << " = call double @llvm.powi.f64(double " << a.str() << ", i32 " << RV.s << ")\n";
+            ir << "  " << back.str() << " = fptosi double " << r.str() << " to i32\n";
+            out = Value{back.str(), ValKind::I32};
+            return;
+          }
+          // Floats
+          if (LV.k == ValKind::F64 && (RV.k == ValKind::F64 || RV.k == ValKind::I32)) {
+            if (b.op == ast::BinaryOperator::FloorDiv) {
+              std::ostringstream q, f; q << "%t" << temp++; f << "%t" << temp++;
+              std::string rhsF = RV.s;
+              if (RV.k == ValKind::I32) { std::ostringstream c; c << "%t" << temp++; ir << "  " << c.str() << " = sitofp i32 " << RV.s << " to double\n"; rhsF = c.str(); }
+              ir << "  " << q.str() << " = fdiv double " << LV.s << ", " << rhsF << "\n";
+              ir << "  " << f.str() << " = call double @llvm.floor.f64(double " << q.str() << ")\n";
+              out = Value{f.str(), ValKind::F64};
+              return;
+            }
+            std::ostringstream res; res << "%t" << temp++;
+            if (RV.k == ValKind::I32) {
+              ir << "  " << res.str() << " = call double @llvm.powi.f64(double " << LV.s << ", i32 " << RV.s << ")\n";
+            } else {
+              ir << "  " << res.str() << " = call double @llvm.pow.f64(double " << LV.s << ", double " << RV.s << ")\n";
+            }
+            out = Value{res.str(), ValKind::F64};
+            return;
+          }
+          throw std::runtime_error("unsupported operand types for // or **");
         }
         if (b.op == ast::BinaryOperator::And || b.op == ast::BinaryOperator::Or) {
           auto toBool = [&](const Value& vin) -> Value {
@@ -807,6 +893,48 @@ std::string Codegen::generateIR(const ast::Module& mod) {
             std::ostringstream rphi; rphi << "%t" << temp++;
             ir << "  " << rphi.str() << " = phi i1 [ true, %" << trueLbl << " ], [ " << RV2.s << ", %" << rhsLbl << " ]\n";
             out = Value{rphi.str(), ValKind::I1};
+          }
+          return;
+        }
+        // Membership tests for list/tuple literals: OR chain of equality
+        if (b.op == ast::BinaryOperator::In || b.op == ast::BinaryOperator::NotIn) {
+          if (b.rhs->kind != ast::NodeKind::ListLiteral && b.rhs->kind != ast::NodeKind::TupleLiteral) {
+            out = Value{"false", ValKind::I1};
+            return;
+          }
+          std::vector<const ast::Expr*> elements;
+          if (b.rhs->kind == ast::NodeKind::ListLiteral) {
+            const auto* lst = static_cast<const ast::ListLiteral*>(b.rhs.get());
+            for (const auto& e : lst->elements) if (e) elements.push_back(e.get());
+          } else {
+            const auto* tp = static_cast<const ast::TupleLiteral*>(b.rhs.get());
+            for (const auto& e : tp->elements) if (e) elements.push_back(e.get());
+          }
+          if (elements.empty()) { out = Value{"false", ValKind::I1}; return; }
+          std::string accum;
+          for (const auto* ee : elements) {
+            auto EV = run(*ee);
+            if (EV.k != LV.k) { continue; }
+            std::ostringstream c; c << "%t" << temp++;
+            if (LV.k == ValKind::I32) {
+              ir << "  " << c.str() << " = icmp eq i32 " << LV.s << ", " << EV.s << "\n";
+            } else if (LV.k == ValKind::F64) {
+              ir << "  " << c.str() << " = fcmp oeq double " << LV.s << ", " << EV.s << "\n";
+            } else if (LV.k == ValKind::I1) {
+              ir << "  " << c.str() << " = icmp eq i1 " << LV.s << ", " << EV.s << "\n";
+            } else if (LV.k == ValKind::Ptr) {
+              ir << "  " << c.str() << " = icmp eq ptr " << LV.s << ", " << EV.s << "\n";
+            } else { continue; }
+            if (accum.empty()) { accum = c.str(); }
+            else { std::ostringstream o; o << "%t" << temp++; ir << "  " << o.str() << " = or i1 " << accum << ", " << c.str() << "\n"; accum = o.str(); }
+          }
+          if (accum.empty()) { out = Value{"false", ValKind::I1}; return; }
+          if (b.op == ast::BinaryOperator::NotIn) {
+            std::ostringstream n; n << "%t" << temp++;
+            ir << "  " << n.str() << " = xor i1 " << accum << ", true\n";
+            out = Value{n.str(), ValKind::I1};
+          } else {
+            out = Value{accum, ValKind::I1};
           }
           return;
         }
@@ -1018,6 +1146,94 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         bool elseR = emitStmtList(iff.elseBody);
         if (!elseR) ir << "  br label %" << endLbl.str() << "\n";
         ir << endLbl.str() << ":\n";
+      }
+
+      void visit(const ast::WhileStmt& ws) override {
+        // Labels for while: cond, body, end
+        std::ostringstream condLbl, bodyLbl, endLbl;
+        condLbl << "while.cond" << ifCounter;
+        bodyLbl << "while.body" << ifCounter;
+        endLbl  << "while.end"  << ifCounter;
+        ++ifCounter;
+        // Initial branch to condition
+        ir << "  br label %" << condLbl.str() << "\n";
+        ir << condLbl.str() << ":\n";
+        auto c = eval(ws.cond.get());
+        std::string cond = c.s;
+        if (c.k == ValKind::I32) {
+          std::ostringstream c1; c1 << "%t" << temp++;
+          ir << "  " << c1.str() << " = icmp ne i32 " << c.s << ", 0\n";
+          cond = c1.str();
+        } else if (c.k != ValKind::I1) {
+          throw std::runtime_error("while condition must be bool or int");
+        }
+        ir << "  br i1 " << cond << ", label %" << bodyLbl.str() << ", label %" << endLbl.str() << "\n";
+        // Body
+        ir << bodyLbl.str() << ":\n";
+        bool bodyReturned = emitStmtList(ws.thenBody);
+        if (!bodyReturned) {
+          // Re-evaluate condition
+          ir << "  br label %" << condLbl.str() << "\n";
+        }
+        // End
+        ir << endLbl.str() << ":\n";
+        // else-body executes only if loop exits normally (condition false)
+        bool elseReturned = emitStmtList(ws.elseBody);
+        (void)elseReturned;
+      }
+
+      void visit(const ast::ForStmt& fs) override { // limited lowering: iterate list/tuple literals
+        // Only support simple name target for now
+        if (!fs.target || fs.target->kind != ast::NodeKind::Name) {
+          // Best-effort: skip body if unsupported
+          return;
+        }
+        const auto* tgt = static_cast<const ast::Name*>(fs.target.get());
+        auto ensureSlotFor = [&](const std::string& name, ValKind kind) -> std::string {
+          auto it = slots.find(name);
+          if (it == slots.end()) {
+            std::string ptr = "%" + name + ".addr";
+            if (kind == ValKind::I32) ir << "  " << ptr << " = alloca i32\n";
+            else if (kind == ValKind::I1) ir << "  " << ptr << " = alloca i1\n";
+            else if (kind == ValKind::F64) ir << "  " << ptr << " = alloca double\n";
+            else ir << "  " << ptr << " = alloca ptr\n";
+            slots[name] = Slot{ptr, kind};
+            return ptr;
+          }
+          return it->second.ptr;
+        };
+        auto emitBodyWithValue = [&](const Value& v) {
+          const std::string addr = ensureSlotFor(tgt->id, v.k);
+          if (v.k == ValKind::I32) ir << "  store i32 " << v.s << ", ptr " << addr << "\n";
+          else if (v.k == ValKind::I1) ir << "  store i1 " << v.s << ", ptr " << addr << "\n";
+          else if (v.k == ValKind::F64) ir << "  store double " << v.s << ", ptr " << addr << "\n";
+          else { ir << "  store ptr " << v.s << ", ptr " << addr << "\n"; ir << "  call void @pycc_gc_write_barrier(ptr " << addr << ", ptr " << v.s << ")\n"; }
+          (void)emitStmtList(fs.thenBody);
+        };
+        if (fs.iterable && fs.iterable->kind == ast::NodeKind::ListLiteral) {
+          const auto* lst = static_cast<const ast::ListLiteral*>(fs.iterable.get());
+          for (const auto& el : lst->elements) {
+            if (!el) continue;
+            auto v = eval(el.get());
+            emitBodyWithValue(v);
+          }
+        } else if (fs.iterable && fs.iterable->kind == ast::NodeKind::TupleLiteral) {
+          const auto* tp = static_cast<const ast::TupleLiteral*>(fs.iterable.get());
+          for (const auto& el : tp->elements) {
+            if (!el) continue; auto v = eval(el.get()); emitBodyWithValue(v);
+          }
+        } else {
+          // Unsupported iterator in this subset; no-op
+        }
+        // for-else executes if loop completed normally (always true in this subset)
+        (void)emitStmtList(fs.elseBody);
+      }
+
+      void visit(const ast::TryStmt& ts) override {
+        // No exception runtime in this subset; lower as: try-body, else (if present), finally (always runs).
+        (void)emitStmtList(ts.body);
+        (void)emitStmtList(ts.orelse);
+        (void)emitStmtList(ts.finalbody);
       }
 
       // Unused here

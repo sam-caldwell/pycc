@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace pycc::sema {
 
@@ -54,6 +55,15 @@ class TypeEnv {
     sets_[name] = mask;
     if (isSingle(mask)) { types_[name] = kindFor(mask); }
   }
+  // Record that a name is an instance of a known class (by class name string)
+  void defineInstanceOf(const std::string& name, const std::string& className) {
+    instances_[name] = className;
+  }
+  std::optional<std::string> instanceOf(const std::string& name) const {
+    auto it = instances_.find(name);
+    if (it == instances_.end()) return std::nullopt;
+    return it->second;
+  }
   std::optional<ast::TypeKind> get(const std::string& name) const {
     auto it = types_.find(name);
     if (it == types_.end()) return std::nullopt; return it->second;
@@ -62,6 +72,31 @@ class TypeEnv {
   uint32_t getListElems(const std::string& name) const {
     auto it = listElemSets_.find(name);
     return (it == listElemSets_.end()) ? 0U : it->second;
+  }
+  // Tuple element masks by index (heterogeneous). Unknown index uses unionOfTupleElems(name).
+  void defineTupleElems(const std::string& name, std::vector<uint32_t> elemMasks) { tupleElemSets_[name] = std::move(elemMasks); }
+  uint32_t getTupleElemAt(const std::string& name, size_t idx) const {
+    auto it = tupleElemSets_.find(name);
+    if (it == tupleElemSets_.end()) return 0U;
+    const auto& v = it->second; if (idx >= v.size()) return 0U; return v[idx];
+  }
+  uint32_t unionOfTupleElems(const std::string& name) const {
+    auto it = tupleElemSets_.find(name);
+    if (it == tupleElemSets_.end()) return 0U;
+    uint32_t acc = 0U; for (auto m : it->second) acc |= m; return acc;
+  }
+  // Dict key/value masks
+  void defineDictKeyVals(const std::string& name, uint32_t keyMask, uint32_t valMask) { dictKeySets_[name] = keyMask; dictValSets_[name] = valMask; }
+  uint32_t getDictKeys(const std::string& name) const {
+    auto it = dictKeySets_.find(name); return (it == dictKeySets_.end()) ? 0U : it->second;
+  }
+  uint32_t getDictVals(const std::string& name) const {
+    auto it = dictValSets_.find(name); return (it == dictValSets_.end()) ? 0U : it->second;
+  }
+  // Attribute typing per base variable name
+  void defineAttr(const std::string& base, const std::string& attr, uint32_t mask) { attrSets_[base][attr] = mask; }
+  uint32_t getAttr(const std::string& base, const std::string& attr) const {
+    auto it = attrSets_.find(base); if (it == attrSets_.end()) return 0U; auto it2 = it->second.find(attr); return (it2 == it->second.end()) ? 0U : it2->second;
   }
   uint32_t getSet(const std::string& name) const {
     auto it = sets_.find(name);
@@ -103,7 +138,9 @@ class TypeEnv {
   static constexpr uint32_t kFloat = 1U << 3U;
   static constexpr uint32_t kStr   = 1U << 4U;
   static constexpr uint32_t kList  = 1U << 5U;
-  static constexpr uint32_t kAllMask = kNone | kInt | kBool | kFloat | kStr | kList;
+  static constexpr uint32_t kTuple = 1U << 6U;
+  static constexpr uint32_t kDict  = 1U << 7U;
+  static constexpr uint32_t kAllMask = kNone | kInt | kBool | kFloat | kStr | kList | kTuple | kDict;
   static uint32_t maskFor(ast::TypeKind k) {
     switch (k) {
       case ast::TypeKind::NoneType: return kNone;
@@ -112,6 +149,8 @@ class TypeEnv {
       case ast::TypeKind::Float: return kFloat;
       case ast::TypeKind::Str: return kStr;
       case ast::TypeKind::List: return kList;
+      case ast::TypeKind::Tuple: return kTuple;
+      case ast::TypeKind::Dict: return kDict;
       default: return 0U;
     }
   }
@@ -123,6 +162,8 @@ class TypeEnv {
     if (m == kFloat) return ast::TypeKind::Float;
     if (m == kStr) return ast::TypeKind::Str;
     if (m == kList) return ast::TypeKind::List;
+    if (m == kTuple) return ast::TypeKind::Tuple;
+    if (m == kDict) return ast::TypeKind::Dict;
     return ast::TypeKind::NoneType;
   }
   std::unordered_map<std::string, ast::TypeKind> types_;
@@ -130,6 +171,11 @@ class TypeEnv {
   std::unordered_map<std::string, bool> nonNone_;
   std::unordered_map<std::string, uint32_t> sets_;
   std::unordered_map<std::string, uint32_t> listElemSets_;
+  std::unordered_map<std::string, std::vector<uint32_t>> tupleElemSets_;
+  std::unordered_map<std::string, uint32_t> dictKeySets_;
+  std::unordered_map<std::string, uint32_t> dictValSets_;
+  std::unordered_map<std::string, std::unordered_map<std::string, uint32_t>> attrSets_;
+  std::unordered_map<std::string, std::string> instances_;
 };
 
 } // namespace pycc::sema
