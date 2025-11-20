@@ -11,6 +11,7 @@
 #include "lexer/Lexer.h"
 #include "observability/AstPrinter.h"
 #include "observability/Metrics.h"
+#include "runtime/Runtime.h"
 #include "optimizer/AlgebraicSimplify.h"
 #include "optimizer/ConstantFold.h"
 #include "optimizer/LocalProp.h"
@@ -213,6 +214,10 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
 #else
   setenv("PYCC_SOURCE_PATH", input.c_str(), 1);
 #endif
+  // Enable optional LLVM IR pass to elide GC barriers on stack writes
+  if (opts.optElideGCBarrier) {
+    setenv("PYCC_OPT_ELIDE_GCBARRIER", "1", /*overwrite*/1);
+  }
   const std::string err = codegenDriver.emit(*mod, outBase, opts.emitAssemblyOnly, opts.compileOnly, res);
   metrics.stop("EmitIR");
   if (!err.empty()) {
@@ -234,6 +239,18 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
   };
   if (opts.metrics || opts.metricsJson) { recordPost(); }
 
+  // Runtime perf counters/telemetry snapshot
+  if (opts.metrics || opts.metricsJson) {
+    auto st = rt::gc_stats();
+    auto telem = rt::gc_telemetry();
+    metrics.setGauge("rt.bytes_live", st.bytesLive);
+    metrics.setGauge("rt.bytes_allocated", st.bytesAllocated);
+    metrics.setCounter("rt.collections", st.numCollections);
+    // Store telemetry as integer gauges for stability in JSON
+    metrics.setGauge("rt.alloc_rate_bps", static_cast<uint64_t>(telem.allocRateBytesPerSec >= 0 ? telem.allocRateBytesPerSec : 0.0));
+    metrics.setGauge("rt.pressure_ppm", static_cast<uint64_t>((telem.pressure >= 0 ? telem.pressure : 0.0) * 1000000.0));
+  }
+
   if (logsEnabled) {
     // Lexer log
     if (opts.logLexer) {
@@ -246,14 +263,34 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     if (opts.logCodegen) {
       try {
         auto irText = codegen::Codegen::generateIR(*mod);
+        // Prepend original source as IR comments using the same env var as Codegen::emit
+        if (const char* srcPath = std::getenv("PYCC_SOURCE_PATH"); srcPath && *srcPath) {
+          std::ifstream inSrc(srcPath);
+          if (inSrc) {
+            std::ostringstream commented;
+            commented << "; ---- PY SOURCE: " << srcPath << " ----\n";
+            std::string line;
+            while (std::getline(inSrc, line)) { commented << "; " << line << "\n"; }
+            commented << "; ---- END PY SOURCE ----\n\n";
+            commented << irText;
+            irText = commented.str();
+          }
+        }
         std::ofstream codegenFile(logDir + "/" + tsPrefix + "codegen.codegen.log");
         codegenFile << irText;
       } catch (...) { /* no-op: best-effort IR log */ } // NOLINT(bugprone-empty-catch)
     }
   }
 
-  // Emit JSON metrics to stdout for either --metrics or --metrics-json
-  if (opts.metrics || opts.metricsJson) { std::cout << metrics.summaryJson(); }
+  // Emit metrics at end of build:
+  // - With --metrics-json: JSON only
+  // - With --metrics: include human-readable text, then JSON for tool consumption
+  if (opts.metricsJson) {
+    std::cout << metrics.summaryJson();
+  } else if (opts.metrics) {
+    std::cout << metrics.summaryText();
+    std::cout << metrics.summaryJson();
+  }
 
   // Always write metrics JSON to log directory when any metrics requested
   if (opts.metrics || opts.metricsJson) {

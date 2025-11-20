@@ -17,6 +17,9 @@ Options:
   --opt-const-fold     Enable constant-folding optimizer pass (experimental)
   --opt-algebraic      Enable algebraic simplification optimizer pass
   --opt-dce            Enable dead-code elimination pass (trailing returns)
+  --opt-cfg            Enable simple CFG pruning pass
+  --opt-elide-gcbarrier
+                       Enable LLVM IR pass to remove GC barriers on stack writes
   --ast-log[=<mode>]   Dump AST: before|after|both (default: before)
   --log-path=<dir>     Directory where logs are written (lexer/ast/codegen)
   --log-lexer          Enable lexer token log (requires --log-path)

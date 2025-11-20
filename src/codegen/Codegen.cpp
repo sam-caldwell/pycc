@@ -80,6 +80,30 @@ std::string Codegen::emit(const ast::Module& mod, const std::string& outBase,
     outFile << irText;
   }
 
+  // Optionally run LLVM IR pass plugin to elide redundant GC barriers on stack writes.
+  // This uses the externally built pass plugin and 'opt' tool.
+#ifdef PYCC_LLVM_PASS_PLUGIN_PATH
+  if (emitLL_) {
+    if (const char* k = std::getenv("PYCC_OPT_ELIDE_GCBARRIER"); k && *k) {
+      std::string passPluginPath = PYCC_LLVM_PASS_PLUGIN_PATH;
+      // Allow overriding plugin path via environment if desired
+      if (const char* p = std::getenv("PYCC_LLVM_PASS_PLUGIN_PATH")) { passPluginPath = p; }
+      // Produce an optimized .ll alongside the original for readability and debugging
+      const std::string optLL = changeExt(outBase, ".opt.ll");
+      std::ostringstream optCmd;
+      optCmd << "opt -load-pass-plugin \"" << passPluginPath << "\" -passes=\"function(pycc-elide-gcbarrier)\" -S \"" << result.llPath << "\" -o \"" << optLL << "\"";
+      std::string err;
+      if (runCmd(optCmd.str(), err)) {
+        // Use the optimized IR for subsequent compile stages
+        result.llPath = optLL;
+      } else {
+        // Best-effort: if opt fails, continue with unoptimized IR
+        (void)err;
+      }
+    }
+  }
+#endif
+
   // 2) Produce assembly/object/binary using clang
   std::string err;
   if (assemblyOnly) {
@@ -142,10 +166,21 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   std::ostringstream irStream;
   irStream << "; ModuleID = 'pycc_module'\n";
   irStream << "source_filename = \"pycc\"\n\n";
-  // Debug info scaffold: track subprograms per function and emit at end.
+  // Debug info scaffold: track subprograms and per-instruction locations; emit metadata at end.
   struct DebugSub { std::string name; int id; };
   std::vector<DebugSub> dbgSubs;
+  struct DebugLoc { int id; int line; int col; int scope; };
+  std::vector<DebugLoc> dbgLocs;
+  std::unordered_map<unsigned long long, int> dbgLocKeyToId; // key = (scope<<32) ^ (line<<16|col)
   int nextDbgId = 2; // !0 = CU, !1 = DIFile
+  // Basic DI types and DIExpression
+  const int diIntId = nextDbgId++;
+  const int diBoolId = nextDbgId++;
+  const int diDoubleId = nextDbgId++;
+  const int diPtrId = nextDbgId++;
+  const int diExprId = nextDbgId++;
+  struct DbgVar { int id; std::string name; int scope; int line; int col; int typeId; int argIndex; bool isParam; };
+  std::vector<DbgVar> dbgVars;
   // GC barrier declaration for pointer writes (C ABI)
   irStream << "declare void @pycc_gc_write_barrier(ptr, ptr)\n";
   // Future aggregate runtime calls (scaffold)
@@ -155,6 +190,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   irStream << "declare ptr @pycc_object_new(i64)\n";
   irStream << "declare void @pycc_object_set(ptr, i64, ptr)\n";
   irStream << "declare ptr @pycc_object_get(ptr, i64)\n\n";
+  // Debug intrinsics for variable locations
+  irStream << "declare void @llvm.dbg.declare(metadata, metadata, metadata)\n\n";
   // Boxing wrappers for primitives
   irStream << "declare ptr @pycc_box_int(i64)\n";
   irStream << "declare ptr @pycc_box_float(double)\n";
@@ -367,7 +404,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     }
     // Attach a simple DISubprogram for function-level debug info
     dbgSubs.push_back(DebugSub{func->name, nextDbgId});
-    irStream << ") !dbg !" << nextDbgId << " {\n";
+    const int subDbgId = nextDbgId;
+    irStream << ") !dbg !" << subDbgId << " {\n";
     nextDbgId++;
     irStream << "entry:\n";
 
@@ -377,8 +415,23 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     std::unordered_map<std::string, Slot> slots; // var -> slot
     int temp = 0;
 
-    // Parameter allocas
-    for (const auto& param : func->params) {
+    // Helper for DI locations in this function
+    auto ensureLocId = [&](int line, int col) -> int {
+      if (line <= 0) return 0;
+      const unsigned long long key = (static_cast<unsigned long long>(static_cast<unsigned int>(subDbgId)) << 32ULL)
+        ^ (static_cast<unsigned long long>((static_cast<unsigned int>(line) << 16U) | static_cast<unsigned int>(col)));
+      auto it = dbgLocKeyToId.find(key);
+      if (it != dbgLocKeyToId.end()) return it->second;
+      const int id = nextDbgId++;
+      dbgLocKeyToId[key] = id;
+      dbgLocs.push_back(DebugLoc{id, line, col, subDbgId});
+      return id;
+    };
+
+    // Parameter allocas + debug
+    std::unordered_map<std::string, int> varMdId; // per-function var->!DILocalVariable id
+    for (size_t pidx = 0; pidx < func->params.size(); ++pidx) {
+      const auto& param = func->params[pidx];
       const std::string ptr = "%" + param.name + ".addr";
       if (param.type == ast::TypeKind::Int) {
         irStream << "  " << ptr << " = alloca i32\n";
@@ -400,6 +453,19 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       } else {
         throw std::runtime_error("unsupported param type");
       }
+      // Emit DILocalVariable for parameter and dbg.declare
+      const int varId = nextDbgId++;
+      varMdId[param.name] = varId;
+      const int locId = ensureLocId(func->line, func->col);
+      const int tyId = (param.type == ast::TypeKind::Int) ? diIntId
+                      : (param.type == ast::TypeKind::Bool) ? diBoolId
+                      : (param.type == ast::TypeKind::Float) ? diDoubleId
+                      : diPtrId;
+      dbgVars.push_back(DbgVar{varId, param.name, subDbgId, func->line, func->col, tyId, static_cast<int>(pidx) + 1, true});
+      irStream << "  call void @llvm.dbg.declare(metadata ptr " << ptr
+               << ", metadata !" << varId << ", metadata !" << diExprId << ")";
+      if (locId > 0) irStream << " , !dbg !" << locId;
+      irStream << "\n";
     }
 
     struct Value { std::string s; ValKind k; };
@@ -1016,8 +1082,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     int ifCounter = 0;
 
     struct StmtEmitter : public ast::VisitorBase {
-      StmtEmitter(std::ostringstream& ir_, int& temp_, int& ifCounter_, std::unordered_map<std::string, Slot>& slots_, const ast::FunctionDef& fn_, std::function<Value(const ast::Expr*)> eval_, std::string& retStructTy_, std::vector<std::string>& tupleElemTys_, const std::unordered_map<std::string, Sig>& sigs_, const std::unordered_map<std::string, int>& retParamIdxs_)
-        : ir(ir_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_), eval(std::move(eval_)), retStructTyRef(retStructTy_), tupleElemTysRef(tupleElemTys_), sigs(sigs_), retParamIdxs(retParamIdxs_) {}
+      StmtEmitter(std::ostringstream& ir_, int& temp_, int& ifCounter_, std::unordered_map<std::string, Slot>& slots_, const ast::FunctionDef& fn_, std::function<Value(const ast::Expr*)> eval_, std::string& retStructTy_, std::vector<std::string>& tupleElemTys_, const std::unordered_map<std::string, Sig>& sigs_, const std::unordered_map<std::string, int>& retParamIdxs_, int subDbgId_, int& nextDbgId_, std::vector<DebugLoc>& dbgLocs_, std::unordered_map<unsigned long long, int>& dbgLocKeyToId_, std::unordered_map<std::string,int>& varMdId_, std::vector<DbgVar>& dbgVars_, int diIntId_, int diBoolId_, int diDoubleId_, int diPtrId_, int diExprId_)
+        : ir(ir_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_), eval(std::move(eval_)), retStructTyRef(retStructTy_), tupleElemTysRef(tupleElemTys_), sigs(sigs_), retParamIdxs(retParamIdxs_), subDbgId(subDbgId_), nextDbgId(nextDbgId_), dbgLocs(dbgLocs_), dbgLocKeyToId(dbgLocKeyToId_), varMdId(varMdId_), dbgVars(dbgVars_), diIntId(diIntId_), diBoolId(diBoolId_), diDoubleId(diDoubleId_), diPtrId(diPtrId_), diExprId(diExprId_) {}
       std::ostringstream& ir;
       int& temp;
       int& ifCounter;
@@ -1029,6 +1095,14 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       std::vector<std::string>& tupleElemTysRef;
       const std::unordered_map<std::string, Sig>& sigs;
       const std::unordered_map<std::string, int>& retParamIdxs;
+      const int subDbgId;
+      int& nextDbgId;
+      std::vector<DebugLoc>& dbgLocs;
+      std::unordered_map<unsigned long long, int>& dbgLocKeyToId;
+      int curLocId{0};
+      std::unordered_map<std::string,int>& varMdId;
+      std::vector<DbgVar>& dbgVars;
+      int diIntId; int diBoolId; int diDoubleId; int diPtrId; int diExprId;
 
       static void emitLoc(std::ostringstream& irOut, const ast::Node& n, const char* kind) {
         irOut << "  ; loc: "
@@ -1039,6 +1113,17 @@ std::string Codegen::generateIR(const ast::Module& mod) {
 
       void visit(const ast::AssignStmt& asg) override {
         emitLoc(ir, asg, "assign");
+        if (asg.line > 0) {
+          const unsigned long long key = (static_cast<unsigned long long>(static_cast<unsigned int>(subDbgId)) << 32ULL)
+                                       ^ (static_cast<unsigned long long>((static_cast<unsigned int>(asg.line) << 16U) | static_cast<unsigned int>(asg.col)));
+          auto itDbg = dbgLocKeyToId.find(key);
+          if (itDbg != dbgLocKeyToId.end()) curLocId = itDbg->second; else {
+            curLocId = nextDbgId++;
+            dbgLocKeyToId[key] = curLocId;
+            dbgLocs.push_back(DebugLoc{curLocId, asg.line, asg.col, subDbgId});
+          }
+        } else { curLocId = 0; }
+        auto dbg = [this]() -> std::string { return (curLocId > 0) ? (std::string(", !dbg !") + std::to_string(curLocId)) : std::string(); };
         auto val = eval(asg.value.get());
         auto it = slots.find(asg.target);
         if (it == slots.end()) {
@@ -1049,14 +1134,22 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           else ir << "  " << ptr << " = alloca ptr\n";
           slots[asg.target] = Slot{ptr, val.k};
           it = slots.find(asg.target);
+          // Emit local variable debug declaration at first definition
+          int varId = 0;
+          auto itMd = varMdId.find(asg.target);
+          if (itMd == varMdId.end()) { varId = nextDbgId++; varMdId[asg.target] = varId; }
+          else { varId = itMd->second; }
+          const int tyId = (val.k == ValKind::I32) ? diIntId : (val.k == ValKind::I1) ? diBoolId : (val.k == ValKind::F64) ? diDoubleId : diPtrId;
+          dbgVars.push_back(DbgVar{varId, asg.target, subDbgId, asg.line, asg.col, tyId, 0, false});
+          ir << "  call void @llvm.dbg.declare(metadata ptr " << ptr << ", metadata !" << varId << ", metadata !" << diExprId << ")" << dbg() << "\n";
         }
         if (it->second.kind != val.k) throw std::runtime_error("assignment type changed for variable");
-        if (val.k == ValKind::I32) ir << "  store i32 " << val.s << ", ptr " << it->second.ptr << "\n";
-        else if (val.k == ValKind::I1) ir << "  store i1 " << val.s << ", ptr " << it->second.ptr << "\n";
-        else if (val.k == ValKind::F64) ir << "  store double " << val.s << ", ptr " << it->second.ptr << "\n";
+        if (val.k == ValKind::I32) ir << "  store i32 " << val.s << ", ptr " << it->second.ptr << dbg() << "\n";
+        else if (val.k == ValKind::I1) ir << "  store i1 " << val.s << ", ptr " << it->second.ptr << dbg() << "\n";
+        else if (val.k == ValKind::F64) ir << "  store double " << val.s << ", ptr " << it->second.ptr << dbg() << "\n";
         else {
-          ir << "  store ptr " << val.s << ", ptr " << it->second.ptr << "\n";
-          ir << "  call void @pycc_gc_write_barrier(ptr " << it->second.ptr << ", ptr " << val.s << ")\n";
+          ir << "  store ptr " << val.s << ", ptr " << it->second.ptr << dbg() << "\n";
+          ir << "  call void @pycc_gc_write_barrier(ptr " << it->second.ptr << ", ptr " << val.s << ")" << dbg() << "\n";
         }
         if (val.k == ValKind::Ptr && asg.value) {
           // Tag from literal kinds
@@ -1104,6 +1197,17 @@ std::string Codegen::generateIR(const ast::Module& mod) {
 
       void visit(const ast::ReturnStmt& r) override {
         emitLoc(ir, r, "return");
+        if (r.line > 0) {
+          const unsigned long long key = (static_cast<unsigned long long>(static_cast<unsigned int>(subDbgId)) << 32ULL)
+                                       ^ (static_cast<unsigned long long>((static_cast<unsigned int>(r.line) << 16U) | static_cast<unsigned int>(r.col)));
+          auto itDbg = dbgLocKeyToId.find(key);
+          if (itDbg != dbgLocKeyToId.end()) curLocId = itDbg->second; else {
+            curLocId = nextDbgId++;
+            dbgLocKeyToId[key] = curLocId;
+            dbgLocs.push_back(DebugLoc{curLocId, r.line, r.col, subDbgId});
+          }
+        } else { curLocId = 0; }
+        auto dbg = [this]() -> std::string { return (curLocId > 0) ? (std::string(", !dbg !") + std::to_string(curLocId)) : std::string(); };
         // Fast path: constant folding for len of literal aggregates/strings in returns
         if (fn.returnType == ast::TypeKind::Int && r.value && r.value->kind == ast::NodeKind::Call) {
           const auto* c = dynamic_cast<const ast::Call*>(r.value.get());
@@ -1119,7 +1223,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
               } else if (a0->kind == ast::NodeKind::StringLiteral) {
                 retConst = static_cast<int>(static_cast<const ast::StringLiteral*>(a0)->value.size());
               }
-              if (retConst >= 0) { ir << "  ret i32 " << retConst << "\n"; returned = true; return; }
+              if (retConst >= 0) { ir << "  ret i32 " << retConst << dbg() << "\n"; returned = true; return; }
             }
           }
         }
@@ -1145,25 +1249,33 @@ std::string Codegen::generateIR(const ast::Module& mod) {
               throw std::runtime_error("tuple element type mismatch");
             std::ostringstream nx; nx << "%t" << temp++;
             const char* valTy = (ety == "double") ? "double " : (ety == "i1") ? "i1 " : "i32 ";
-            ir << "  " << nx.str() << " = insertvalue " << retStructTyRef << " " << cur << ", " << valTy << vi.s << ", " << idx << "\n";
+            ir << "  " << nx.str() << " = insertvalue " << retStructTyRef << " " << cur << ", " << valTy << vi.s << ", " << idx << dbg() << "\n";
             cur = nx.str();
           }
-          ir << "  ret " << retStructTyRef << " " << cur << "\n";
+          ir << "  ret " << retStructTyRef << " " << cur << dbg() << "\n";
           returned = true; return;
         }
         auto val = eval(r.value.get());
         const char* retStr = (fn.returnType == ast::TypeKind::Int) ? "i32" : (fn.returnType == ast::TypeKind::Bool) ? "i1" : (fn.returnType == ast::TypeKind::Float) ? "double" : "ptr";
-        ir << "  ret " << retStr << " " << val.s << "\n";
+        ir << "  ret " << retStr << " " << val.s << dbg() << "\n";
         returned = true;
       }
 
       void visit(const ast::IfStmt& iff) override {
         emitLoc(ir, iff, "if");
+        if (iff.line > 0) {
+          const unsigned long long key = (static_cast<unsigned long long>(static_cast<unsigned int>(subDbgId)) << 32ULL)
+                                       ^ (static_cast<unsigned long long>((static_cast<unsigned int>(iff.line) << 16U) | static_cast<unsigned int>(iff.col)));
+        
+          auto itDbg = dbgLocKeyToId.find(key);
+          if (itDbg != dbgLocKeyToId.end()) curLocId = itDbg->second; else { curLocId = nextDbgId++; dbgLocKeyToId[key] = curLocId; dbgLocs.push_back(DebugLoc{curLocId, iff.line, iff.col, subDbgId}); }
+        } else { curLocId = 0; }
+        auto dbg = [this]() -> std::string { return (curLocId > 0) ? (std::string(", !dbg !") + std::to_string(curLocId)) : std::string(); };
         auto c = eval(iff.cond.get());
         std::string cond = c.s;
         if (c.k == ValKind::I32) {
           std::ostringstream c1; c1 << "%t" << temp++;
-          ir << "  " << c1.str() << " = icmp ne i32 " << c.s << ", 0\n";
+          ir << "  " << c1.str() << " = icmp ne i32 " << c.s << ", 0" << dbg() << "\n";
           cond = c1.str();
         } else if (c.k == ValKind::I1) {
           // ok
@@ -1175,18 +1287,25 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         elseLbl << "if.else" << ifCounter;
         endLbl  << "if.end"  << ifCounter;
         ++ifCounter;
-        ir << "  br i1 " << cond << ", label %" << thenLbl.str() << ", label %" << elseLbl.str() << "\n";
+        ir << "  br i1 " << cond << ", label %" << thenLbl.str() << ", label %" << elseLbl.str() << dbg() << "\n";
         ir << thenLbl.str() << ":\n";
         bool thenR = emitStmtList(iff.thenBody);
-        if (!thenR) ir << "  br label %" << endLbl.str() << "\n";
+        if (!thenR) ir << "  br label %" << endLbl.str() << dbg() << "\n";
         ir << elseLbl.str() << ":\n";
         bool elseR = emitStmtList(iff.elseBody);
-        if (!elseR) ir << "  br label %" << endLbl.str() << "\n";
+        if (!elseR) ir << "  br label %" << endLbl.str() << dbg() << "\n";
         ir << endLbl.str() << ":\n";
       }
 
       void visit(const ast::WhileStmt& ws) override {
         emitLoc(ir, ws, "while");
+        if (ws.line > 0) {
+          const unsigned long long key = (static_cast<unsigned long long>(static_cast<unsigned int>(subDbgId)) << 32ULL)
+                                       ^ (static_cast<unsigned long long>((static_cast<unsigned int>(ws.line) << 16U) | static_cast<unsigned int>(ws.col)));
+          auto itDbg = dbgLocKeyToId.find(key);
+          if (itDbg != dbgLocKeyToId.end()) curLocId = itDbg->second; else { curLocId = nextDbgId++; dbgLocKeyToId[key] = curLocId; dbgLocs.push_back(DebugLoc{curLocId, ws.line, ws.col, subDbgId}); }
+        } else { curLocId = 0; }
+        auto dbg = [this]() -> std::string { return (curLocId > 0) ? (std::string(", !dbg !") + std::to_string(curLocId)) : std::string(); };
         // Labels for while: cond, body, end
         std::ostringstream condLbl, bodyLbl, endLbl;
         condLbl << "while.cond" << ifCounter;
@@ -1194,24 +1313,24 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         endLbl  << "while.end"  << ifCounter;
         ++ifCounter;
         // Initial branch to condition
-        ir << "  br label %" << condLbl.str() << "\n";
+        ir << "  br label %" << condLbl.str() << dbg() << "\n";
         ir << condLbl.str() << ":\n";
         auto c = eval(ws.cond.get());
         std::string cond = c.s;
         if (c.k == ValKind::I32) {
           std::ostringstream c1; c1 << "%t" << temp++;
-          ir << "  " << c1.str() << " = icmp ne i32 " << c.s << ", 0\n";
+          ir << "  " << c1.str() << " = icmp ne i32 " << c.s << ", 0" << dbg() << "\n";
           cond = c1.str();
         } else if (c.k != ValKind::I1) {
           throw std::runtime_error("while condition must be bool or int");
         }
-        ir << "  br i1 " << cond << ", label %" << bodyLbl.str() << ", label %" << endLbl.str() << "\n";
+        ir << "  br i1 " << cond << ", label %" << bodyLbl.str() << ", label %" << endLbl.str() << dbg() << "\n";
         // Body
         ir << bodyLbl.str() << ":\n";
         bool bodyReturned = emitStmtList(ws.thenBody);
         if (!bodyReturned) {
           // Re-evaluate condition
-          ir << "  br label %" << condLbl.str() << "\n";
+          ir << "  br label %" << condLbl.str() << dbg() << "\n";
         }
         // End
         ir << endLbl.str() << ":\n";
@@ -1222,6 +1341,13 @@ std::string Codegen::generateIR(const ast::Module& mod) {
 
       void visit(const ast::ForStmt& fs) override { // limited lowering: iterate list/tuple literals
         emitLoc(ir, fs, "for");
+        if (fs.line > 0) {
+          const unsigned long long key = (static_cast<unsigned long long>(static_cast<unsigned int>(subDbgId)) << 32ULL)
+                                       ^ (static_cast<unsigned long long>((static_cast<unsigned int>(fs.line) << 16U) | static_cast<unsigned int>(fs.col)));
+          auto itDbg = dbgLocKeyToId.find(key);
+          if (itDbg != dbgLocKeyToId.end()) curLocId = itDbg->second; else { curLocId = nextDbgId++; dbgLocKeyToId[key] = curLocId; dbgLocs.push_back(DebugLoc{curLocId, fs.line, fs.col, subDbgId}); }
+        } else { curLocId = 0; }
+        auto dbg = [this]() -> std::string { return (curLocId > 0) ? (std::string(", !dbg !") + std::to_string(curLocId)) : std::string(); };
         // Only support simple name target for now
         if (!fs.target || fs.target->kind != ast::NodeKind::Name) {
           // Best-effort: skip body if unsupported
@@ -1237,16 +1363,22 @@ std::string Codegen::generateIR(const ast::Module& mod) {
             else if (kind == ValKind::F64) ir << "  " << ptr << " = alloca double\n";
             else ir << "  " << ptr << " = alloca ptr\n";
             slots[name] = Slot{ptr, kind};
+            // Debug declare for loop-target variable on first definition
+            int varId = 0; auto itMd = varMdId.find(name);
+            if (itMd == varMdId.end()) { varId = nextDbgId++; varMdId[name] = varId; } else { varId = itMd->second; }
+            const int tyId = (kind == ValKind::I32) ? diIntId : (kind == ValKind::I1) ? diBoolId : (kind == ValKind::F64) ? diDoubleId : diPtrId;
+            dbgVars.push_back(DbgVar{varId, name, subDbgId, fs.line, fs.col, tyId, 0, false});
+            ir << "  call void @llvm.dbg.declare(metadata ptr " << ptr << ", metadata !" << varId << ", metadata !" << diExprId << ")" << dbg() << "\n";
             return ptr;
           }
           return it->second.ptr;
         };
         auto emitBodyWithValue = [&](const Value& v) {
           const std::string addr = ensureSlotFor(tgt->id, v.k);
-          if (v.k == ValKind::I32) ir << "  store i32 " << v.s << ", ptr " << addr << "\n";
-          else if (v.k == ValKind::I1) ir << "  store i1 " << v.s << ", ptr " << addr << "\n";
-          else if (v.k == ValKind::F64) ir << "  store double " << v.s << ", ptr " << addr << "\n";
-          else { ir << "  store ptr " << v.s << ", ptr " << addr << "\n"; ir << "  call void @pycc_gc_write_barrier(ptr " << addr << ", ptr " << v.s << ")\n"; }
+          if (v.k == ValKind::I32) ir << "  store i32 " << v.s << ", ptr " << addr << dbg() << "\n";
+          else if (v.k == ValKind::I1) ir << "  store i1 " << v.s << ", ptr " << addr << dbg() << "\n";
+          else if (v.k == ValKind::F64) ir << "  store double " << v.s << ", ptr " << addr << dbg() << "\n";
+          else { ir << "  store ptr " << v.s << ", ptr " << addr << dbg() << "\n"; ir << "  call void @pycc_gc_write_barrier(ptr " << addr << ", ptr " << v.s << ")" << dbg() << "\n"; }
           (void)emitStmtList(fs.thenBody);
         };
         if (fs.iterable && fs.iterable->kind == ast::NodeKind::ListLiteral) {
@@ -1304,7 +1436,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
     };
 
-    StmtEmitter root{irStream, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs, retParamIdxs};
+    StmtEmitter root{irStream, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs, retParamIdxs, subDbgId, nextDbgId, dbgLocs, dbgLocKeyToId};
     returned = root.emitStmtList(func->body);
     if (!returned) {
       // default return based on function type
@@ -1335,11 +1467,28 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   // Emit lightweight debug metadata at end of module
   irStream << "\n!llvm.dbg.cu = !{!0}\n";
   irStream << "!0 = distinct !DICompileUnit(language: DW_LANG_Python, file: !1, producer: \"pycc\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)\n";
-  irStream << "!1 = !DIFile(filename: \"pycc\", directory: \".\")\n";
+  // Prefer the module's file name if present
+  std::string diFileName = mod.file.empty() ? std::string("pycc") : mod.file;
+  irStream << "!1 = !DIFile(filename: \"" << diFileName << "\", directory: \".\")\n";
+  // Basic types and DIExpression
+  irStream << "!" << diIntId << " = !DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)\n";
+  irStream << "!" << diBoolId << " = !DIBasicType(name: \"bool\", size: 1, encoding: DW_ATE_boolean)\n";
+  irStream << "!" << diDoubleId << " = !DIBasicType(name: \"double\", size: 64, encoding: DW_ATE_float)\n";
+  irStream << "!" << diPtrId << " = !DIBasicType(name: \"ptr\", size: 64, encoding: DW_ATE_unsigned)\n";
+  irStream << "!" << diExprId << " = !DIExpression()\n";
   for (const auto& ds : dbgSubs) {
     irStream << "!" << ds.id << " = distinct !DISubprogram(name: \"" << ds.name
              << "\", linkageName: \"" << ds.name
              << "\", scope: !1, file: !1, line: 1, unit: !0, spFlags: DISPFlagDefinition)\n";
+  }
+  for (const auto& dv : dbgVars) {
+    irStream << "!" << dv.id << " = !DILocalVariable(name: \"" << dv.name << "\", scope: !" << dv.scope
+             << ", file: !1, line: " << dv.line << ", type: !" << dv.typeId;
+    if (dv.isParam) { irStream << ", arg: " << dv.argIndex; }
+    irStream << ")\n";
+  }
+  for (const auto& dl : dbgLocs) {
+    irStream << "!" << dl.id << " = !DILocation(line: " << dl.line << ", column: " << dl.col << ", scope: !" << dl.scope << ")\n";
   }
   // NOLINTEND
   return irStream.str();
