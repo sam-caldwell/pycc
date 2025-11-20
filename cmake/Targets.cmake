@@ -26,6 +26,37 @@ if(PYCC_ENABLE_TIDY)
   endif()
 endif()
 
+# Optional: build LLVM pass plugin if LLVM is available
+if(PYCC_BUILD_LLVM_PASSES)
+  find_package(LLVM QUIET CONFIG)
+  if(LLVM_FOUND)
+    message(STATUS "LLVM found: ${LLVM_PACKAGE_VERSION}")
+    message(STATUS "LLVM include dirs: ${LLVM_INCLUDE_DIRS}")
+    message(STATUS "LLVM defs: ${LLVM_DEFINITIONS}")
+    add_library(pycc_llvm_passes SHARED
+      ${CMAKE_SOURCE_DIR}/src/llvm/ElideGCBarrierPass.cpp)
+    target_include_directories(pycc_llvm_passes PRIVATE ${LLVM_INCLUDE_DIRS})
+    target_compile_definitions(pycc_llvm_passes PRIVATE ${LLVM_DEFINITIONS})
+    # Link against umbrella LLVM lib if present; fallback to common components
+    if(TARGET LLVM)
+      target_link_libraries(pycc_llvm_passes PRIVATE LLVM)
+    else()
+      # Common subset required for pass plugins
+      set(_llvm_libs LLVMCore LLVMSupport LLVMPasses LLVMIRReader LLVMAnalysis LLVMTransformUtils)
+      foreach(L IN LISTS _llvm_libs)
+        if(TARGET ${L})
+          target_link_libraries(pycc_llvm_passes PRIVATE ${L})
+        endif()
+      endforeach()
+    endif()
+    # Expose plugin full path to the compiler so Codegen can invoke opt with it
+    target_compile_definitions(pycc PRIVATE PYCC_LLVM_PASS_PLUGIN_PATH="$<TARGET_FILE:pycc_llvm_passes>")
+    target_compile_definitions(pycc_core PRIVATE PYCC_LLVM_PASS_PLUGIN_PATH="$<TARGET_FILE:pycc_llvm_passes>")
+  else()
+    message(STATUS "LLVM not found; skipping LLVM pass plugin build")
+  endif()
+endif()
+
 ## Note: The real 'tidy' target is defined in TidyTarget.cmake.
 ## Remove the placeholder here to avoid shadowing the actual linter.
 

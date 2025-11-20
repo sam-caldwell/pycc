@@ -18,6 +18,11 @@
 #include <vector>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <cerrno>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace pycc::rt {
 
@@ -83,6 +88,10 @@ static double g_ewma_alloc_rate = 0.0; // NOLINT(cppcoreguidelines-avoid-non-con
 static double g_ewma_pressure = 0.0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 static std::atomic<int> g_barrier_mode{0}; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables) 0=incremental-update, 1=SATB
 static bool g_debug = (std::getenv("PYCC_RT_DEBUG") != nullptr); // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+
+// Thread-local exception state
+static thread_local void* t_last_exception = nullptr; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static thread_local bool t_exc_root_registered = false; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 // Forward decl for adaptive controller
 static void adapt_controller();
@@ -166,6 +175,11 @@ static void mark(ObjectHeader* header) {
         const void* valuePtr = values[i]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
         if (valuePtr == nullptr) { continue; }
         if (ObjectHeader* headerPtr = find_object_for_pointer(valuePtr)) { mark(headerPtr); }
+      }
+      // Mark per-instance attribute dict if present (slot at values[fields])
+      const void* attrDictPtr = values[fields]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+      if (attrDictPtr != nullptr) {
+        if (ObjectHeader* ad = find_object_for_pointer(attrDictPtr)) { mark(ad); }
       }
       break;
     }
@@ -538,6 +552,49 @@ std::size_t string_len(void* str) {
   return *plen;
 }
 
+const char* string_data(void* str) {
+  if (str == nullptr) { return nullptr; }
+  auto* plen = static_cast<std::size_t*>(str);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  return reinterpret_cast<const char*>(plen + 1);
+}
+
+void* string_from_cstr(const char* cstr) {
+  if (cstr == nullptr) { return string_new("", 0); }
+  const std::size_t len = std::strlen(cstr);
+  return string_new(cstr, len);
+}
+
+// UTF-8 validation helper
+static inline bool utf8_is_cont(uint8_t c) { return (c & 0xC0U) == 0x80U; }
+bool utf8_is_valid(const char* data, std::size_t len) {
+  if (data == nullptr) { return false; }
+  const uint8_t* s = reinterpret_cast<const uint8_t*>(data);
+  const uint8_t* end = s + len;
+  while (s < end) {
+    uint8_t c = *s++;
+    if (c < 0x80U) { continue; }
+    if ((c >> 5U) == 0x6U) { // 110xxxxx
+      if (s >= end) return false; uint8_t c1 = *s++; if (!utf8_is_cont(c1)) return false;
+      if ((c & 0x1EU) == 0x0U) return false; // overlong
+    } else if ((c >> 4U) == 0xEU) { // 1110xxxx
+      if (end - s < 2) return false; uint8_t c1 = *s++; uint8_t c2 = *s++;
+      if (!utf8_is_cont(c1) || !utf8_is_cont(c2)) return false;
+      uint32_t cp = ((c & 0x0FU) << 12U) | ((c1 & 0x3FU) << 6U) | (c2 & 0x3FU);
+      if (cp < 0x800U) return false; // overlong
+      if (cp >= 0xD800U && cp <= 0xDFFFU) return false; // surrogate range
+    } else if ((c >> 3U) == 0x1EU) { // 11110xxx
+      if (end - s < 3) return false; uint8_t c1 = *s++; uint8_t c2 = *s++; uint8_t c3 = *s++;
+      if (!utf8_is_cont(c1) || !utf8_is_cont(c2) || !utf8_is_cont(c3)) return false;
+      uint32_t cp = ((c & 0x07U) << 18U) | ((c1 & 0x3FU) << 12U) | ((c2 & 0x3FU) << 6U) | (c3 & 0x3FU);
+      if (cp < 0x10000U || cp > 0x10FFFFU) return false; // overlong or out of range
+    } else {
+      return false; // invalid leading byte
+    }
+  }
+  return true;
+}
+
 // Boxed primitives
 void* box_int(int64_t value) {
   const std::lock_guard<std::mutex> lock(g_mu);
@@ -740,12 +797,13 @@ std::size_t dict_len(void* dict) {
 // Objects (fixed-size field table)
 void* object_new(std::size_t field_count) {
   const std::lock_guard<std::mutex> lock(g_mu);
-  const std::size_t payloadSize = sizeof(std::size_t) + (field_count * sizeof(void*)); // fields, values[]
+  // Allocate extra slot for per-instance attribute dict pointer at values[fields]
+  const std::size_t payloadSize = sizeof(std::size_t) + ((field_count + 1) * sizeof(void*)); // fields, values[] (+attrs)
   auto* bytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::Object));
   auto* meta = reinterpret_cast<std::size_t*>(bytes); // NOLINT
   meta[0] = field_count; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   auto** vals = reinterpret_cast<void**>(meta + 1); // NOLINT
-  for (std::size_t i = 0; i < field_count; ++i) { vals[i] = nullptr; } // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  for (std::size_t i = 0; i < field_count + 1; ++i) { vals[i] = nullptr; } // values + attrs slot
   maybe_request_bg_gc_unlocked();
   return bytes;
 }
@@ -775,6 +833,42 @@ std::size_t object_field_count(void* obj) {
   if (obj == nullptr) { return 0; }
   const auto* meta = reinterpret_cast<const std::size_t*>(obj); // NOLINT
   return meta[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+}
+
+static inline void** object_attrs_slot(void* obj) {
+  auto* meta = reinterpret_cast<std::size_t*>(obj);
+  auto** vals = reinterpret_cast<void**>(meta + 1);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  return &vals[meta[0]]; // slot after values[]
+}
+
+void* object_get_attr_dict(void* obj) {
+  if (obj == nullptr) { return nullptr; }
+  auto** slot = object_attrs_slot(obj);
+  return *slot;
+}
+
+void object_set_attr(void* obj, void* key_string, void* value) {
+  if (obj == nullptr || key_string == nullptr) { return; }
+  const std::lock_guard<std::mutex> lock(g_mu);
+  auto** slot = object_attrs_slot(obj);
+  if (*slot == nullptr) {
+    // lazily create dict
+    void* d = dict_new_locked(8);
+    gc_pre_barrier(slot);
+    gc_write_barrier(slot, d);
+    *slot = d;
+  }
+  // set into dict
+  dict_set(slot, key_string, value);
+}
+
+void* object_get_attr(void* obj, void* key_string) {
+  if (obj == nullptr || key_string == nullptr) { return nullptr; }
+  const std::lock_guard<std::mutex> lock(g_mu);
+  auto** slot = object_attrs_slot(obj);
+  if (*slot == nullptr) { return nullptr; }
+  return dict_get(*slot, key_string);
 }
 GcTelemetry gc_telemetry() {
   uint64_t live_now = 0; std::size_t thr = 0;
@@ -827,6 +921,94 @@ static void adapt_controller() {
   }
   g_slice_us.store(slice, std::memory_order_relaxed);
   g_sweep_batch.store(batch, std::memory_order_relaxed);
+}
+
+// Exceptions implementation: minimal per-thread exception object with type and message
+void rt_raise(const char* type_name, const char* message) {
+  // allocate objects under lock to integrate with GC lists
+  const std::lock_guard<std::mutex> lock(g_mu);
+  void* t = string_from_cstr(type_name);
+  void* m = string_from_cstr(message);
+  void* exc = object_new(2);
+  auto* meta = reinterpret_cast<std::size_t*>(exc);
+  auto** vals = reinterpret_cast<void**>(meta + 1);
+  gc_pre_barrier(&vals[0]); vals[0] = t; gc_write_barrier(&vals[0], t);
+  gc_pre_barrier(&vals[1]); vals[1] = m; gc_write_barrier(&vals[1], m);
+  t_last_exception = exc;
+  if (!t_exc_root_registered) { gc_register_root(&t_last_exception); t_exc_root_registered = true; }
+}
+
+bool rt_has_exception() { return t_last_exception != nullptr; }
+void* rt_current_exception() { return t_last_exception; }
+void rt_clear_exception() {
+  if (t_exc_root_registered) { gc_unregister_root(&t_last_exception); t_exc_root_registered = false; }
+  t_last_exception = nullptr;
+}
+
+void* rt_exception_type(void* exc) {
+  if (exc == nullptr) { return nullptr; }
+  auto* meta = reinterpret_cast<std::size_t*>(exc);
+  auto** vals = reinterpret_cast<void**>(meta + 1);
+  return vals[0];
+}
+
+void* rt_exception_message(void* exc) {
+  if (exc == nullptr) { return nullptr; }
+  auto* meta = reinterpret_cast<std::size_t*>(exc);
+  auto** vals = reinterpret_cast<void**>(meta + 1);
+  return vals[1];
+}
+
+// I/O and OS interop
+void io_write_stdout(void* str) {
+  const char* data = string_data(str);
+  const std::size_t len = string_len(str);
+  if (data != nullptr && len > 0) { std::fwrite(data, 1, len, stdout); }
+}
+
+void io_write_stderr(void* str) {
+  const char* data = string_data(str);
+  const std::size_t len = string_len(str);
+  if (data != nullptr && len > 0) { std::fwrite(data, 1, len, stderr); }
+}
+
+void* io_read_file(const char* path) {
+  if (path == nullptr) { return nullptr; }
+  FILE* f = std::fopen(path, "rb");
+  if (!f) { return nullptr; }
+  if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return nullptr; }
+  long sz = std::ftell(f);
+  if (sz < 0) { std::fclose(f); return nullptr; }
+  if (std::fseek(f, 0, SEEK_SET) != 0) { std::fclose(f); return nullptr; }
+  std::vector<char> buf(static_cast<std::size_t>(sz));
+  std::size_t n = (sz == 0) ? 0 : std::fread(buf.data(), 1, static_cast<std::size_t>(sz), f);
+  std::fclose(f);
+  if (n != static_cast<std::size_t>(sz)) { return nullptr; }
+  return string_new(buf.data(), buf.size());
+}
+
+bool io_write_file(const char* path, void* str) {
+  if (path == nullptr) { return false; }
+  const char* data = string_data(str);
+  const std::size_t len = string_len(str);
+  FILE* f = std::fopen(path, "wb");
+  if (!f) { return false; }
+  std::size_t n = (len == 0) ? 0 : std::fwrite(data, 1, len, f);
+  std::fclose(f);
+  return n == len;
+}
+
+void* os_getenv(const char* name) {
+  if (name == nullptr) { return nullptr; }
+  const char* val = std::getenv(name);
+  if (val == nullptr) { return nullptr; }
+  return string_from_cstr(val);
+}
+
+int64_t os_time_ms() {
+  using namespace std::chrono;
+  auto now = time_point_cast<milliseconds>(system_clock::now());
+  return now.time_since_epoch().count();
 }
 
 } // namespace pycc::rt

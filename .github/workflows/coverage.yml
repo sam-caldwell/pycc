@@ -23,3 +23,10 @@ jobs:
           LLVM_PROFILE_FILE=build/coverage-%p.profraw ctest --test-dir build --output-on-failure
       - name: Enforce coverage >= 95%
         run: PYCC_BUILD_DIR=build PYCC_COVERAGE_MIN=95 python3 tools/coverage.py
+      - name: Enforce per-phase coverage (parser/sema/optimizer)
+        run: |
+          set -e
+          for PH in parser sema optimizer; do
+            echo "[coverage] gating phase '$PH' >= 95%"
+            PYCC_BUILD_DIR=build PYCC_COVERAGE_MIN=95 PYCC_COVERAGE_PHASES=$PH python3 tools/coverage.py
+          done

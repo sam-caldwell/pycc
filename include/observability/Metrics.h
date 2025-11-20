@@ -39,6 +39,7 @@ struct AstGeometry {
 
   std::string summaryText() const;
   std::string summaryJson() const;
+  std::vector<std::string> hints() const;
 
  private:
   std::map<std::string, Clock::time_point> active_{};

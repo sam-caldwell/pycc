@@ -125,8 +125,28 @@ std::string Metrics::summaryJson() const {
     appendKeyValueObject(oss, gauges_, kIndent4);
     oss << "\n  }";
   }
+  auto hs = hints();
+  if (!hs.empty()) {
+    oss << ",\n  \"hints\": [";
+    for (size_t i = 0; i < hs.size(); ++i) {
+      if (i != 0) oss << ", ";
+      oss << "\"" << hs[i] << "\"";
+    }
+    oss << "]";
+  }
   oss << "\n}\n";
   return oss.str();
+}
+
+std::vector<std::string> Metrics::hints() const {
+  std::vector<std::string> out;
+  auto itDiag = counters_.find("sema.diagnostics");
+  if (itDiag != counters_.end() && itDiag->second > 0) { out.emplace_back("sema_diagnostics_present"); }
+  auto itFolds = optimizerStats_.find("folds");
+  if (itFolds != optimizerStats_.end()) { out.emplace_back(itFolds->second > 0 ? "optimizer_effective" : "optimizer_no_effect"); }
+  auto itIR = gauges_.find("codegen.ir_bytes");
+  if (itIR != gauges_.end() && itIR->second > 50000U) { out.emplace_back("large_ir"); }
+  return out;
 }
 
 } // namespace pycc::obs

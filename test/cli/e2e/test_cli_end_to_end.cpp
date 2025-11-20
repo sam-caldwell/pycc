@@ -61,6 +61,17 @@ TEST(CLI_EndToEnd, AssemblyAndObjectOnlyModes) {
   ASSERT_TRUE(fs::exists("out.o"));
 }
 
+TEST(CLI_EndToEnd, IRContainsSourceComments) {
+  write_file("src.py", "def main() -> int:\n  return 2\n");
+  int rc = std::system("../pycc -o out src.py > /dev/null 2>&1");
+  ASSERT_EQ(rc, 0);
+  ASSERT_TRUE(fs::exists("out.ll"));
+  auto ir = read_all("out.ll");
+  // Header demarcation and at least one original source line
+  ASSERT_NE(ir.find("; ---- PY SOURCE: src.py ----"), std::string::npos);
+  ASSERT_NE(ir.find("; def main() -> int"), std::string::npos);
+}
+
 TEST(CLI_EndToEnd, LogsAreWritten) {
   write_file("l.py", "def main() -> int:\n  x = 1\n  return x\n");
   // Use a local logs directory in the run dir

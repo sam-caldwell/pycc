@@ -55,6 +55,11 @@ void gc_reset_for_tests();
 // String objects (opaque)
 void* string_new(const char* data, std::size_t len);
 std::size_t string_len(void* str);
+const char* string_data(void* str);
+void* string_from_cstr(const char* cstr);
+
+// Unicode / text encodings (helpers operate on raw buffers)
+bool utf8_is_valid(const char* data, std::size_t len);
 
 // Boxed primitives (opaque heap objects with value payloads)
 void* box_int(int64_t value);
@@ -83,6 +88,11 @@ void object_set(void* obj, std::size_t index, void* value);
 void* object_get(void* obj, std::size_t index);
 std::size_t object_field_count(void* obj);
 
+// Attribute resolution (per-instance attribute dictionary keyed by String objects)
+void object_set_attr(void* obj, void* key_string, void* value);
+void* object_get_attr(void* obj, void* key_string);
+void* object_get_attr_dict(void* obj); // returns the internal dict, may be nullptr
+
 // Lightweight write barrier hooks for codegen/mutator integration
 void gc_write_barrier(void** slot, void* value);
 
@@ -94,5 +104,21 @@ void gc_write_barrier(void** slot, void* value);
     *(slot_addr) = (value_expr); \
     ::pycc::rt::gc_write_barrier(reinterpret_cast<void**>(slot_addr), reinterpret_cast<void*>(*(slot_addr))); \
   } while (0)
+
+// Exceptions (thread-local propagation helpers)
+void rt_raise(const char* type_name, const char* message);
+bool rt_has_exception();
+void* rt_current_exception(); // opaque object with two fields: [0]=type(String), [1]=message(String)
+void rt_clear_exception();
+void* rt_exception_type(void* exc);
+void* rt_exception_message(void* exc);
+
+// Basic I/O and OS interop
+void io_write_stdout(void* str);
+void io_write_stderr(void* str);
+void* io_read_file(const char* path); // returns String with file bytes
+bool io_write_file(const char* path, void* str);
+void* os_getenv(const char* name); // returns String or nullptr
+int64_t os_time_ms();
 
 } // namespace pycc::rt
