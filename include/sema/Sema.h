@@ -33,6 +33,16 @@ class Sema {
  public:
   // Annotates expression nodes with inferred TypeKind.
   bool check(ast::Module& mod, std::vector<Diagnostic>& diags);
+
+  struct FuncFlags { bool isGenerator{false}; bool isCoroutine{false}; };
+  const std::unordered_map<const ast::FunctionDef*, FuncFlags>& functionFlags() const { return funcFlags_; }
+  bool mayRaise(const ast::Stmt* s) const {
+    auto it = stmtMayRaise_.find(s); return (it != stmtMayRaise_.end()) ? it->second : false;
+  }
+
+ private:
+  std::unordered_map<const ast::FunctionDef*, FuncFlags> funcFlags_;
+  std::unordered_map<const ast::Stmt*, bool> stmtMayRaise_;
 };
 
 } // namespace pycc::sema

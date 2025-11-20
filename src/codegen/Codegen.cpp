@@ -19,6 +19,7 @@
 #include "ast/ContinueStmt.h"
 #include "ast/Attribute.h"
 #include "ast/DictLiteral.h"
+#include "ast/NonlocalStmt.h"
 #include "ast/Subscript.h"
 #include "ast/IntLiteral.h"
 #include "ast/ListLiteral.h"
@@ -2001,7 +2002,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         if (hasBare) {
           ir << "handler.bare:\n";
           // Treat as match: clear exception and execute bare body
-          ir << "  call void @pycc_rt_clear_exception()" << dbg() << "\n";
+          { std::ostringstream ca; ca << "@pycc_rt_clear_exception()"; emitCallOrInvokeVoid(ca.str()); }
           // Find bare handler body index
           for (size_t i = 0; i < ts.handlers.size(); ++i) {
             const auto& h = ts.handlers[i]; if (!h || h->type) continue;
@@ -2013,7 +2014,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
               slots[h->name] = Slot{ptr, ValKind::Ptr};
               // dbg.declare omitted for brevity (could be added similarly to assigns)
               ir << "  store ptr " << excReg.str() << ", ptr " << ptr << dbg() << "\n";
-              ir << "  call void @pycc_gc_write_barrier(ptr " << ptr << ", ptr " << excReg.str() << ")" << dbg() << "\n";
+              { std::ostringstream ca; ca << "@pycc_gc_write_barrier(ptr " << ptr << ", ptr " << excReg.str() << ")"; emitCallOrInvokeVoid(ca.str()); }
             }
             (void)emitStmtList(h->body);
             break;
@@ -2024,13 +2025,13 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         for (size_t i = 0; i < ts.handlers.size(); ++i) {
           const auto& h = ts.handlers[i]; if (!h) continue; if (!h->type) continue;
           ir << handlerLabels[i] << ":\n";
-          ir << "  call void @pycc_rt_clear_exception()" << dbg() << "\n";
+          { std::ostringstream ca; ca << "@pycc_rt_clear_exception()"; emitCallOrInvokeVoid(ca.str()); }
           if (!h->name.empty()) {
             std::string ptr = "%" + h->name + ".addr";
             ir << "  " << ptr << " = alloca ptr\n";
             slots[h->name] = Slot{ptr, ValKind::Ptr};
             ir << "  store ptr " << excReg.str() << ", ptr " << ptr << dbg() << "\n";
-            ir << "  call void @pycc_gc_write_barrier(ptr " << ptr << ", ptr " << excReg.str() << ")" << dbg() << "\n";
+            { std::ostringstream ca; ca << "@pycc_gc_write_barrier(ptr " << ptr << ", ptr " << excReg.str() << ")"; emitCallOrInvokeVoid(ca.str()); }
           }
           (void)emitStmtList(h->body);
           ir << "  br label %" << finLbl.str() << dbg() << "\n";

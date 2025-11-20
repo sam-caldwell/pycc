@@ -89,6 +89,21 @@ static void addDiag(std::vector<Diagnostic>& diags, const std::string& msg, cons
   diags.push_back(std::move(diag));
 }
 
+// Simple effect scanner for may-raise classification
+struct EffectsScan : public ast::VisitorBase {
+  bool mayRaise{false};
+  void visit(const ast::Call& c) override { mayRaise = true; if (c.callee) c.callee->accept(*this); for (const auto& a : c.args) if (a) a->accept(*this); }
+  void visit(const ast::Attribute& a) override { mayRaise = true; if (a.value) a.value->accept(*this); }
+  void visit(const ast::Subscript& s) override { mayRaise = true; if (s.value) s.value->accept(*this); if (s.slice) s.slice->accept(*this); }
+  void visit(const ast::Binary& b) override { using BO=ast::BinaryOperator; if (b.op==BO::Div || b.op==BO::Mod) mayRaise=true; if (b.lhs) b.lhs->accept(*this); if (b.rhs) b.rhs->accept(*this); }
+  void visit(const ast::Unary& u) override { if (u.operand) u.operand->accept(*this); }
+  void visit(const ast::TupleLiteral& t) override { for (const auto& el : t.elements) if (el) el->accept(*this); }
+  void visit(const ast::ListLiteral& l) override { for (const auto& el : l.elements) if (el) el->accept(*this); }
+  void visit(const ast::ExprStmt& es) override { if (es.value) es.value->accept(*this); }
+  void visit(const ast::ReturnStmt& rs) override { if (rs.value) rs.value->accept(*this); }
+  void visit(const ast::AssignStmt& as) override { if (as.value) as.value->accept(*this); }
+};
+
 struct ExpressionTyper : public ast::VisitorBase {
   // retParamIdxs: mapping of function name -> parameter index when return is trivially forwarded
   // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
@@ -715,14 +730,14 @@ struct ExpressionTyper : public ast::VisitorBase {
     out = Type::Dict; outSet = TypeEnv::maskForKind(out);
   }
   void visit(const ast::YieldExpr& y) override {
-    // Explicitly reject yield in this subset of semantics
-    addDiag(*diags, "yield is not supported in this subset", &y);
-    ok = false;
+    // Accept yield as dynamic for typing; generator semantics handled in later stages
+    (void)y;
+    out = Type::NoneType; outSet = TypeEnv::maskForKind(out); ok = true;
   }
   void visit(const ast::AwaitExpr& a) override {
-    // Await not supported in this subset
-    addDiag(*diags, "await is not supported in this subset", &a);
-    ok = false;
+    // Accept await as dynamic; coroutine typing to be modeled later
+    (void)a;
+    out = Type::NoneType; outSet = TypeEnv::maskForKind(out); ok = true;
   }
   void visit(const ast::GeneratorExpr& ge) override {
     TypeEnv local = *env;
@@ -1053,6 +1068,14 @@ struct ExpressionTyper : public ast::VisitorBase {
     }
     if (nameNode->id == "map") {
       if (callNode.args.size() != 2) { addDiag(*diags, "map() takes exactly 2 arguments in this subset", &callNode); ok = false; return; }
+      out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+    }
+    if (nameNode->id == "enumerate") {
+      if (callNode.args.size() < 1 || callNode.args.size() > 2) { addDiag(*diags, "enumerate() takes 1 or 2 arguments", &callNode); ok = false; return; }
+      out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+    }
+    if (nameNode->id == "zip") {
+      if (callNode.args.empty()) { addDiag(*diags, "zip() takes at least 1 argument", &callNode); ok = false; return; }
       out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
     }
     if (nameNode->id == "print") {
@@ -1451,6 +1474,23 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
     if (visitor.hasReturn && visitor.consistent && visitor.retIdx >= 0) { retParamIdxs[func->name] = visitor.retIdx; }
   }
 
+  // Function flags: generator/coroutine pre-scan
+  struct FnTraitScan : public ast::VisitorBase {
+    bool hasYield{false}; bool hasAwait{false};
+    void visit(const ast::YieldExpr&) override { hasYield = true; }
+    void visit(const ast::AwaitExpr&) override { hasAwait = true; }
+    void visit(const ast::ExprStmt& es) override { if (es.value) es.value->accept(*this); }
+    void visit(const ast::ReturnStmt& rs) override { if (rs.value) rs.value->accept(*this); }
+    void visit(const ast::IfStmt& is) override { if (is.cond) is.cond->accept(*this); for (const auto& s : is.thenBody) if (s) s->accept(*this); for (const auto& s : is.elseBody) if (s) s->accept(*this); }
+    void visit(const ast::WhileStmt& ws) override { if (ws.cond) ws.cond->accept(*this); for (const auto& s : ws.thenBody) if (s) s->accept(*this); for (const auto& s : ws.elseBody) if (s) s->accept(*this); }
+    void visit(const ast::ForStmt& fs) override { if (fs.target) fs.target->accept(*this); if (fs.iterable) fs.iterable->accept(*this); for (const auto& s : fs.thenBody) if (s) s->accept(*this); for (const auto& s : fs.elseBody) if (s) s->accept(*this); }
+    void visit(const ast::TryStmt& ts) override { for (const auto& s : ts.body) if (s) s->accept(*this); for (const auto& h : ts.handlers) if (h) for (const auto& s : h->body) if (s) s->accept(*this); for (const auto& s : ts.orelse) if (s) s->accept(*this); for (const auto& s : ts.finalbody) if (s) s->accept(*this); }
+  };
+  for (const auto& func : mod.functions) {
+    FnTraitScan scan; for (const auto& st : func->body) if (st) st->accept(scan);
+    funcFlags_[func.get()] = FuncFlags{scan.hasYield, scan.hasAwait};
+  }
+
   for (const auto& func : mod.functions) {
     if (!(typeIsInt(func->returnType) || typeIsBool(func->returnType) || typeIsFloat(func->returnType) || typeIsStr(func->returnType) || func->returnType == Type::Tuple)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/tuple returns supported"; diags.push_back(std::move(diagVar)); return false; }
     TypeEnv env;
@@ -1587,7 +1627,8 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         // If explicit targets are provided, update each; otherwise use legacy name-only target
         auto defineForName = [&](TypeEnv& tenv, const std::string& name, const ast::Expr* rhs) {
           const uint32_t maskVal = (valTyper.outSet != 0U) ? valTyper.outSet : TypeEnv::maskForKind(typeOut);
-          tenv.defineSet(name, maskVal, {assignStmt.file, assignStmt.line, assignStmt.col});
+          // Dynamic typing: accumulate unions across assignments
+          tenv.unionSet(name, maskVal, {assignStmt.file, assignStmt.line, assignStmt.col});
           // Propagate element/key/value metadata for list/tuple/dict literals and aliases
           if (rhs && rhs->kind == ast::NodeKind::ListLiteral) {
             uint32_t elemMask = 0U; const auto* lst = static_cast<const ast::ListLiteral*>(rhs);
@@ -2135,6 +2176,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
 
       void visit(const ast::GlobalStmt& gs) override {
         for (const auto& n : gs.names) { globals.insert(n); }
+        for (const auto& n : gs.names) { if (nonlocals.count(n)) { addDiag(diags, std::string("name declared both global and nonlocal: ") + n, &gs); ok = false; return; } }
       }
       void visit(const ast::NonlocalStmt& ns) override {
         for (const auto& n : ns.names) {
@@ -2144,6 +2186,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
             if (o->getSet(n) != 0U) { nonlocals.insert(n); nonlocalTargets[n] = o; found = true; break; }
           }
           if (!found) { addDiag(diags, std::string("nonlocal name not found in enclosing scope: ") + n, &ns); ok = false; return; }
+          if (globals.count(n)) { addDiag(diags, std::string("name declared both nonlocal and global: ") + n, &ns); ok = false; return; }
         }
       }
 
@@ -2298,6 +2341,19 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         for (const auto& st : ws.body) { if (!ok) break; st->accept(*this); }
       }
 
+      void visit(const ast::Import& im) override {
+        for (const auto& a : im.names) {
+          const std::string nm = a.asname.empty() ? a.name : a.asname;
+          env.defineSet(nm, 0U, {im.file, im.line, im.col});
+        }
+      }
+      void visit(const ast::ImportFrom& inf) override {
+        for (const auto& a : inf.names) {
+          const std::string nm = a.asname.empty() ? a.name : a.asname;
+          env.defineSet(nm, 0U, {inf.file, inf.line, inf.col});
+        }
+      }
+
       // Pattern matching helpers
       void bindNameToSubject(TypeEnv& tenv, const std::string& name, const ast::Expr* /*subject*/, Type subjType) {
         if (name == "_") return;
@@ -2346,7 +2402,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
               const auto& el = ps->elements[i]; if (!el) continue;
               if (el->kind == NK::PatternStar) {
                 const auto* st = static_cast<const ast::PatternStar*>(el.get());
-                if (st->name != "_") { tenv.defineSet(st->name, TypeEnv::maskForKind(Type::List), {fn.name, 0, 0}); }
+                if (st->name != "_") { tenv.unionSet(st->name, TypeEnv::maskForKind(Type::List), {fn.name, 0, 0}); }
               } else {
                 Type elType = subjType;
                 if (!ps->isList && subject && subject->kind == ast::NodeKind::Name) {
@@ -2364,7 +2420,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
           case NK::PatternMapping: {
             const auto* pm = static_cast<const ast::PatternMapping*>(pat);
             if (subjType != Type::Dict) { addDiag(diags, "mapping pattern requires dict subject", pm); return false; }
-            if (pm->hasRest && pm->restName != "_") { tenv.defineSet(pm->restName, TypeEnv::maskForKind(Type::Dict), {fn.name, 0, 0}); }
+            if (pm->hasRest && pm->restName != "_") { tenv.unionSet(pm->restName, TypeEnv::maskForKind(Type::Dict), {fn.name, 0, 0}); }
             uint32_t valMask = 0U;
             if (subject && subject->kind == ast::NodeKind::Name) {
               const auto* nm = static_cast<const ast::Name*>(subject);
@@ -2634,6 +2690,23 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
       stmt->accept(checker);
       if (!checker.ok) { return false; }
     }
+  }
+  // Effect typing: per-statement mayRaise map (post-pass)
+  struct EffStmtScan : public ast::VisitorBase {
+    std::unordered_map<const ast::Stmt*, bool>& out;
+    explicit EffStmtScan(std::unordered_map<const ast::Stmt*, bool>& o) : out(o) {}
+    void visit(const ast::ExprStmt& es) override { EffectsScan eff; if (es.value) es.value->accept(eff); out[&es] = eff.mayRaise; }
+    void visit(const ast::ReturnStmt& rs) override { EffectsScan eff; if (rs.value) rs.value->accept(eff); out[&rs] = eff.mayRaise; }
+    void visit(const ast::AssignStmt& as) override { EffectsScan eff; if (as.value) as.value->accept(eff); out[&as] = eff.mayRaise; }
+    void visit(const ast::RaiseStmt& rs) override { (void)rs; out[&rs] = true; }
+    void visit(const ast::IfStmt& iff) override { bool mr=false; EffectsScan e; if (iff.cond) iff.cond->accept(e); mr = e.mayRaise; for (const auto& s: iff.thenBody){ EffStmtScan sub{out}; if (s) s->accept(sub); mr = mr || out[s.get()]; } for (const auto& s: iff.elseBody){ EffStmtScan sub2{out}; if (s) s->accept(sub2); mr = mr || out[s.get()]; } out[&iff] = mr; }
+    void visit(const ast::WhileStmt& ws) override { bool mr=false; EffectsScan e; if (ws.cond) ws.cond->accept(e); mr = e.mayRaise; for (const auto& s: ws.thenBody){ EffStmtScan sub{out}; if (s) s->accept(sub); mr = mr || out[s.get()]; } for (const auto& s: ws.elseBody){ EffStmtScan sub2{out}; if (s) s->accept(sub2); mr = mr || out[s.get()]; } out[&ws] = mr; }
+    void visit(const ast::ForStmt& fs) override { bool mr=false; EffectsScan e; if (fs.iterable) fs.iterable->accept(e); mr = e.mayRaise; for (const auto& s: fs.thenBody){ EffStmtScan sub{out}; if (s) s->accept(sub); mr = mr || out[s.get()]; } for (const auto& s: fs.elseBody){ EffStmtScan sub2{out}; if (s) s->accept(sub2); mr = mr || out[s.get()]; } out[&fs] = mr; }
+    void visit(const ast::TryStmt& ts) override { out[&ts] = true; for (const auto& s: ts.body) if (s) s->accept(*this); for (const auto& h: ts.handlers) if (h) for (const auto& s: h->body) if (s) s->accept(*this); for (const auto& s: ts.orelse) if (s) s->accept(*this); for (const auto& s: ts.finalbody) if (s) s->accept(*this); }
+  };
+  for (const auto& func : mod.functions) {
+    EffStmtScan ess{stmtMayRaise_};
+    for (const auto& st : func->body) if (st) st->accept(ess);
   }
   return diags.empty();
 }

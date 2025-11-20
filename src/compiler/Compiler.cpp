@@ -15,9 +15,15 @@
 #include "optimizer/AlgebraicSimplify.h"
 #include "optimizer/ConstantFold.h"
 #include "optimizer/LocalProp.h"
+#include "optimizer/CSE.h"
 #include "optimizer/DCE.h"
 #include "optimizer/SimplifyCFG.h"
 #include "optimizer/Optimizer.h"
+#include "optimizer/LICM.h"
+#include "optimizer/GVN.h"
+#include "optimizer/RangeAnalysis.h"
+#include "optimizer/SSA.h"
+#include "optimizer/SSAGVN.h"
 #include "parser/Parser.h"
 #include "sema/Sema.h"
 
@@ -173,6 +179,24 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     metrics.stop("Algebraic");
   }
 
+  // Simple CSE after algebraic cleanup
+  {
+    metrics.start("CSE");
+    opt::CSE cse; // NOLINT(misc-const-correctness)
+    auto eliminated = cse.run(*mod);
+    metrics.setOptimizerStat("cse_eliminated", static_cast<uint64_t>(eliminated));
+    metrics.stop("CSE");
+  }
+
+  // LICM: hoist invariant initializers out of while-loops
+  if (opts.optCFG) {
+    metrics.start("LICM");
+    opt::LICM licm; // NOLINT(misc-const-correctness)
+    auto hoisted = licm.run(*mod);
+    metrics.setOptimizerStat("licm_hoisted", static_cast<uint64_t>(hoisted));
+    metrics.stop("LICM");
+  }
+
   if (opts.optCFG) {
     metrics.start("CFG");
     opt::SimplifyCFG cfg; // NOLINT(misc-const-correctness)
@@ -191,6 +215,29 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     metrics.setCounter("opt.dce_removed", static_cast<uint64_t>(removed));
     for (const auto& [key, count] : dce.stats()) { metrics.incOptimizerBreakdown("dce", key, count); }
     metrics.stop("DCE");
+  }
+
+  // Analyses: GVN/Range (non-mutating), recorded for metrics only
+  {
+    opt::GVN gvn; auto g = gvn.analyze(*mod);
+    metrics.setOptimizerStat("gvn_classes", static_cast<uint64_t>(g.classes));
+    metrics.setOptimizerStat("gvn_expressions", static_cast<uint64_t>(g.expressions));
+  }
+  {
+    opt::RangeAnalysis ra; auto ranges = ra.analyze(*mod);
+    metrics.setOptimizerStat("range_vars", static_cast<uint64_t>(ranges.size()));
+  }
+  {
+    opt::SSA ssa; auto ss = ssa.analyze(*mod);
+    metrics.setOptimizerStat("ssa_values", static_cast<uint64_t>(ss.values));
+    metrics.setOptimizerStat("ssa_instructions", static_cast<uint64_t>(ss.instructions));
+    metrics.setOptimizerStat("ssa_blocks", static_cast<uint64_t>(ss.blocks));
+  }
+  {
+    metrics.start("SSAGVN");
+    opt::SSAGVN gvn; auto elim = gvn.run(*mod);
+    metrics.setOptimizerStat("ssa_gvn_eliminated", static_cast<uint64_t>(elim));
+    metrics.stop("SSAGVN");
   }
 
   // Optional AST logging (after optimization)

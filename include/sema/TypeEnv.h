@@ -55,6 +55,13 @@ class TypeEnv {
     sets_[name] = mask;
     if (isSingle(mask)) { types_[name] = kindFor(mask); }
   }
+  // Union in additional kinds for a name (dynamic typing). Records provenance if not present.
+  void unionSet(const std::string& name, uint32_t mask, Provenance p) {
+    if (sets_.find(name) == sets_.end()) { defineSet(name, mask, std::move(p)); return; }
+    sets_[name] |= mask;
+    // If union collapses to a single kind, reflect it; else clear exact kind to keep it dynamic
+    if (isSingle(sets_[name])) { types_[name] = kindFor(sets_[name]); }
+  }
   // Record that a name is an instance of a known class (by class name string)
   void defineInstanceOf(const std::string& name, const std::string& className) {
     instances_[name] = className;
