@@ -18,7 +18,8 @@ enum class TypeTag : uint32_t {
   Float = 3,
   Bool = 4,
   List = 5,
-  Object = 6
+  Object = 6,
+  Dict = 7
 };
 
 struct RuntimeStats {
@@ -69,6 +70,12 @@ bool box_bool_value(void* obj);
 void* list_new(std::size_t capacity);
 void list_push_slot(void** list_slot, void* elem);
 std::size_t list_len(void* list);
+
+// Dict operations (opaque hash map from ptr->ptr; keys typically string objects)
+void* dict_new(std::size_t capacity);
+void dict_set(void** dict_slot, void* key, void* value);
+void* dict_get(void* dict, void* key);
+std::size_t dict_len(void* dict);
 
 // Object operations (fixed-size field table of ptr values)
 void* object_new(std::size_t field_count);

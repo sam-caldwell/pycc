@@ -82,3 +82,31 @@ TEST(ParserImports, FromParenList) {
   EXPECT_EQ(fr->names[1].asname, std::string("c"));
 }
 
+TEST(ParserImports, RelativeLevelsAndParenTrailingComma) {
+  const char* src =
+      "def main() -> int:\n"
+      "  from ...pkg.mod import (a as aa, b,)\n"
+      "  from . import y\n"
+      "  return 0\n";
+  auto mod = parseSrc(src);
+  const auto& fn = *mod->functions[0];
+  {
+    ASSERT_EQ(fn.body[0]->kind, ast::NodeKind::ImportFrom);
+    const auto* fr = static_cast<const ast::ImportFrom*>(fn.body[0].get());
+    EXPECT_EQ(fr->level, 3);
+    EXPECT_EQ(fr->module, std::string("pkg.mod"));
+    ASSERT_EQ(fr->names.size(), 2u);
+    EXPECT_EQ(fr->names[0].name, std::string("a"));
+    EXPECT_EQ(fr->names[0].asname, std::string("aa"));
+    EXPECT_EQ(fr->names[1].name, std::string("b"));
+  }
+  {
+    ASSERT_EQ(fn.body[1]->kind, ast::NodeKind::ImportFrom);
+    const auto* fr = static_cast<const ast::ImportFrom*>(fn.body[1].get());
+    EXPECT_EQ(fr->level, 1);
+    EXPECT_TRUE(fr->module.empty());
+    ASSERT_EQ(fr->names.size(), 1u);
+    EXPECT_EQ(fr->names[0].name, std::string("y"));
+  }
+}
+

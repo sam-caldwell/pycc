@@ -66,20 +66,68 @@ namespace pycc::parse {
 
 using TK = lex::TokenKind;
 
-const lex::Token& Parser::peek() const { return ts_.peek(0); }
-const lex::Token& Parser::peekNext() const { return ts_.peek(1); }
-lex::Token Parser::get() { return ts_.next(); }
+void Parser::initBuffer() {
+  if (initialized_) return;
+  // Try to access the full token stream when backed by Lexer; otherwise, drain
+  if (auto* lx = dynamic_cast<lex::Lexer*>(&ts_)) {
+    tokens_ = lx->tokens();
+  } else {
+    // Fallback: consume from stream until End
+    tokens_.clear();
+    for (;;) {
+      auto t = ts_.next();
+      tokens_.push_back(t);
+      if (t.kind == TK::End) break;
+    }
+  }
+  pos_ = 0;
+  initialized_ = true;
+}
+
+const lex::Token& Parser::peek() const {
+  // Safe in presence of End sentry
+  return tokens_[pos_ < tokens_.size() ? pos_ : (tokens_.size() - 1)];
+}
+const lex::Token& Parser::peekNext() const {
+  size_t idx = pos_ + 1;
+  return tokens_[idx < tokens_.size() ? idx : (tokens_.size() - 1)];
+}
+lex::Token Parser::get() {
+  if (pos_ < tokens_.size()) {
+    return tokens_[pos_++];
+  }
+  return tokens_.empty() ? lex::Token{} : tokens_.back();
+}
 
 bool Parser::match(TK tokenKind) {
   if (peek().kind == tokenKind) { (void)get(); return true; }
   return false;
 }
 
+void Parser::recordExpectation(const char* msg) {
+  if (pos_ >= farthestPos_) {
+    farthestPos_ = pos_;
+    farthestExpected_ = msg ? msg : "<token>";
+  }
+}
+
 void Parser::expect(TK tokenKind, const char* msg) {
-  if (!match(tokenKind)) { throw std::runtime_error(std::string("Parse error: expected ") + msg); }
+  if (!match(tokenKind)) {
+    recordExpectation(msg);
+    const auto& got = peek();
+    std::string m = "expected ";
+    m += msg;
+    m += ", got ";
+    m += to_string(got.kind);
+    m += " ('";
+    m += got.text;
+    m += "')";
+    throw std::runtime_error(std::string("Parse error: ") + m);
+  }
 }
 
 std::unique_ptr<ast::Module> Parser::parseModule() {
+  initBuffer();
   auto mod = std::make_unique<ast::Module>();
   while (peek().kind != TK::End) {
     if (peek().kind == TK::Newline) { get(); continue; }
@@ -285,6 +333,7 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
 void Parser::parseParamList(std::vector<ast::Param>& outParams) {
   if (peek().kind == TK::RParen) { return; }
   bool kwOnly = false;
+  bool seenSlash = false;
   for (;;) {
     if (peek().kind == TK::StarStar) {
       get();
@@ -300,6 +349,19 @@ void Parser::parseParamList(std::vector<ast::Param>& outParams) {
         outParams.push_back(std::move(param));
         kwOnly = true; // params after *args are kw-only
       }
+    } else if (peek().kind == TK::Slash) {
+      // Positional-only divider; mark all prior non-var params as positional-only
+      get();
+      if (seenSlash) { throw std::runtime_error("Parse error: duplicate '/' in parameter list"); }
+      if (outParams.empty()) { throw std::runtime_error("Parse error: '/' requires at least one parameter before it"); }
+      for (auto& p : outParams) {
+        if (!p.isVarArg && !p.isKwVarArg) { p.isPosOnly = true; }
+      }
+      seenSlash = true;
+      // Allow an optional trailing comma after '/'
+      if (peek().kind == TK::Comma) { get(); if (peek().kind == TK::RParen) break; continue; }
+      if (peek().kind == TK::RParen) { break; }
+      // Else continue parsing next param normally
     } else {
       const auto& pNameTok = get(); if (pNameTok.kind != TK::Ident) { throw std::runtime_error("Parse error: expected parameter name"); }
       ast::Param param; param.name = pNameTok.text; param.type = ast::TypeKind::NoneType; param.isKwOnly = kwOnly;
@@ -420,24 +482,16 @@ std::unique_ptr<ast::Expr> Parser::parseExpr() {
   // Conditional expression: <expr> if <expr> else <expr>
   auto condBase = parseLogicalOr();
   if (peek().kind == TK::If) {
-    // Lookahead to decide whether this is a true conditional expression or part of a comprehension guard
-    bool hasElse = false; int depth = 0;
-    for (size_t i = 0; i < 256; ++i) {
-      const auto& t = ts_.peek(i);
-      if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break;
-      if (t.kind == TK::LParen || t.kind == TK::LBracket || t.kind == TK::LBrace) { ++depth; continue; }
-      if (t.kind == TK::RParen || t.kind == TK::RBracket || t.kind == TK::RBrace) { if (depth > 0) --depth; continue; }
-      if (depth == 0 && (t.kind == TK::Comma || t.kind == TK::RParen || t.kind == TK::RBracket || t.kind == TK::RBrace || t.kind == TK::Colon)) break;
-      if (t.kind == TK::Else) { hasElse = true; break; }
-      if (t.kind == TK::For && depth == 0) { break; }
-    }
-    if (hasElse) {
-      get();
-      auto test = parseExpr();
-      expect(TK::Else, "'else'");
+    // Attempt PEG-style: commit only if we see a matching 'else'
+    const auto m = mark();
+    get(); // 'if'
+    auto test = parseExpr();
+    if (match(TK::Else)) {
       auto orelse = parseExpr();
       return std::make_unique<ast::IfExpr>(std::move(condBase), std::move(test), std::move(orelse));
     }
+    // Backtrack: not a conditional expression
+    rewind(m);
   }
   return condBase;
 }
@@ -807,6 +861,7 @@ std::unique_ptr<ast::Expr> Parser::parseExprFromString(const std::string& text,
                                                       const std::string& name) {
   lex::Lexer L; L.pushString(text, name);
   Parser P(L);
+  P.initBuffer();
   return P.parseExpr();
 }
 
@@ -819,8 +874,8 @@ std::unique_ptr<ast::Expr> Parser::parseListLiteral(const lex::Token& openTok) {
   }
   // First element/expression
   auto first = parseExpr();
-  // List comprehension if 'for' follows
-  if (peek().kind == TK::For) {
+  // List comprehension if 'for' or 'async for' follows
+  if (peek().kind == TK::For || (peek().kind == TK::Async && peekNext().kind == TK::For)) {
     // std::cerr << "parseListLiteral: entering list comp\n";
     auto lc = std::make_unique<ast::ListComp>();
     lc->elt = std::move(first);
@@ -879,8 +934,8 @@ std::unique_ptr<ast::Expr> Parser::parseDictOrSetLiteral(const lex::Token& openT
   // Dict: first ':' value
   if (peek().kind == TK::Colon) {
     get(); auto firstVal = parseExpr();
-    // Dict comprehension?
-    if (peek().kind == TK::For) {
+  // Dict comprehension? (allow 'async for')
+  if (peek().kind == TK::For || (peek().kind == TK::Async && peekNext().kind == TK::For)) {
       auto dc = std::make_unique<ast::DictComp>();
       dc->key = std::move(first);
       dc->value = std::move(firstVal);
@@ -901,8 +956,8 @@ std::unique_ptr<ast::Expr> Parser::parseDictOrSetLiteral(const lex::Token& openT
     dict->line = openTok.line; dict->col = openTok.col; dict->file = openTok.file;
     return dict;
   }
-  // Set comprehension?
-  if (peek().kind == TK::For) {
+  // Set comprehension? (allow 'async for')
+  if (peek().kind == TK::For || (peek().kind == TK::Async && peekNext().kind == TK::For)) {
     auto sc = std::make_unique<ast::SetComp>();
     sc->elt = std::move(first);
     sc->fors = parseComprehensionFors();
@@ -922,9 +977,12 @@ std::unique_ptr<ast::Expr> Parser::parseDictOrSetLiteral(const lex::Token& openT
 // Parse comprehension tails: one or more 'for <target> in <iter> [if <expr>]*'
 std::vector<ast::ComprehensionFor> Parser::parseComprehensionFors() {
   std::vector<ast::ComprehensionFor> out;
-  while (peek().kind == TK::For) {
-    get();
+  while (peek().kind == TK::For || (peek().kind == TK::Async && peekNext().kind == TK::For)) {
+    bool isAsync = false;
+    if (peek().kind == TK::Async) { get(); isAsync = true; }
+    expect(TK::For, "'for'");
     ast::ComprehensionFor cf;
+    cf.isAsync = isAsync;
     // Target (allow destructuring target list shape)
     cf.target = parsePostfix(parseUnary());
     expect(TK::In, "'in'");
@@ -1030,8 +1088,8 @@ bool Parser::isValidAssignmentTarget(const ast::Expr* e) {
 // Look ahead for a top-level '=' on the current logical line
 bool Parser::hasPendingEqualOnLine() {
   int depth = 0;
-  for (size_t i = 0; i < 256; ++i) {
-    const auto& t = ts_.peek(i);
+  for (size_t i = pos_; i < tokens_.size() && i < pos_ + 256; ++i) {
+    const auto& t = tokens_[i];
     if (t.kind == TK::End) return false;
     if (t.kind == TK::Newline || t.kind == TK::Dedent) return false;
     if (t.kind == TK::Colon && depth == 0) return false;
@@ -1044,8 +1102,8 @@ bool Parser::hasPendingEqualOnLine() {
 
 bool Parser::hasPendingAugAssignOnLine(lex::TokenKind& which) {
   int depth = 0;
-  for (size_t i = 0; i < 256; ++i) {
-    const auto& t = ts_.peek(i);
+  for (size_t i = pos_; i < tokens_.size() && i < pos_ + 256; ++i) {
+    const auto& t = tokens_[i];
     if (t.kind == TK::End) return false;
     if (t.kind == TK::Newline || t.kind == TK::Dedent) return false;
     if (t.kind == TK::Colon && depth == 0) return false;
@@ -1065,8 +1123,8 @@ bool Parser::hasPendingAugAssignOnLine(lex::TokenKind& which) {
 
 std::unique_ptr<ast::Expr> Parser::parseTupleOrParen(const lex::Token& openTok) {
   auto first = parseExpr();
-  // Generator expression: (expr for ...)
-  if (peek().kind == TK::For) {
+  // Generator expression: (expr for ...), also accepts 'async for'
+  if (peek().kind == TK::For || (peek().kind == TK::Async && peekNext().kind == TK::For)) {
     auto gen = std::make_unique<ast::GeneratorExpr>();
     gen->elt = std::move(first);
     gen->fors = parseComprehensionFors();
@@ -1107,7 +1165,7 @@ Parser::ArgList Parser::parseArgList() {
         get(); out.kwStarArgs.emplace_back(parseExpr());
       } else if (peek().kind == TK::Star) {
         get(); out.starArgs.emplace_back(parseExpr());
-      } else if (peek().kind == TK::Ident && ts_.peek(1).kind == TK::Equal) {
+      } else if (peek().kind == TK::Ident && peekNext().kind == TK::Equal) {
         // keyword argument
         const auto nameTok = get(); get(); // consume '='
         ast::KeywordArg kw{nameTok.text, parseExpr()};
@@ -1367,7 +1425,7 @@ std::unique_ptr<ast::Pattern> Parser::parseSimplePattern() {
       bool seenKw = false;
       // Parse a sequence of positional patterns or keyword patterns name=pattern
       for (;;) {
-        if (peek().kind == TK::Ident && ts_.peek(1).kind == TK::Equal) {
+        if (peek().kind == TK::Ident && peekNext().kind == TK::Equal) {
           // keyword pattern
           const auto nameTok = get(); get(); // '='
           pc->kwargs.emplace_back(nameTok.text, parsePattern());
@@ -1427,7 +1485,11 @@ std::unique_ptr<ast::Stmt> Parser::parseImportStmt() {
   // from import
   get();
   int level = 0;
-  while (peek().kind == TK::Dot) { get(); ++level; }
+  // Support both repeated '.' tokens and a single Ellipsis token ('...')
+  while (peek().kind == TK::Dot || peek().kind == TK::Ellipsis) {
+    if (peek().kind == TK::Dot) { get(); ++level; }
+    else /* Ellipsis */ { get(); level += 3; }
+  }
   std::string module;
   if (peek().kind == TK::Ident) {
     const auto& id = get(); module = id.text;

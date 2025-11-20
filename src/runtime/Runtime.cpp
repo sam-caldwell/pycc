@@ -169,6 +169,23 @@ static void mark(ObjectHeader* header) {
       }
       break;
     }
+    case TypeTag::Dict: {
+      auto* base = reinterpret_cast<unsigned char*>(header);
+      auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader)); // len, cap, keys[], vals[]
+      const std::size_t len = payload[0]; (void)len; // length not needed for marking, we scan up to cap
+      const std::size_t cap = payload[1];
+      auto** keys = reinterpret_cast<void**>(payload + 2);
+      auto** vals = keys + cap;
+      for (std::size_t i = 0; i < cap; ++i) {
+        if (keys[i] != nullptr) {
+          if (ObjectHeader* k = find_object_for_pointer(keys[i])) { mark(k); }
+        }
+        if (vals[i] != nullptr) {
+          if (ObjectHeader* v = find_object_for_pointer(vals[i])) { mark(v); }
+        }
+      }
+      break;
+    }
   }
 }
 
@@ -624,6 +641,100 @@ std::size_t list_len(void* list) {
   if (list == nullptr) { return 0; }
   const auto* meta = reinterpret_cast<const std::size_t*>(list); // NOLINT
   return meta[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+}
+
+// Dicts: open-addressed hash table (linear probe, pointer-identity keys)
+static std::size_t ptr_hash(void* p) {
+  auto v = reinterpret_cast<std::uintptr_t>(p);
+  // 64-bit mix
+  v ^= v >> 33; v *= 0xff51afd7ed558ccdULL; v ^= v >> 33; v *= 0xc4ceb9fe1a85ec53ULL; v ^= v >> 33;
+  return static_cast<std::size_t>(v);
+}
+
+static void* dict_new_locked(std::size_t capacity) {
+  if (capacity < 8) { capacity = 8; }
+  const std::size_t payloadSize = (sizeof(std::size_t) * 2) + (capacity * sizeof(void*)) + (capacity * sizeof(void*));
+  auto* bytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::Dict));
+  auto* meta = reinterpret_cast<std::size_t*>(bytes);
+  meta[0] = 0; meta[1] = capacity; // len, cap
+  auto** keys = reinterpret_cast<void**>(meta + 2);
+  auto** vals = keys + capacity;
+  for (std::size_t i = 0; i < capacity; ++i) { keys[i] = nullptr; vals[i] = nullptr; }
+  maybe_request_bg_gc_unlocked();
+  return bytes;
+}
+
+void* dict_new(std::size_t capacity) {
+  const std::lock_guard<std::mutex> lock(g_mu);
+  return dict_new_locked(capacity);
+}
+
+static void dict_rehash(void** dict_slot, std::size_t newCap) {
+  auto* old = *dict_slot;
+  auto* meta = reinterpret_cast<std::size_t*>(old);
+  const std::size_t cap = meta[1];
+  auto** keys = reinterpret_cast<void**>(meta + 2);
+  auto** vals = keys + cap;
+  auto* bytes = static_cast<unsigned char*>(alloc_raw((sizeof(std::size_t) * 2) + (newCap * sizeof(void*)) + (newCap * sizeof(void*)), TypeTag::Dict));
+  auto* nmeta = reinterpret_cast<std::size_t*>(bytes);
+  nmeta[0] = 0; nmeta[1] = newCap;
+  auto** nkeys = reinterpret_cast<void**>(nmeta + 2);
+  auto** nvals = nkeys + newCap;
+  for (std::size_t i = 0; i < newCap; ++i) { nkeys[i] = nullptr; nvals[i] = nullptr; }
+  // reinsertion
+  for (std::size_t i = 0; i < cap; ++i) {
+    if (keys[i] == nullptr) continue;
+    std::size_t idx = ptr_hash(keys[i]) & (newCap - 1);
+    while (nkeys[idx] != nullptr) { idx = (idx + 1) & (newCap - 1); }
+    nkeys[idx] = keys[i]; nvals[idx] = vals[i]; nmeta[0]++;
+  }
+  gc_pre_barrier(dict_slot);
+  gc_write_barrier(dict_slot, bytes);
+  *dict_slot = bytes;
+}
+
+void dict_set(void** dict_slot, void* key, void* value) {
+  if (dict_slot == nullptr) { return; }
+  const std::lock_guard<std::mutex> lock(g_mu);
+  if (*dict_slot == nullptr) { *dict_slot = dict_new_locked(8); }
+  auto* meta = reinterpret_cast<std::size_t*>(*dict_slot);
+  std::size_t len = meta[0]; const std::size_t cap = meta[1];
+  auto** keys = reinterpret_cast<void**>(meta + 2);
+  auto** vals = keys + cap;
+  // grow if load factor > 0.7 (cap should be power of two for masking)
+  if ((len + 1) * 10 > cap * 7) { dict_rehash(dict_slot, cap * 2); meta = reinterpret_cast<std::size_t*>(*dict_slot); len = meta[0]; }
+  const std::size_t ncap = meta[1]; keys = reinterpret_cast<void**>(meta + 2); vals = keys + ncap;
+  std::size_t idx = ptr_hash(key) & (ncap - 1);
+  while (true) {
+    if (keys[idx] == nullptr || keys[idx] == key) {
+      if (keys[idx] == nullptr) { meta[0] = len + 1; }
+      gc_pre_barrier(&keys[idx]); keys[idx] = key; gc_write_barrier(&keys[idx], key);
+      gc_pre_barrier(&vals[idx]); vals[idx] = value; gc_write_barrier(&vals[idx], value);
+      break;
+    }
+    idx = (idx + 1) & (ncap - 1);
+  }
+  maybe_request_bg_gc_unlocked();
+}
+
+void* dict_get(void* dict, void* key) {
+  if (dict == nullptr) { return nullptr; }
+  auto* meta = reinterpret_cast<std::size_t*>(dict);
+  const std::size_t cap = meta[1];
+  auto** keys = reinterpret_cast<void**>(meta + 2);
+  auto** vals = keys + cap;
+  std::size_t idx = ptr_hash(key) & (cap - 1);
+  for (;;) {
+    if (keys[idx] == nullptr) { return nullptr; }
+    if (keys[idx] == key) { return vals[idx]; }
+    idx = (idx + 1) & (cap - 1);
+  }
+}
+
+std::size_t dict_len(void* dict) {
+  if (dict == nullptr) { return 0; }
+  auto* meta = reinterpret_cast<std::size_t*>(dict);
+  return meta[0];
 }
 
 // Objects (fixed-size field table)

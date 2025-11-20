@@ -15,6 +15,8 @@
 #include "ast/IfStmt.h"
 #include "ast/IntLiteral.h"
 #include "ast/ListLiteral.h"
+#include "ast/SetLiteral.h"
+#include "ast/DictLiteral.h"
 #include "ast/Module.h"
 #include "ast/Name.h"
 #include "ast/NodeKind.h"
@@ -156,6 +158,7 @@ struct FoldVisitor : public ast::VisitorBase {
       case BinaryOperator::Mul: res = lhs * rhs; break;
       case BinaryOperator::Div: if (rhs == 0.0) { return false; } res = lhs / rhs; break;
       case BinaryOperator::Pow: {
+        if (rhs == 0.0) { res = 1.0; break; }
         if (rhs < 0.0) { return false; }
         double acc = 1.0;
         for (int i = 0; i < static_cast<int>(rhs); ++i) { acc *= lhs; }
@@ -184,6 +187,20 @@ struct FoldVisitor : public ast::VisitorBase {
   void tryFoldBinary(Binary& bin) {
     auto* left = bin.lhs.get();
     auto* right = bin.rhs.get();
+    // String concatenation and comparisons on literals
+    if (left && right && left->kind == NodeKind::StringLiteral && right->kind == NodeKind::StringLiteral) {
+      auto* ls = static_cast<ast::StringLiteral*>(left);
+      auto* rs = static_cast<ast::StringLiteral*>(right);
+      if (bin.op == BinaryOperator::Add) {
+        auto rep = std::make_unique<ast::StringLiteral>(ls->value + rs->value);
+        assignLoc(*rep, bin); *slot = std::move(rep); ++changes; return;
+      }
+      if (bin.op == BinaryOperator::Eq || bin.op == BinaryOperator::Ne) {
+        const bool eq = (ls->value == rs->value);
+        auto rep = std::make_unique<BoolLiteral>(bin.op == BinaryOperator::Eq ? eq : !eq);
+        assignLoc(*rep, bin); *slot = std::move(rep); ++changes; return;
+      }
+    }
     // None comparisons when both sides are None
     if (left && right && left->kind == NodeKind::NoneLiteral && right->kind == NodeKind::NoneLiteral) {
       if (bin.op == BinaryOperator::Eq) {
@@ -230,6 +247,50 @@ struct FoldVisitor : public ast::VisitorBase {
       else if (bin.op == BinaryOperator::Or) rep = std::make_unique<BoolLiteral>(lb || rb);
       if (rep) { assignLoc(*rep, bin); *slot = std::move(rep); ++changes; bumpUnary(); return; }
     }
+    // Membership tests on literal containers
+    auto eqLiteral = [&](const Expr* a, const Expr* b) -> bool {
+      if (!a || !b) return false;
+      if (a->kind != b->kind) return false;
+      switch (a->kind) {
+        case NodeKind::IntLiteral: return static_cast<const IntLiteral*>(a)->value == static_cast<const IntLiteral*>(b)->value;
+        case NodeKind::FloatLiteral: return static_cast<const FloatLiteral*>(a)->value == static_cast<const FloatLiteral*>(b)->value;
+        case NodeKind::BoolLiteral: return static_cast<const BoolLiteral*>(a)->value == static_cast<const BoolLiteral*>(b)->value;
+        case NodeKind::StringLiteral: return static_cast<const ast::StringLiteral*>(a)->value == static_cast<const ast::StringLiteral*>(b)->value;
+        default: return false;
+      }
+    };
+    auto containsElem = [&](const Expr* needle, const std::vector<std::unique_ptr<Expr>>& elems) -> bool {
+      for (const auto& el : elems) { if (el && eqLiteral(needle, el.get())) return true; }
+      return false;
+    };
+    if (left && right && (bin.op == BinaryOperator::In || bin.op == BinaryOperator::NotIn)) {
+      bool resultKnown = false;
+      bool isMember = false;
+      if (right->kind == NodeKind::TupleLiteral) {
+        isMember = containsElem(left, static_cast<ast::TupleLiteral*>(right)->elements);
+        resultKnown = true;
+      } else if (right->kind == NodeKind::ListLiteral) {
+        isMember = containsElem(left, static_cast<ast::ListLiteral*>(right)->elements);
+        resultKnown = true;
+      } else if (right->kind == NodeKind::SetLiteral) {
+        isMember = containsElem(left, static_cast<ast::SetLiteral*>(right)->elements);
+        resultKnown = true;
+      } else if (right->kind == NodeKind::StringLiteral && left->kind == NodeKind::StringLiteral) {
+        auto* hay = static_cast<ast::StringLiteral*>(right);
+        auto* ndl = static_cast<ast::StringLiteral*>(left);
+        isMember = hay->value.find(ndl->value) != std::string::npos;
+        resultKnown = true;
+      } else if (right->kind == NodeKind::DictLiteral) {
+        const auto* dl = static_cast<const ast::DictLiteral*>(right);
+        bool found = false; for (const auto& kv : dl->items) { if (kv.first && eqLiteral(left, kv.first.get())) { found = true; break; } }
+        isMember = found; resultKnown = true;
+      }
+      if (resultKnown) {
+        const bool val = (bin.op == BinaryOperator::In) ? isMember : !isMember;
+        auto rep = std::make_unique<BoolLiteral>(val);
+        assignLoc(*rep, bin); *slot = std::move(rep); ++changes; return;
+      }
+    }
   }
 
   void visit(const Binary& binary) override {
@@ -270,6 +331,19 @@ struct FoldVisitor : public ast::VisitorBase {
           auto rep = std::make_unique<IntLiteral>(static_cast<long long>(s->value.size()));
           assignLoc(*rep, *call); *slot = std::move(rep); ++changes; return;
         }
+        if (call->args[0]->kind == NodeKind::SetLiteral) {
+          auto* st = static_cast<ast::SetLiteral*>(call->args[0].get());
+          auto rep = std::make_unique<IntLiteral>(static_cast<long long>(st->elements.size()));
+          assignLoc(*rep, *call); *slot = std::move(rep); ++changes; return;
+        }
+        if (call->args[0]->kind == NodeKind::DictLiteral) {
+          auto* dl = static_cast<ast::DictLiteral*>(call->args[0].get());
+          // Only fold when there are no unpacks
+          if (dl->unpacks.empty()) {
+            auto rep = std::make_unique<IntLiteral>(static_cast<long long>(dl->items.size()));
+            assignLoc(*rep, *call); *slot = std::move(rep); ++changes; return;
+          }
+        }
       }
       if (nm->id == "isinstance" && call->args.size() == 2 && call->args[0] && call->args[1] && call->args[1]->kind == NodeKind::Name) {
         const auto* tname = static_cast<const ast::Name*>(call->args[1].get());
@@ -279,6 +353,10 @@ struct FoldVisitor : public ast::VisitorBase {
             case NodeKind::IntLiteral: return "int";
             case NodeKind::BoolLiteral: return "bool";
             case NodeKind::FloatLiteral: return "float";
+            case NodeKind::StringLiteral: return "str";
+            case NodeKind::ListLiteral: return "list";
+            case NodeKind::TupleLiteral: return "tuple";
+            case NodeKind::DictLiteral: return "dict";
             default: return "";
           }
         };

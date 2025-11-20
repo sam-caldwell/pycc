@@ -51,7 +51,11 @@ struct SigParam {
   bool isVarArg{false};
   bool isKwVarArg{false};
   bool isKwOnly{false};
+  bool isPosOnly{false};
   bool hasDefault{false};
+  // Rich annotation info
+  uint32_t unionMask{0U};     // allowed argument kinds (bitmask). 0 => just 'type'
+  uint32_t listElemMask{0U};  // if type==List and list[T] was annotated, mask of T
 };
 struct Sig { Type ret{Type::NoneType}; std::vector<Type> params; std::vector<SigParam> full; };
 
@@ -547,15 +551,54 @@ struct ExpressionTyper : public ast::VisitorBase {
       }
       return 0U;
     };
-    std::function<void(const ast::Expr*, uint32_t)> bindTarget = [&](const ast::Expr* tgt, uint32_t elemMask) {
+    const ast::Expr* currentIter = nullptr; // capture the current iter expression for tuple element inference
+    std::function<void(const ast::Expr*, uint32_t, int)> bindTarget = [&](const ast::Expr* tgt, uint32_t elemMask, int parentIdx) {
       if (!tgt) return;
       if (tgt->kind == ast::NodeKind::Name) { const auto* nm = static_cast<const ast::Name*>(tgt); uint32_t m = elemMask; if (m == 0U) m = TypeEnv::maskForKind(Type::Int); local.defineSet(nm->id, m, {"<comp>", 0, 0}); return; }
-      if (tgt->kind == ast::NodeKind::TupleLiteral) { const auto* tp = static_cast<const ast::TupleLiteral*>(tgt); for (const auto& e : tp->elements) { if (e) bindTarget(e.get(), elemMask); } }
+      if (tgt->kind == ast::NodeKind::TupleLiteral) {
+        const auto* tp = static_cast<const ast::TupleLiteral*>(tgt);
+        // If iter is a name with known tuple element masks (for list-of-tuples), use those per index
+        const ast::Name* iterName = nullptr;
+        if (currentIter && currentIter->kind == ast::NodeKind::Name) { iterName = static_cast<const ast::Name*>(currentIter); }
+        std::vector<uint32_t> perIndex;
+        if (currentIter && currentIter->kind == ast::NodeKind::ListLiteral) {
+          const auto* lst = static_cast<const ast::ListLiteral*>(currentIter);
+          size_t arity = tp->elements.size(); perIndex.assign(arity, 0U);
+          for (const auto& el : lst->elements) {
+            if (!el || el->kind != ast::NodeKind::TupleLiteral) continue;
+            const auto* lt = static_cast<const ast::TupleLiteral*>(el.get());
+            const ast::TupleLiteral* inner = lt;
+            if (parentIdx >= 0 && parentIdx < static_cast<int>(lt->elements.size()) && lt->elements[parentIdx] && lt->elements[parentIdx]->kind == ast::NodeKind::TupleLiteral) {
+              inner = static_cast<const ast::TupleLiteral*>(lt->elements[parentIdx].get());
+            }
+            for (size_t i = 0; i < std::min(arity, inner->elements.size()); ++i) {
+              const auto& sub = inner->elements[i]; if (!sub) continue;
+              ExpressionTyper set{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes};
+              sub->accept(set); if (!set.ok) { ok = false; return; }
+              perIndex[i] |= (set.outSet != 0U) ? set.outSet : TypeEnv::maskForKind(set.out);
+            }
+          }
+        }
+        for (size_t i = 0; i < tp->elements.size(); ++i) {
+          const auto& e = tp->elements[i]; if (!e) continue;
+          uint32_t m = elemMask;
+          if (iterName != nullptr) {
+            const uint32_t mi = local.getTupleElemAt(iterName->id, i);
+            if (mi != 0U) { m = mi; }
+          } else if (!perIndex.empty() && i < perIndex.size()) {
+            if (perIndex[i] != 0U) { m = perIndex[i]; }
+          }
+          // For nested tuple destructuring, pass current index so inner perIndex resolves against inner tuple
+          const int nextParentIdx = (parentIdx >= 0) ? parentIdx : static_cast<int>(i);
+          bindTarget(e.get(), m, nextParentIdx);
+        }
+      }
     };
     for (const auto& f : lc.fors) {
       if (f.iter) { ExpressionTyper it{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; f.iter->accept(it); if (!it.ok) { ok = false; return; } }
+      currentIter = f.iter.get();
       uint32_t em = inferElemMask(f.iter.get());
-      bindTarget(f.target.get(), em);
+      bindTarget(f.target.get(), em, -1);
       for (const auto& g : f.ifs) { if (g) { ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; g->accept(et); if (!et.ok) { ok = false; return; } if (!typeIsBool(et.out)) { addDiag(*diags, "list comprehension guard must be bool", g.get()); ok = false; return; } } }
     }
     if (lc.elt) { ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; lc.elt->accept(et); if (!et.ok) { ok = false; return; } }
@@ -569,14 +612,50 @@ struct ExpressionTyper : public ast::VisitorBase {
       if (!it) return 0U;
       if (it->kind == ast::NodeKind::Name) { const auto* nm = static_cast<const ast::Name*>(it); const uint32_t e = local.getListElems(nm->id); if (e != 0U) return e; }
       if (it->kind == ast::NodeKind::ListLiteral) { uint32_t em = 0U; const auto* lst = static_cast<const ast::ListLiteral*>(it); for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; el->accept(et); if (!et.ok) return 0U; em |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); } return em; } return 0U; };
-    std::function<void(const ast::Expr*, uint32_t)> bindTarget = [&](const ast::Expr* tgt, uint32_t elemMask) {
+    const ast::Expr* currentIter = nullptr;
+    std::function<void(const ast::Expr*, uint32_t, int)> bindTarget = [&](const ast::Expr* tgt, uint32_t elemMask, int parentIdx) {
       if (!tgt) return;
       if (tgt->kind == ast::NodeKind::Name) { const auto* nm = static_cast<const ast::Name*>(tgt); uint32_t m = elemMask; if (m == 0U) m = TypeEnv::maskForKind(Type::Int); local.defineSet(nm->id, m, {"<comp>", 0, 0}); }
-      else if (tgt->kind == ast::NodeKind::TupleLiteral) { const auto* tp = static_cast<const ast::TupleLiteral*>(tgt); for (const auto& e : tp->elements) { if (e) bindTarget(e.get(), elemMask); } }
+      else if (tgt->kind == ast::NodeKind::TupleLiteral) {
+        const auto* tp = static_cast<const ast::TupleLiteral*>(tgt);
+        const ast::Name* iterName = (currentIter && currentIter->kind == ast::NodeKind::Name) ? static_cast<const ast::Name*>(currentIter) : nullptr;
+        std::vector<uint32_t> perIndex;
+        if (currentIter && currentIter->kind == ast::NodeKind::ListLiteral) {
+          const auto* lst = static_cast<const ast::ListLiteral*>(currentIter);
+          size_t arity = tp->elements.size(); perIndex.assign(arity, 0U);
+          for (const auto& el : lst->elements) {
+            if (!el || el->kind != ast::NodeKind::TupleLiteral) continue;
+            const auto* lt = static_cast<const ast::TupleLiteral*>(el.get());
+            const ast::TupleLiteral* inner = lt;
+            if (parentIdx >= 0 && parentIdx < static_cast<int>(lt->elements.size()) && lt->elements[parentIdx] && lt->elements[parentIdx]->kind == ast::NodeKind::TupleLiteral) {
+              inner = static_cast<const ast::TupleLiteral*>(lt->elements[parentIdx].get());
+            }
+            for (size_t i = 0; i < std::min(arity, inner->elements.size()); ++i) {
+              const auto& sub = inner->elements[i]; if (!sub) continue;
+              ExpressionTyper set{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes};
+              sub->accept(set); if (!set.ok) { ok = false; return; }
+              perIndex[i] |= (set.outSet != 0U) ? set.outSet : TypeEnv::maskForKind(set.out);
+            }
+          }
+        }
+        for (size_t i = 0; i < tp->elements.size(); ++i) {
+          const auto& e = tp->elements[i]; if (!e) continue;
+          uint32_t m = elemMask;
+          if (iterName != nullptr) {
+            const uint32_t mi = local.getTupleElemAt(iterName->id, i);
+            if (mi != 0U) { m = mi; }
+          } else if (!perIndex.empty() && i < perIndex.size()) {
+            if (perIndex[i] != 0U) { m = perIndex[i]; }
+          }
+          const int nextParentIdx = (parentIdx >= 0) ? parentIdx : static_cast<int>(i);
+          bindTarget(e.get(), m, nextParentIdx);
+        }
+      }
     };
     for (const auto& f : sc.fors) {
       if (f.iter) { ExpressionTyper it{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; f.iter->accept(it); if (!it.ok) { ok = false; return; } }
-      uint32_t em = inferElemMask(f.iter.get()); bindTarget(f.target.get(), em);
+      currentIter = f.iter.get();
+      uint32_t em = inferElemMask(f.iter.get()); bindTarget(f.target.get(), em, -1);
       for (const auto& g : f.ifs) { if (g) { ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; g->accept(et); if (!et.ok) { ok = false; return; } if (!typeIsBool(et.out)) { addDiag(*diags, "set comprehension guard must be bool", g.get()); ok = false; return; } } }
     }
     if (sc.elt) { ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; sc.elt->accept(et); if (!et.ok) { ok = false; return; } }
@@ -585,14 +664,50 @@ struct ExpressionTyper : public ast::VisitorBase {
   void visit(const ast::DictComp& dc) override {
     TypeEnv local = *env;
     auto inferElemMask = [&](const ast::Expr* it) -> uint32_t { if (!it) return 0U; if (it->kind == ast::NodeKind::Name) { const auto* nm = static_cast<const ast::Name*>(it); const uint32_t e = local.getListElems(nm->id); if (e != 0U) return e; } if (it->kind == ast::NodeKind::ListLiteral) { uint32_t em = 0U; const auto* lst = static_cast<const ast::ListLiteral*>(it); for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; el->accept(et); if (!et.ok) return 0U; em |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); } return em; } return 0U; };
-    std::function<void(const ast::Expr*, uint32_t)> bindTarget = [&](const ast::Expr* tgt, uint32_t elemMask) {
+    const ast::Expr* currentIter = nullptr;
+    std::function<void(const ast::Expr*, uint32_t, int)> bindTarget = [&](const ast::Expr* tgt, uint32_t elemMask, int parentIdx) {
       if (!tgt) return;
       if (tgt->kind == ast::NodeKind::Name) { const auto* nm = static_cast<const ast::Name*>(tgt); uint32_t m = elemMask; if (m == 0U) m = TypeEnv::maskForKind(Type::Int); local.defineSet(nm->id, m, {"<comp>", 0, 0}); }
-      else if (tgt->kind == ast::NodeKind::TupleLiteral) { const auto* tp = static_cast<const ast::TupleLiteral*>(tgt); for (const auto& e : tp->elements) { if (e) bindTarget(e.get(), elemMask); } }
+      else if (tgt->kind == ast::NodeKind::TupleLiteral) {
+        const auto* tp = static_cast<const ast::TupleLiteral*>(tgt);
+        const ast::Name* iterName = (currentIter && currentIter->kind == ast::NodeKind::Name) ? static_cast<const ast::Name*>(currentIter) : nullptr;
+        std::vector<uint32_t> perIndex;
+        if (currentIter && currentIter->kind == ast::NodeKind::ListLiteral) {
+          const auto* lst = static_cast<const ast::ListLiteral*>(currentIter);
+          size_t arity = tp->elements.size(); perIndex.assign(arity, 0U);
+          for (const auto& el : lst->elements) {
+            if (!el || el->kind != ast::NodeKind::TupleLiteral) continue;
+            const auto* lt = static_cast<const ast::TupleLiteral*>(el.get());
+            const ast::TupleLiteral* inner = lt;
+            if (parentIdx >= 0 && parentIdx < static_cast<int>(lt->elements.size()) && lt->elements[parentIdx] && lt->elements[parentIdx]->kind == ast::NodeKind::TupleLiteral) {
+              inner = static_cast<const ast::TupleLiteral*>(lt->elements[parentIdx].get());
+            }
+            for (size_t i = 0; i < std::min(arity, inner->elements.size()); ++i) {
+              const auto& sub = inner->elements[i]; if (!sub) continue;
+              ExpressionTyper set{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes};
+              sub->accept(set); if (!set.ok) { ok = false; return; }
+              perIndex[i] |= (set.outSet != 0U) ? set.outSet : TypeEnv::maskForKind(set.out);
+            }
+          }
+        }
+        for (size_t i = 0; i < tp->elements.size(); ++i) {
+          const auto& e = tp->elements[i]; if (!e) continue;
+          uint32_t m = elemMask;
+          if (iterName != nullptr) {
+            const uint32_t mi = local.getTupleElemAt(iterName->id, i);
+            if (mi != 0U) { m = mi; }
+          } else if (!perIndex.empty() && i < perIndex.size()) {
+            if (perIndex[i] != 0U) { m = perIndex[i]; }
+          }
+          const int nextParentIdx = (parentIdx >= 0) ? parentIdx : static_cast<int>(i);
+          bindTarget(e.get(), m, nextParentIdx);
+        }
+      }
     };
     for (const auto& f : dc.fors) {
       if (f.iter) { ExpressionTyper it{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; f.iter->accept(it); if (!it.ok) { ok = false; return; } }
-      uint32_t em = inferElemMask(f.iter.get()); bindTarget(f.target.get(), em);
+      currentIter = f.iter.get();
+      uint32_t em = inferElemMask(f.iter.get()); bindTarget(f.target.get(), em, -1);
       for (const auto& g : f.ifs) { if (g) { ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; g->accept(et); if (!et.ok) { ok = false; return; } if (!typeIsBool(et.out)) { addDiag(*diags, "dict comprehension guard must be bool", g.get()); ok = false; return; } } }
     }
     if (dc.key) { ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; dc.key->accept(et); if (!et.ok) { ok = false; return; } }
@@ -604,18 +719,70 @@ struct ExpressionTyper : public ast::VisitorBase {
     addDiag(*diags, "yield is not supported in this subset", &y);
     ok = false;
   }
+  void visit(const ast::AwaitExpr& a) override {
+    // Await not supported in this subset
+    addDiag(*diags, "await is not supported in this subset", &a);
+    ok = false;
+  }
   void visit(const ast::GeneratorExpr& ge) override {
     TypeEnv local = *env;
     auto inferElemMask = [&](const ast::Expr* it) -> uint32_t { if (!it) return 0U; if (it->kind == ast::NodeKind::Name) { const auto* nm = static_cast<const ast::Name*>(it); const uint32_t e = local.getListElems(nm->id); if (e != 0U) return e; } if (it->kind == ast::NodeKind::ListLiteral) { uint32_t em = 0U; const auto* lst = static_cast<const ast::ListLiteral*>(it); for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; el->accept(et); if (!et.ok) return 0U; em |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); } return em; } return 0U; };
+    const ast::Expr* currentIter = nullptr;
     std::function<void(const ast::Expr*, uint32_t)> bindTarget = [&](const ast::Expr* tgt, uint32_t elemMask) {
       if (!tgt) return;
       if (tgt->kind == ast::NodeKind::Name) { const auto* nm = static_cast<const ast::Name*>(tgt); uint32_t m = elemMask; if (m == 0U) m = TypeEnv::maskForKind(Type::Int); local.defineSet(nm->id, m, {"<comp>", 0, 0}); }
-      else if (tgt->kind == ast::NodeKind::TupleLiteral) { const auto* tp = static_cast<const ast::TupleLiteral*>(tgt); for (const auto& e : tp->elements) { if (e) bindTarget(e.get(), elemMask); } }
+      else if (tgt->kind == ast::NodeKind::TupleLiteral) {
+        const auto* tp = static_cast<const ast::TupleLiteral*>(tgt);
+        const ast::Name* iterName = (currentIter && currentIter->kind == ast::NodeKind::Name) ? static_cast<const ast::Name*>(currentIter) : nullptr;
+        std::vector<uint32_t> perIndex;
+        if (currentIter && currentIter->kind == ast::NodeKind::ListLiteral) {
+          const auto* lst = static_cast<const ast::ListLiteral*>(currentIter);
+          size_t arity = tp->elements.size(); perIndex.assign(arity, 0U);
+          for (const auto& el : lst->elements) {
+            if (!el || el->kind != ast::NodeKind::TupleLiteral) continue;
+            const auto* lt = static_cast<const ast::TupleLiteral*>(el.get());
+            for (size_t i = 0; i < std::min(arity, lt->elements.size()); ++i) {
+              const auto& sub = lt->elements[i]; if (!sub) continue;
+              ExpressionTyper set{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes};
+              sub->accept(set); if (!set.ok) { ok = false; return; }
+              perIndex[i] |= (set.outSet != 0U) ? set.outSet : TypeEnv::maskForKind(set.out);
+            }
+          }
+        }
+        for (size_t i = 0; i < tp->elements.size(); ++i) {
+          const auto& e = tp->elements[i]; if (!e) continue;
+          uint32_t m = elemMask;
+          if (iterName != nullptr) {
+            const uint32_t mi = local.getTupleElemAt(iterName->id, i);
+            if (mi != 0U) { m = mi; }
+          } else if (!perIndex.empty() && i < perIndex.size()) {
+            if (perIndex[i] != 0U) { m = perIndex[i]; }
+          }
+          bindTarget(e.get(), m);
+        }
+      }
     };
     for (const auto& f : ge.fors) {
       if (f.iter) { ExpressionTyper it{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; f.iter->accept(it); if (!it.ok) { ok = false; return; } }
+      currentIter = f.iter.get();
       uint32_t em = inferElemMask(f.iter.get()); bindTarget(f.target.get(), em);
-      for (const auto& g : f.ifs) { if (g) { ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; g->accept(et); if (!et.ok) { ok = false; return; } if (!typeIsBool(et.out)) { addDiag(*diags, "generator guard must be bool", g.get()); ok = false; return; } } }
+      for (const auto& g : f.ifs) {
+        if (!g) continue;
+        ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes};
+        g->accept(et); if (!et.ok) { ok = false; return; }
+        if (!typeIsBool(et.out)) {
+          // Relaxation: allow name-based truthiness over numeric types in generator guards
+          if (g->kind == ast::NodeKind::Name) {
+            const auto* nm = static_cast<const ast::Name*>(g.get());
+            const uint32_t m = local.getSet(nm->id);
+            const uint32_t numMask = TypeEnv::maskForKind(Type::Int) | TypeEnv::maskForKind(Type::Float);
+            if (m != 0U && (m & ~numMask) == 0U) {
+              continue; // accept numeric name as truthy
+            }
+          }
+          addDiag(*diags, "generator guard must be bool", g.get()); ok = false; return;
+        }
+      }
     }
     if (ge.elt) { ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; ge.elt->accept(et); if (!et.ok) { ok = false; return; } }
     // Treat generator expr as List for typing in this subset
@@ -678,8 +845,41 @@ struct ExpressionTyper : public ast::VisitorBase {
             std::vector<size_t> posIdxs;
             for (size_t i = 0; i < sig.full.size(); ++i) { const auto& sp = sig.full[i]; if (!sp.name.empty()) nameToIdx[sp.name] = i; if (sp.isVarArg) varargIdx = i; if (sp.isKwVarArg) kwvarargIdx = i; if (!sp.isKwOnly && !sp.isVarArg && !sp.isKwVarArg) posIdxs.push_back(i); }
             std::vector<bool> bound(sig.full.size(), false);
-            for (size_t i = 0; i < callNode.args.size(); ++i) { ExpressionTyper at{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; callNode.args[i]->accept(at); if (!at.ok) { ok = false; return; } if (i < posIdxs.size()) { size_t pidx = posIdxs[i]; if (at.out != sig.full[pidx].type) { addDiag(*diags, "call argument type mismatch", callNode.args[i].get()); ok = false; return; } bound[pidx] = true; } else if (varargIdx != static_cast<size_t>(-1)) { if (sig.full[varargIdx].type != Type::NoneType && at.out != sig.full[varargIdx].type) { addDiag(*diags, "*args element type mismatch", callNode.args[i].get()); ok = false; return; } } else { addDiag(*diags, std::string("arity mismatch calling function: ") + key, &callNode); ok = false; return; } }
-            for (const auto& kw : callNode.keywords) { auto itn = nameToIdx.find(kw.name); if (itn == nameToIdx.end()) { if (kwvarargIdx == static_cast<size_t>(-1)) { addDiag(*diags, std::string("unknown keyword argument: ") + kw.name, &callNode); ok = false; return; } continue; } size_t pidx = itn->second; if (bound[pidx]) { addDiag(*diags, std::string("multiple values for argument: ") + kw.name, &callNode); ok = false; return; } ExpressionTyper kt{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; if (kw.value) kw.value->accept(kt); if (!kt.ok) { ok = false; return; } if (kt.out != sig.full[pidx].type) { addDiag(*diags, std::string("keyword argument type mismatch: ") + kw.name, &callNode); ok = false; return; } bound[pidx] = true; }
+          for (size_t i = 0; i < callNode.args.size(); ++i) {
+            ExpressionTyper at{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes};
+            callNode.args[i]->accept(at); if (!at.ok) { ok = false; return; }
+            if (i < posIdxs.size()) {
+              size_t pidx = posIdxs[i];
+              const auto& p = sig.full[pidx];
+              bool typeOk = false;
+              const uint32_t aMask = TypeEnv::maskForKind(at.out);
+              if (p.unionMask != 0U) { typeOk = ((aMask & p.unionMask) != 0U); }
+              else if (p.type == Type::List && p.listElemMask != 0U && at.out == Type::List) {
+                uint32_t elemMask = 0U;
+                if (callNode.args[i] && callNode.args[i]->kind == ast::NodeKind::ListLiteral) {
+                  const auto* lst = static_cast<const ast::ListLiteral*>(callNode.args[i].get());
+                  for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{*env, *sigs, *retParamIdxs, *diags, polyTargets}; el->accept(et); if (!et.ok) { ok = false; return; } elemMask |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); }
+                } else if (callNode.args[i] && callNode.args[i]->kind == ast::NodeKind::Name) {
+                  const auto* nm = static_cast<const ast::Name*>(callNode.args[i].get()); elemMask = env->getListElems(nm->id);
+                }
+                if (elemMask != 0U) { typeOk = ((elemMask & ~p.listElemMask) == 0U); } else { typeOk = true; }
+              } else { typeOk = (at.out == p.type); }
+              if (!typeOk) { addDiag(*diags, "call argument type mismatch", callNode.args[i].get()); ok = false; return; }
+              bound[pidx] = true;
+            } else if (varargIdx != static_cast<size_t>(-1)) {
+              if (sig.full[varargIdx].type != Type::NoneType && at.out != sig.full[varargIdx].type) { addDiag(*diags, "*args element type mismatch", callNode.args[i].get()); ok = false; return; }
+            } else { addDiag(*diags, std::string("arity mismatch calling function: ") + key, &callNode); ok = false; return; }
+          }
+            for (const auto& kw : callNode.keywords) {
+              auto itn = nameToIdx.find(kw.name);
+              if (itn == nameToIdx.end()) { if (kwvarargIdx == static_cast<size_t>(-1)) { addDiag(*diags, std::string("unknown keyword argument: ") + kw.name, &callNode); ok = false; return; } continue; }
+              size_t pidx = itn->second;
+              if (sig.full[pidx].isPosOnly) { addDiag(*diags, std::string("positional-only argument passed as keyword: ") + kw.name, &callNode); ok = false; return; }
+              if (bound[pidx]) { addDiag(*diags, std::string("multiple values for argument: ") + kw.name, &callNode); ok = false; return; }
+              ExpressionTyper kt{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; if (kw.value) kw.value->accept(kt); if (!kt.ok) { ok = false; return; }
+              if (kt.out != sig.full[pidx].type) { addDiag(*diags, std::string("keyword argument type mismatch: ") + kw.name, &callNode); ok = false; return; }
+              bound[pidx] = true;
+            }
             if (!callNode.starArgs.empty() && varargIdx == static_cast<size_t>(-1)) { addDiag(*diags, "*args provided but callee has no varargs", &callNode); ok = false; return; }
             if (!callNode.kwStarArgs.empty() && kwvarargIdx == static_cast<size_t>(-1)) { addDiag(*diags, "**kwargs provided but callee has no kwvarargs", &callNode); ok = false; return; }
             for (size_t i = 0; i < sig.full.size(); ++i) { const auto& sp = sig.full[i]; if (sp.isVarArg || sp.isKwVarArg) continue; if (!bound[i] && !sp.hasDefault) { addDiag(*diags, std::string(sp.isKwOnly?"missing required keyword-only argument: ":"missing required positional argument: ") + sp.name, &callNode); ok = false; return; } }
@@ -703,8 +903,48 @@ struct ExpressionTyper : public ast::VisitorBase {
                   std::vector<size_t> posIdxs;
                   for (size_t i = 0; i < sig.full.size(); ++i) { const auto& sp = sig.full[i]; if (!sp.name.empty()) nameToIdx[sp.name] = i; if (sp.isVarArg) varargIdx = i; if (sp.isKwVarArg) kwvarargIdx = i; if (!sp.isKwOnly && !sp.isVarArg && !sp.isKwVarArg) posIdxs.push_back(i); }
                   std::vector<bool> bound(sig.full.size(), false);
-                  for (size_t i = 0; i < callNode.args.size(); ++i) { ExpressionTyper at{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; callNode.args[i]->accept(at); if (!at.ok) { ok = false; return; } if (i < posIdxs.size()) { size_t pidx = posIdxs[i]; if (at.out != sig.full[pidx].type) { addDiag(*diags, "call argument type mismatch", callNode.args[i].get()); ok = false; return; } bound[pidx] = true; } else if (varargIdx != static_cast<size_t>(-1)) { if (sig.full[varargIdx].type != Type::NoneType && at.out != sig.full[varargIdx].type) { addDiag(*diags, "*args element type mismatch", callNode.args[i].get()); ok = false; return; } } else { addDiag(*diags, std::string("arity mismatch calling function: ") + (*inst + std::string(".") + attr->attr), &callNode); ok = false; return; } }
-                  for (const auto& kw : callNode.keywords) { auto itn = nameToIdx.find(kw.name); if (itn == nameToIdx.end()) { if (kwvarargIdx == static_cast<size_t>(-1)) { addDiag(*diags, std::string("unknown keyword argument: ") + kw.name, &callNode); ok = false; return; } continue; } size_t pidx = itn->second; if (bound[pidx]) { addDiag(*diags, std::string("multiple values for argument: ") + kw.name, &callNode); ok = false; return; } ExpressionTyper kt{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; if (kw.value) kw.value->accept(kt); if (!kt.ok) { ok = false; return; } if (kt.out != sig.full[pidx].type) { addDiag(*diags, std::string("keyword argument type mismatch: ") + kw.name, &callNode); ok = false; return; } bound[pidx] = true; }
+          for (size_t i = 0; i < callNode.args.size(); ++i) {
+            ExpressionTyper at{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; callNode.args[i]->accept(at); if (!at.ok) { ok = false; return; }
+            if (i < posIdxs.size()) {
+              size_t pidx = posIdxs[i]; const auto& p = sig.full[pidx];
+              bool typeOk = false; const uint32_t aMask = TypeEnv::maskForKind(at.out);
+              if (p.unionMask != 0U) { typeOk = ((aMask & p.unionMask) != 0U); }
+              else if (p.type == Type::List && p.listElemMask != 0U && at.out == Type::List) {
+                uint32_t elemMask = 0U;
+                if (callNode.args[i] && callNode.args[i]->kind == ast::NodeKind::ListLiteral) {
+                  const auto* lst = static_cast<const ast::ListLiteral*>(callNode.args[i].get());
+                  for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{*env, *sigs, *retParamIdxs, *diags, polyTargets}; el->accept(et); if (!et.ok) { ok = false; return; } elemMask |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); }
+                } else if (callNode.args[i] && callNode.args[i]->kind == ast::NodeKind::Name) {
+                  const auto* nm = static_cast<const ast::Name*>(callNode.args[i].get()); elemMask = env->getListElems(nm->id);
+                }
+                typeOk = (elemMask == 0U) ? true : ((elemMask & ~p.listElemMask) == 0U);
+              } else { typeOk = (at.out == p.type); }
+              if (!typeOk) { addDiag(*diags, "call argument type mismatch", callNode.args[i].get()); ok = false; return; }
+              bound[pidx] = true;
+            } else if (varargIdx != static_cast<size_t>(-1)) {
+              if (sig.full[varargIdx].type != Type::NoneType && at.out != sig.full[varargIdx].type) { addDiag(*diags, "*args element type mismatch", callNode.args[i].get()); ok = false; return; }
+            } else { addDiag(*diags, std::string("arity mismatch calling function: ") + (*inst + std::string(".") + attr->attr), &callNode); ok = false; return; }
+          }
+                  for (const auto& kw : callNode.keywords) {
+                    auto itn = nameToIdx.find(kw.name);
+                    if (itn == nameToIdx.end()) { if (kwvarargIdx == static_cast<size_t>(-1)) { addDiag(*diags, std::string("unknown keyword argument: ") + kw.name, &callNode); ok = false; return; } continue; }
+                    size_t pidx = itn->second; if (bound[pidx]) { addDiag(*diags, std::string("multiple values for argument: ") + kw.name, &callNode); ok = false; return; }
+                    ExpressionTyper kt{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; if (kw.value) kw.value->accept(kt); if (!kt.ok) { ok = false; return; }
+                    const auto& p = sig.full[pidx]; bool typeOk = false; const uint32_t aMask = TypeEnv::maskForKind(kt.out);
+                    if (p.unionMask != 0U) { typeOk = ((aMask & p.unionMask) != 0U); }
+                    else if (p.type == Type::List && p.listElemMask != 0U && kt.out == Type::List) {
+                      uint32_t elemMask = 0U;
+                      if (kw.value && kw.value->kind == ast::NodeKind::ListLiteral) {
+                        const auto* lst = static_cast<const ast::ListLiteral*>(kw.value.get());
+                        for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{*env, *sigs, *retParamIdxs, *diags, polyTargets}; el->accept(et); if (!et.ok) { ok = false; return; } elemMask |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); }
+                      } else if (kw.value && kw.value->kind == ast::NodeKind::Name) {
+                        const auto* nm = static_cast<const ast::Name*>(kw.value.get()); elemMask = env->getListElems(nm->id);
+                      }
+                      typeOk = (elemMask == 0U) ? true : ((elemMask & ~p.listElemMask) == 0U);
+                    } else { typeOk = (kt.out == p.type); }
+                    if (!typeOk) { addDiag(*diags, std::string("keyword argument type mismatch: ") + kw.name, &callNode); ok = false; return; }
+                    bound[pidx] = true;
+                  }
                   if (!callNode.starArgs.empty() && varargIdx == static_cast<size_t>(-1)) { addDiag(*diags, "*args provided but callee has no varargs", &callNode); ok = false; return; }
                   if (!callNode.kwStarArgs.empty() && kwvarargIdx == static_cast<size_t>(-1)) { addDiag(*diags, "**kwargs provided but callee has no kwvarargs", &callNode); ok = false; return; }
                   for (size_t i = 0; i < sig.full.size(); ++i) { const auto& sp = sig.full[i]; if (sp.isVarArg || sp.isKwVarArg) continue; if (!bound[i] && !sp.hasDefault) { addDiag(*diags, std::string(sp.isKwOnly?"missing required keyword-only argument: ":"missing required positional argument: ") + sp.name, &callNode); ok = false; return; } }
@@ -857,8 +1097,50 @@ struct ExpressionTyper : public ast::VisitorBase {
               std::unordered_map<std::string, size_t> nameToIdx; size_t varargIdx = static_cast<size_t>(-1), kwvarargIdx = static_cast<size_t>(-1);
               std::vector<size_t> posIdxs; for (size_t i = 0; i < sig.full.size(); ++i) { const auto& sp = sig.full[i]; if (!sp.name.empty()) nameToIdx[sp.name] = i; if (sp.isVarArg) varargIdx = i; if (sp.isKwVarArg) kwvarargIdx = i; if (!sp.isKwOnly && !sp.isVarArg && !sp.isKwVarArg) posIdxs.push_back(i); }
               std::vector<bool> bound(sig.full.size(), false);
-              for (size_t i = 0; i < callNode.args.size(); ++i) { ExpressionTyper at{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; callNode.args[i]->accept(at); if (!at.ok) { ok = false; return; } if (i < posIdxs.size()) { size_t pidx = posIdxs[i]; if (at.out != sig.full[pidx].type) { addDiag(*diags, "call argument type mismatch", callNode.args[i].get()); ok = false; return; } bound[pidx] = true; } else if (varargIdx != static_cast<size_t>(-1)) { if (sig.full[varargIdx].type != Type::NoneType && at.out != sig.full[varargIdx].type) { addDiag(*diags, "*args element type mismatch", callNode.args[i].get()); ok = false; return; } } else { addDiag(*diags, std::string("arity mismatch calling function: ") + (nameNode->id + std::string(".__init__")), &callNode); ok = false; return; } }
-              for (const auto& kw : callNode.keywords) { auto itn = nameToIdx.find(kw.name); if (itn == nameToIdx.end()) { if (kwvarargIdx == static_cast<size_t>(-1)) { addDiag(*diags, std::string("unknown keyword argument: ") + kw.name, &callNode); ok = false; return; } } else { const size_t pidx = itn->second; if (bound[pidx]) { addDiag(*diags, std::string("multiple values for argument: ") + kw.name, &callNode); ok = false; return; } ExpressionTyper kt{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; if (kw.value) kw.value->accept(kt); if (!kt.ok) { ok = false; return; } if (kt.out != sig.full[pidx].type) { addDiag(*diags, std::string("keyword argument type mismatch: ") + kw.name, &callNode); ok = false; return; } bound[pidx] = true; } }
+          for (size_t i = 0; i < callNode.args.size(); ++i) {
+            ExpressionTyper at{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; callNode.args[i]->accept(at); if (!at.ok) { ok = false; return; }
+            if (i < posIdxs.size()) {
+              size_t pidx = posIdxs[i]; const auto& p = sig.full[pidx];
+              bool typeOk = false; const uint32_t aMask = TypeEnv::maskForKind(at.out);
+              if (p.unionMask != 0U) { typeOk = ((aMask & p.unionMask) != 0U); }
+              else if (p.type == Type::List && p.listElemMask != 0U && at.out == Type::List) {
+                uint32_t elemMask = 0U;
+                if (callNode.args[i] && callNode.args[i]->kind == ast::NodeKind::ListLiteral) {
+                  const auto* lst = static_cast<const ast::ListLiteral*>(callNode.args[i].get());
+                  for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{*env, *sigs, *retParamIdxs, *diags, polyTargets}; el->accept(et); if (!et.ok) { ok = false; return; } elemMask |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); }
+                } else if (callNode.args[i] && callNode.args[i]->kind == ast::NodeKind::Name) {
+                  const auto* nm = static_cast<const ast::Name*>(callNode.args[i].get()); elemMask = env->getListElems(nm->id);
+                }
+                typeOk = (elemMask == 0U) ? true : ((elemMask & ~p.listElemMask) == 0U);
+              } else { typeOk = (at.out == p.type); }
+              if (!typeOk) { addDiag(*diags, "call argument type mismatch", callNode.args[i].get()); ok = false; return; }
+              bound[pidx] = true;
+            } else if (varargIdx != static_cast<size_t>(-1)) {
+              if (sig.full[varargIdx].type != Type::NoneType && at.out != sig.full[varargIdx].type) { addDiag(*diags, "*args element type mismatch", callNode.args[i].get()); ok = false; return; }
+            } else { addDiag(*diags, std::string("arity mismatch calling function: ") + (nameNode->id + std::string(".__init__")), &callNode); ok = false; return; }
+          }
+              for (const auto& kw : callNode.keywords) {
+                auto itn = nameToIdx.find(kw.name);
+                if (itn == nameToIdx.end()) { if (kwvarargIdx == static_cast<size_t>(-1)) { addDiag(*diags, std::string("unknown keyword argument: ") + kw.name, &callNode); ok = false; return; } }
+                else {
+                  const size_t pidx = itn->second; if (bound[pidx]) { addDiag(*diags, std::string("multiple values for argument: ") + kw.name, &callNode); ok = false; return; }
+                  ExpressionTyper kt{*env, *sigs, *retParamIdxs, *diags, polyTargets, nullptr, classes}; if (kw.value) kw.value->accept(kt); if (!kt.ok) { ok = false; return; }
+                  const auto& p = sig.full[pidx]; bool typeOk = false; const uint32_t aMask = TypeEnv::maskForKind(kt.out);
+                  if (p.unionMask != 0U) { typeOk = ((aMask & p.unionMask) != 0U); }
+                  else if (p.type == Type::List && p.listElemMask != 0U && kt.out == Type::List) {
+                    uint32_t elemMask = 0U;
+                    if (kw.value && kw.value->kind == ast::NodeKind::ListLiteral) {
+                      const auto* lst = static_cast<const ast::ListLiteral*>(kw.value.get());
+                      for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{*env, *sigs, *retParamIdxs, *diags, polyTargets}; el->accept(et); if (!et.ok) { ok = false; return; } elemMask |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); }
+                    } else if (kw.value && kw.value->kind == ast::NodeKind::Name) {
+                      const auto* nm = static_cast<const ast::Name*>(kw.value.get()); elemMask = env->getListElems(nm->id);
+                    }
+                    typeOk = (elemMask == 0U) ? true : ((elemMask & ~p.listElemMask) == 0U);
+                  } else { typeOk = (kt.out == p.type); }
+                  if (!typeOk) { addDiag(*diags, std::string("keyword argument type mismatch: ") + kw.name, &callNode); ok = false; return; }
+                  bound[pidx] = true;
+                }
+              }
               if (!callNode.starArgs.empty() && varargIdx == static_cast<size_t>(-1)) { addDiag(*diags, "*args provided but callee has no varargs", &callNode); ok = false; return; }
               if (!callNode.kwStarArgs.empty() && kwvarargIdx == static_cast<size_t>(-1)) { addDiag(*diags, "**kwargs provided but callee has no kwvarargs", &callNode); ok = false; return; }
               for (size_t i = 0; i < sig.full.size(); ++i) { const auto& sp = sig.full[i]; if (sp.isVarArg || sp.isKwVarArg) continue; if (!bound[i] && !sp.hasDefault) {
@@ -943,9 +1225,25 @@ struct ExpressionTyper : public ast::VisitorBase {
           if (kwvarargIdx == static_cast<size_t>(-1)) { addDiag(*diags, std::string("unknown keyword argument: ") + kw.name, &callNode); ok = false; return; }
           continue;
         }
-        const size_t pidx = it->second; if (bound[pidx]) { addDiag(*diags, std::string("multiple values for argument: ") + kw.name, &callNode); ok = false; return; }
+        const size_t pidx = it->second; if (sig.full[pidx].isPosOnly) { addDiag(*diags, std::string("positional-only argument passed as keyword: ") + kw.name, &callNode); ok = false; return; }
+        if (bound[pidx]) { addDiag(*diags, std::string("multiple values for argument: ") + kw.name, &callNode); ok = false; return; }
         ExpressionTyper kt{*env, *sigs, *retParamIdxs, *diags, polyTargets}; if (kw.value) kw.value->accept(kt); if (!kt.ok) { ok = false; return; }
-        if (kt.out != sig.full[pidx].type) { addDiag(*diags, std::string("keyword argument type mismatch: ") + kw.name, &callNode); ok = false; return; }
+        {
+          const auto& p = sig.full[pidx];
+          bool typeOk = false; const uint32_t aMask = TypeEnv::maskForKind(kt.out);
+          if (p.unionMask != 0U) { typeOk = ((aMask & p.unionMask) != 0U); }
+          else if (p.type == Type::List && p.listElemMask != 0U && kt.out == Type::List) {
+            uint32_t elemMask = 0U;
+            if (kw.value && kw.value->kind == ast::NodeKind::ListLiteral) {
+              const auto* lst = static_cast<const ast::ListLiteral*>(kw.value.get());
+              for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{*env, *sigs, *retParamIdxs, *diags, polyTargets}; el->accept(et); if (!et.ok) { ok = false; return; } elemMask |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); }
+            } else if (kw.value && kw.value->kind == ast::NodeKind::Name) {
+              const auto* nm = static_cast<const ast::Name*>(kw.value.get()); elemMask = env->getListElems(nm->id);
+            }
+            if (elemMask != 0U) { typeOk = ((elemMask & ~p.listElemMask) == 0U); } else { typeOk = true; }
+          } else { typeOk = (kt.out == p.type); }
+          if (!typeOk) { addDiag(*diags, std::string("keyword argument type mismatch: ") + kw.name, &callNode); ok = false; return; }
+        }
         bound[pidx] = true;
       }
       if (!callNode.starArgs.empty() && varargIdx == static_cast<size_t>(-1)) { addDiag(*diags, "*args provided but callee has no varargs", &callNode); ok = false; return; }
@@ -1010,7 +1308,17 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
     Sig sig; sig.ret = func->returnType;
     for (const auto& param : func->params) {
       sig.params.push_back(param.type);
-      SigParam sp; sp.name = param.name; sp.type = param.type; sp.isVarArg = param.isVarArg; sp.isKwVarArg = param.isKwVarArg; sp.isKwOnly = param.isKwOnly; sp.hasDefault = (param.defaultValue != nullptr);
+      SigParam sp; sp.name = param.name; sp.type = param.type; sp.isVarArg = param.isVarArg; sp.isKwVarArg = param.isKwVarArg; sp.isKwOnly = param.isKwOnly; sp.isPosOnly = param.isPosOnly; sp.hasDefault = (param.defaultValue != nullptr);
+      // Build union mask from unionTypes (if any)
+      if (!param.unionTypes.empty()) {
+        uint32_t m = 0U;
+        for (auto ut : param.unionTypes) { m |= TypeEnv::maskForKind(ut); }
+        sp.unionMask = m;
+      }
+      // Generic list element type
+      if (param.type == Type::List && param.listElemType != Type::NoneType) {
+        sp.listElemMask = TypeEnv::maskForKind(param.listElemType);
+      }
       sig.full.push_back(std::move(sp));
     }
     sigs[func->name] = std::move(sig);
@@ -1068,7 +1376,7 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
           Sig ms; ms.ret = fn->returnType;
           for (const auto& p : fn->params) {
             ms.params.push_back(p.type);
-            SigParam sp; sp.name = p.name; sp.type = p.type; sp.isVarArg = p.isVarArg; sp.isKwVarArg = p.isKwVarArg; sp.isKwOnly = p.isKwOnly; sp.hasDefault = (p.defaultValue != nullptr);
+            SigParam sp; sp.name = p.name; sp.type = p.type; sp.isVarArg = p.isVarArg; sp.isKwVarArg = p.isKwVarArg; sp.isKwOnly = p.isKwOnly; sp.isPosOnly = p.isPosOnly; sp.hasDefault = (p.defaultValue != nullptr);
             ms.full.push_back(std::move(sp));
           }
           ci.methods[fn->name] = std::move(ms);
@@ -1283,8 +1591,34 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
           // Propagate element/key/value metadata for list/tuple/dict literals and aliases
           if (rhs && rhs->kind == ast::NodeKind::ListLiteral) {
             uint32_t elemMask = 0U; const auto* lst = static_cast<const ast::ListLiteral*>(rhs);
-            for (const auto& el : lst->elements) { if (!el) continue; ExpressionTyper et{env, sigs, retParamIdxs, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}, &ovec, classes}; el->accept(et); if (!et.ok) { ok = false; return; } elemMask |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out); }
+            bool allTuples = !lst->elements.empty();
+            size_t tupleArity = 0;
+            std::vector<uint32_t> perIndexMasks;
+            for (const auto& el : lst->elements) {
+              if (!el) continue;
+              ExpressionTyper et{env, sigs, retParamIdxs, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}, &ovec, classes};
+              el->accept(et); if (!et.ok) { ok = false; return; }
+              elemMask |= (et.outSet != 0U) ? et.outSet : TypeEnv::maskForKind(et.out);
+              // Track per-index tuple element masks if each element is a TupleLiteral
+              if (el->kind == ast::NodeKind::TupleLiteral) {
+                const auto* tp = static_cast<const ast::TupleLiteral*>(el.get());
+                if (tupleArity == 0) { tupleArity = tp->elements.size(); perIndexMasks.assign(tupleArity, 0U); }
+                if (tp->elements.size() != tupleArity) { allTuples = false; }
+                for (size_t i = 0; i < tp->elements.size(); ++i) {
+                  const auto& sub = tp->elements[i]; if (!sub) continue;
+                  ExpressionTyper set{env, sigs, retParamIdxs, diags, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}, &ovec, classes};
+                  sub->accept(set); if (!set.ok) { ok = false; return; }
+                  perIndexMasks[i] |= (set.outSet != 0U) ? set.outSet : TypeEnv::maskForKind(set.out);
+                }
+              } else {
+                allTuples = false;
+              }
+            }
             tenv.defineListElems(name, elemMask);
+            if (allTuples && !perIndexMasks.empty()) {
+              // Record tuple element masks keyed by the list variable name to aid destructuring in comps
+              tenv.defineTupleElems(name, std::move(perIndexMasks));
+            }
           } else if (rhs && rhs->kind == ast::NodeKind::TupleLiteral) {
             const auto* tup = static_cast<const ast::TupleLiteral*>(rhs);
             std::vector<uint32_t> elems; elems.reserve(tup->elements.size());
@@ -2288,6 +2622,13 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
 
     std::unordered_map<std::string, std::unordered_set<std::string>> poly; // per-function polymorphic call targets
     std::unordered_map<std::string, std::unordered_set<std::string>> polyAttr; // per-function polymorphic attribute call targets
+    // Evaluate function decorators/annotations expressions for basic correctness
+    for (const auto& dec : func->decorators) {
+      if (!dec) continue;
+      Type tmp{};
+      (void)inferExprType(dec.get(), env, sigs, retParamIdxs, tmp, diags, {});
+      if (!diags.empty()) { return false; }
+    }
     StmtChecker checker{*func, sigs, retParamIdxs, env, diags, PolyRefs{poly, polyAttr}, {}, false, &classes};
     for (const auto& stmt : func->body) {
       stmt->accept(checker);

@@ -126,13 +126,64 @@ struct SimplifyVisitor : public ast::VisitorBase {
     const Expr* left = bin->lhs.get();
     const Expr* right = bin->rhs.get();
     if (left && right) {
+      // First, shape-based rewrites that are type-agnostic and always safe
+      // for numeric domains. These do not depend on literal presence:
+      //   x + (-y) -> x - y
+      //   (-x) + y -> y - x
+      //   x - (-y) -> x + y
+      if (bin->op == BinaryOperator::Add) {
+        if (right->kind == NodeKind::UnaryExpr) {
+          auto* ur = static_cast<Unary*>(bin->rhs.get());
+          if (ur->op == UnaryOperator::Neg && ur->operand) {
+            auto sub = std::make_unique<Binary>(BinaryOperator::Sub, std::move(bin->lhs), std::move(ur->operand));
+            ++changes; stats["algebraic_shape"]++;
+            slot = exprSlot; *slot = std::move(sub);
+            return;
+          }
+        }
+        if (left->kind == NodeKind::UnaryExpr) {
+          auto* ul = static_cast<Unary*>(bin->lhs.get());
+          if (ul->op == UnaryOperator::Neg && ul->operand) {
+            auto sub = std::make_unique<Binary>(BinaryOperator::Sub, std::move(bin->rhs), std::move(ul->operand));
+            ++changes; stats["algebraic_shape"]++;
+            slot = exprSlot; *slot = std::move(sub);
+            return;
+          }
+        }
+      } else if (bin->op == BinaryOperator::Sub) {
+        if (right->kind == NodeKind::UnaryExpr) {
+          auto* ur = static_cast<Unary*>(bin->rhs.get());
+          if (ur->op == UnaryOperator::Neg && ur->operand) {
+            auto add = std::make_unique<Binary>(BinaryOperator::Add, std::move(bin->lhs), std::move(ur->operand));
+            ++changes; stats["algebraic_shape"]++;
+            slot = exprSlot; *slot = std::move(add);
+            return;
+          }
+        }
+      }
       // Debug: trace ops in this test path
       // std::cerr << "visit Binary op=" << static_cast<int>(bin->op) << "\n";
       // Int rules
       if (left->kind == NodeKind::IntLiteral || right->kind == NodeKind::IntLiteral) {
         switch (bin->op) {
           case BinaryOperator::Add:
-            if (isZero(left)) { replacement = std::move(bin->rhs); } else if (isZero(right)) { replacement = std::move(bin->lhs); }
+            if (isZero(left)) { replacement = std::move(bin->rhs); }
+            else if (isZero(right)) { replacement = std::move(bin->lhs); }
+            else if (right->kind == NodeKind::UnaryExpr) {
+              auto* ur = static_cast<Unary*>(bin->rhs.get());
+              if (ur->op == UnaryOperator::Neg && ur->operand) {
+                // x + (-y) -> x - y
+                auto sub = std::make_unique<Binary>(BinaryOperator::Sub, std::move(bin->lhs), std::move(ur->operand));
+                replacement = std::move(sub);
+              }
+            } else if (left->kind == NodeKind::UnaryExpr) {
+              auto* ul = static_cast<Unary*>(bin->lhs.get());
+              if (ul->op == UnaryOperator::Neg && ul->operand) {
+                // (-x) + y -> y - x
+                auto sub = std::make_unique<Binary>(BinaryOperator::Sub, std::move(bin->rhs), std::move(ul->operand));
+                replacement = std::move(sub);
+              }
+            }
             if (replacement) { ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           case BinaryOperator::Sub:
@@ -141,6 +192,15 @@ struct SimplifyVisitor : public ast::VisitorBase {
               auto neg = std::make_unique<Unary>(UnaryOperator::Neg, std::move(bin->rhs));
               replacement = std::move(neg);
               ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return;
+            }
+            if (right->kind == NodeKind::UnaryExpr) {
+              auto* ur = static_cast<Unary*>(bin->rhs.get());
+              if (ur->op == UnaryOperator::Neg && ur->operand) {
+                // x - (-y) -> x + y
+                auto add = std::make_unique<Binary>(BinaryOperator::Add, std::move(bin->lhs), std::move(ur->operand));
+                replacement = std::move(add);
+                ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return;
+              }
             }
             break;
           case BinaryOperator::Mul:
@@ -170,7 +230,23 @@ struct SimplifyVisitor : public ast::VisitorBase {
       if (isFloatLike(left) || isFloatLike(right)) {
         switch (bin->op) {
           case BinaryOperator::Add:
-            if (isZero(left)) { replacement = std::move(bin->rhs); } else if (isZero(right)) { replacement = std::move(bin->lhs); }
+            if (isZero(left)) { replacement = std::move(bin->rhs); }
+            else if (isZero(right)) { replacement = std::move(bin->lhs); }
+            else if (right->kind == NodeKind::UnaryExpr) {
+              auto* ur = static_cast<Unary*>(bin->rhs.get());
+              if (ur->op == UnaryOperator::Neg && ur->operand) {
+                // x + (-y) -> x - y
+                auto sub = std::make_unique<Binary>(BinaryOperator::Sub, std::move(bin->lhs), std::move(ur->operand));
+                replacement = std::move(sub);
+              }
+            } else if (left->kind == NodeKind::UnaryExpr) {
+              auto* ul = static_cast<Unary*>(bin->lhs.get());
+              if (ul->op == UnaryOperator::Neg && ul->operand) {
+                // (-x) + y -> y - x
+                auto sub = std::make_unique<Binary>(BinaryOperator::Sub, std::move(bin->rhs), std::move(ul->operand));
+                replacement = std::move(sub);
+              }
+            }
             if (replacement) { ++changes; stats["algebraic_float"]++; slot = exprSlot; *slot = std::move(replacement); return; }
             break;
           case BinaryOperator::Sub:
@@ -179,6 +255,15 @@ struct SimplifyVisitor : public ast::VisitorBase {
               auto neg = std::make_unique<Unary>(UnaryOperator::Neg, std::move(bin->rhs));
               replacement = std::move(neg);
               ++changes; stats["algebraic_float"]++; slot = exprSlot; *slot = std::move(replacement); return;
+            }
+            if (right->kind == NodeKind::UnaryExpr) {
+              auto* ur = static_cast<Unary*>(bin->rhs.get());
+              if (ur->op == UnaryOperator::Neg && ur->operand) {
+                // x - (-y) -> x + y
+                auto add = std::make_unique<Binary>(BinaryOperator::Add, std::move(bin->lhs), std::move(ur->operand));
+                replacement = std::move(add);
+                ++changes; stats["algebraic_float"]++; slot = exprSlot; *slot = std::move(replacement); return;
+              }
             }
             break;
           case BinaryOperator::Mul:
@@ -287,6 +372,8 @@ struct SimplifyVisitor : public ast::VisitorBase {
       if (bin->op == BinaryOperator::LShift || bin->op == BinaryOperator::RShift) {
         const IntLiteral* ri = asInt(right);
         if (ri && ri->value == 0) { replacement = std::move(bin->lhs); ++changes; stats["algebraic_shift"]++; slot = exprSlot; *slot = std::move(replacement); return; }
+        const IntLiteral* li = asInt(left);
+        if (li && li->value == 0) { replacement = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_shift"]++; slot = exprSlot; *slot = std::move(replacement); return; }
       }
       // Exponentiation identity: x ** 1 -> x (safe for int/float)
       if (bin->op == BinaryOperator::Pow) {
@@ -299,6 +386,30 @@ struct SimplifyVisitor : public ast::VisitorBase {
         if (left->kind == NodeKind::FloatLiteral) {
           const auto* lf2 = static_cast<const FloatLiteral*>(left);
           if (lf2->value == 1.0) { replacement = std::make_unique<FloatLiteral>(1.0); ++changes; stats["algebraic_pow"]++; slot = exprSlot; *slot = std::move(replacement); return; }
+        }
+        // x ** 0 -> 1 (typed)
+        if (right->kind == NodeKind::IntLiteral) {
+          const auto* ri0 = static_cast<const IntLiteral*>(right);
+          if (ri0->value == 0) {
+            if (left->kind == NodeKind::FloatLiteral) { replacement = std::make_unique<FloatLiteral>(1.0); }
+            else { replacement = std::make_unique<IntLiteral>(1); }
+            ++changes; stats["algebraic_pow"]++; slot = exprSlot; *slot = std::move(replacement); return; }
+        }
+        if (right->kind == NodeKind::FloatLiteral) {
+          const auto* rf0 = static_cast<const FloatLiteral*>(right);
+          if (rf0->value == 0.0) { replacement = std::make_unique<FloatLiteral>(1.0); ++changes; stats["algebraic_pow"]++; slot = exprSlot; *slot = std::move(replacement); return; }
+        }
+      }
+      // FloorDiv/Mod identities (int only)
+      if (bin->op == BinaryOperator::FloorDiv || bin->op == BinaryOperator::Mod) {
+        const IntLiteral* ri = asInt(right);
+        const IntLiteral* li = asInt(left);
+        if (bin->op == BinaryOperator::FloorDiv && ri && ri->value == 1) {
+          replacement = std::move(bin->lhs); ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return;
+        }
+        if (bin->op == BinaryOperator::Mod) {
+          if (ri && ri->value == 1) { replacement = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return; }
+          if (li && li->value == 0) { replacement = std::make_unique<IntLiteral>(0); ++changes; stats["algebraic_int"]++; slot = exprSlot; *slot = std::move(replacement); return; }
         }
       }
     }

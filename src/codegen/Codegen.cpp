@@ -60,6 +60,19 @@ std::string Codegen::emit(const ast::Module& mod, const std::string& outBase,
   } catch (const std::exception& ex) { // NOLINT(bugprone-empty-catch)
     return std::string("codegen: ") + ex.what();
   }
+  // Prepend original source file content as IR comments when available
+  if (const char* srcPath = std::getenv("PYCC_SOURCE_PATH"); srcPath && *srcPath) {
+    std::ifstream inSrc(srcPath);
+    if (inSrc) {
+      std::ostringstream commented;
+      commented << "; ---- PY SOURCE: " << srcPath << " ----\n";
+      std::string line;
+      while (std::getline(inSrc, line)) { commented << "; " << line << "\n"; }
+      commented << "; ---- END PY SOURCE ----\n\n";
+      commented << irText;
+      irText = commented.str();
+    }
+  }
   result.llPath = emitLL_ ? changeExt(outBase, ".ll") : std::string();
   if (emitLL_) {
     std::ofstream outFile(result.llPath, std::ios::binary);
@@ -129,6 +142,10 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   std::ostringstream irStream;
   irStream << "; ModuleID = 'pycc_module'\n";
   irStream << "source_filename = \"pycc\"\n\n";
+  // Debug info scaffold: track subprograms per function and emit at end.
+  struct DebugSub { std::string name; int id; };
+  std::vector<DebugSub> dbgSubs;
+  int nextDbgId = 2; // !0 = CU, !1 = DIFile
   // GC barrier declaration for pointer writes (C ABI)
   irStream << "declare void @pycc_gc_write_barrier(ptr, ptr)\n";
   // Future aggregate runtime calls (scaffold)
@@ -348,7 +365,10 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       if (i != 0) { irStream << ", "; }
       irStream << typeStr(func->params[i].type) << " %" << func->params[i].name;
     }
-    irStream << ") {\n";
+    // Attach a simple DISubprogram for function-level debug info
+    dbgSubs.push_back(DebugSub{func->name, nextDbgId});
+    irStream << ") !dbg !" << nextDbgId << " {\n";
+    nextDbgId++;
     irStream << "entry:\n";
 
     enum class ValKind : std::uint8_t { I32, I1, F64, Ptr };
@@ -745,12 +765,56 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           out = Value{ eq ? std::string("false") : std::string("true"), ValKind::I1 }; return;
         }
         auto LV = run(*b.lhs);
-        auto RV = run(*b.rhs);
+        // Defer evaluating RHS until we know we need it. Some ops (like 'in' over literal containers)
+        // only need to inspect RHS structure without lowering it as a value.
+        // Handle membership early to avoid lowering tuple/list RHS as a value.
+        if (b.op == ast::BinaryOperator::In || b.op == ast::BinaryOperator::NotIn) {
+          if (b.rhs->kind != ast::NodeKind::ListLiteral && b.rhs->kind != ast::NodeKind::TupleLiteral) {
+            out = Value{"false", ValKind::I1};
+            return;
+          }
+          std::vector<const ast::Expr*> elements;
+          if (b.rhs->kind == ast::NodeKind::ListLiteral) {
+            const auto* lst = static_cast<const ast::ListLiteral*>(b.rhs.get());
+            for (const auto& e : lst->elements) if (e) elements.push_back(e.get());
+          } else {
+            const auto* tp = static_cast<const ast::TupleLiteral*>(b.rhs.get());
+            for (const auto& e : tp->elements) if (e) elements.push_back(e.get());
+          }
+          if (elements.empty()) { out = Value{"false", ValKind::I1}; return; }
+          std::string accum;
+          for (const auto* ee : elements) {
+            auto EV = run(*ee);
+            if (EV.k != LV.k) { continue; }
+            std::ostringstream c; c << "%t" << temp++;
+            if (LV.k == ValKind::I32) {
+              ir << "  " << c.str() << " = icmp eq i32 " << LV.s << ", " << EV.s << "\n";
+            } else if (LV.k == ValKind::F64) {
+              ir << "  " << c.str() << " = fcmp oeq double " << LV.s << ", " << EV.s << "\n";
+            } else if (LV.k == ValKind::I1) {
+              ir << "  " << c.str() << " = icmp eq i1 " << LV.s << ", " << EV.s << "\n";
+            } else if (LV.k == ValKind::Ptr) {
+              ir << "  " << c.str() << " = icmp eq ptr " << LV.s << ", " << EV.s << "\n";
+            } else { continue; }
+            if (accum.empty()) { accum = c.str(); }
+            else { std::ostringstream o; o << "%t" << temp++; ir << "  " << o.str() << " = or i1 " << accum << ", " << c.str() << "\n"; accum = o.str(); }
+          }
+          if (accum.empty()) { out = Value{"false", ValKind::I1}; return; }
+          if (b.op == ast::BinaryOperator::NotIn) {
+            std::ostringstream n; n << "%t" << temp++;
+            ir << "  " << n.str() << " = xor i1 " << accum << ", true\n";
+            out = Value{n.str(), ValKind::I1};
+          } else {
+            out = Value{accum, ValKind::I1};
+          }
+          return;
+        }
         // Comparisons
         isCmp = (b.op == ast::BinaryOperator::Eq || b.op == ast::BinaryOperator::Ne ||
                       b.op == ast::BinaryOperator::Lt || b.op == ast::BinaryOperator::Le ||
                       b.op == ast::BinaryOperator::Gt || b.op == ast::BinaryOperator::Ge ||
                       b.op == ast::BinaryOperator::Is || b.op == ast::BinaryOperator::IsNot);
+        auto RV = run(*b.rhs);
         if (isCmp) {
           std::ostringstream r1; r1 << "%t" << temp++;
           if (LV.k == ValKind::I32 && RV.k == ValKind::I32) {
@@ -839,10 +903,13 @@ std::string Codegen::generateIR(const ast::Module& mod) {
               return;
             }
             std::ostringstream res; res << "%t" << temp++;
+            // Ensure base is in an SSA register for consistent intrinsic signature patterns
+            std::string base = LV.s;
+            if (base.empty() || base[0] != '%') { std::ostringstream bss; bss << "%t" << temp++; ir << "  " << bss.str() << " = fadd double 0.0, " << base << "\n"; base = bss.str(); }
             if (RV.k == ValKind::I32) {
-              ir << "  " << res.str() << " = call double @llvm.powi.f64(double " << LV.s << ", i32 " << RV.s << ")\n";
+              ir << "  " << res.str() << " = call double @llvm.powi.f64(double " << base << ", i32 " << RV.s << ")\n";
             } else {
-              ir << "  " << res.str() << " = call double @llvm.pow.f64(double " << LV.s << ", double " << RV.s << ")\n";
+              ir << "  " << res.str() << " = call double @llvm.pow.f64(double " << base << ", double " << RV.s << ")\n";
             }
             out = Value{res.str(), ValKind::F64};
             return;
@@ -896,48 +963,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           }
           return;
         }
-        // Membership tests for list/tuple literals: OR chain of equality
-        if (b.op == ast::BinaryOperator::In || b.op == ast::BinaryOperator::NotIn) {
-          if (b.rhs->kind != ast::NodeKind::ListLiteral && b.rhs->kind != ast::NodeKind::TupleLiteral) {
-            out = Value{"false", ValKind::I1};
-            return;
-          }
-          std::vector<const ast::Expr*> elements;
-          if (b.rhs->kind == ast::NodeKind::ListLiteral) {
-            const auto* lst = static_cast<const ast::ListLiteral*>(b.rhs.get());
-            for (const auto& e : lst->elements) if (e) elements.push_back(e.get());
-          } else {
-            const auto* tp = static_cast<const ast::TupleLiteral*>(b.rhs.get());
-            for (const auto& e : tp->elements) if (e) elements.push_back(e.get());
-          }
-          if (elements.empty()) { out = Value{"false", ValKind::I1}; return; }
-          std::string accum;
-          for (const auto* ee : elements) {
-            auto EV = run(*ee);
-            if (EV.k != LV.k) { continue; }
-            std::ostringstream c; c << "%t" << temp++;
-            if (LV.k == ValKind::I32) {
-              ir << "  " << c.str() << " = icmp eq i32 " << LV.s << ", " << EV.s << "\n";
-            } else if (LV.k == ValKind::F64) {
-              ir << "  " << c.str() << " = fcmp oeq double " << LV.s << ", " << EV.s << "\n";
-            } else if (LV.k == ValKind::I1) {
-              ir << "  " << c.str() << " = icmp eq i1 " << LV.s << ", " << EV.s << "\n";
-            } else if (LV.k == ValKind::Ptr) {
-              ir << "  " << c.str() << " = icmp eq ptr " << LV.s << ", " << EV.s << "\n";
-            } else { continue; }
-            if (accum.empty()) { accum = c.str(); }
-            else { std::ostringstream o; o << "%t" << temp++; ir << "  " << o.str() << " = or i1 " << accum << ", " << c.str() << "\n"; accum = o.str(); }
-          }
-          if (accum.empty()) { out = Value{"false", ValKind::I1}; return; }
-          if (b.op == ast::BinaryOperator::NotIn) {
-            std::ostringstream n; n << "%t" << temp++;
-            ir << "  " << n.str() << " = xor i1 " << accum << ", true\n";
-            out = Value{n.str(), ValKind::I1};
-          } else {
-            out = Value{accum, ValKind::I1};
-          }
-          return;
-        }
+        // Membership handled above
+        // For remaining operations, ensure RHS has been evaluated when needed (RV already computed for comparisons and used below).
         // Arithmetic
         std::ostringstream reg; reg << "%t" << temp++;
         if (LV.k == ValKind::I32 && RV.k == ValKind::I32) {
@@ -1003,7 +1030,15 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       const std::unordered_map<std::string, Sig>& sigs;
       const std::unordered_map<std::string, int>& retParamIdxs;
 
+      static void emitLoc(std::ostringstream& irOut, const ast::Node& n, const char* kind) {
+        irOut << "  ; loc: "
+              << (n.file.empty() ? std::string("<unknown>") : n.file)
+              << ":" << n.line << ":" << n.col
+              << " (" << (kind ? kind : "") << ")\n";
+      }
+
       void visit(const ast::AssignStmt& asg) override {
+        emitLoc(ir, asg, "assign");
         auto val = eval(asg.value.get());
         auto it = slots.find(asg.target);
         if (it == slots.end()) {
@@ -1068,6 +1103,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
 
       void visit(const ast::ReturnStmt& r) override {
+        emitLoc(ir, r, "return");
         // Fast path: constant folding for len of literal aggregates/strings in returns
         if (fn.returnType == ast::TypeKind::Int && r.value && r.value->kind == ast::NodeKind::Call) {
           const auto* c = dynamic_cast<const ast::Call*>(r.value.get());
@@ -1122,6 +1158,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
 
       void visit(const ast::IfStmt& iff) override {
+        emitLoc(ir, iff, "if");
         auto c = eval(iff.cond.get());
         std::string cond = c.s;
         if (c.k == ValKind::I32) {
@@ -1149,6 +1186,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
 
       void visit(const ast::WhileStmt& ws) override {
+        emitLoc(ir, ws, "while");
         // Labels for while: cond, body, end
         std::ostringstream condLbl, bodyLbl, endLbl;
         condLbl << "while.cond" << ifCounter;
@@ -1183,6 +1221,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
 
       void visit(const ast::ForStmt& fs) override { // limited lowering: iterate list/tuple literals
+        emitLoc(ir, fs, "for");
         // Only support simple name target for now
         if (!fs.target || fs.target->kind != ast::NodeKind::Name) {
           // Best-effort: skip body if unsupported
@@ -1230,6 +1269,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
 
       void visit(const ast::TryStmt& ts) override {
+        emitLoc(ir, ts, "try");
         // No exception runtime in this subset; lower as: try-body, else (if present), finally (always runs).
         (void)emitStmtList(ts.body);
         (void)emitStmtList(ts.orelse);
@@ -1248,7 +1288,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       void visit(const ast::Unary&) override {}
       void visit(const ast::StringLiteral&) override {}
       void visit(const ast::NoneLiteral&) override {}
-      void visit(const ast::ExprStmt&) override {}
+      void visit(const ast::ExprStmt& es) override { emitLoc(ir, es, "expr"); if (es.value) { (void)eval(es.value.get()); } }
       void visit(const ast::TupleLiteral&) override {}
       void visit(const ast::ListLiteral&) override {}
       void visit(const ast::ObjectLiteral&) override {}
@@ -1291,6 +1331,15 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
     }
     irStream << "}\n\n";
+  }
+  // Emit lightweight debug metadata at end of module
+  irStream << "\n!llvm.dbg.cu = !{!0}\n";
+  irStream << "!0 = distinct !DICompileUnit(language: DW_LANG_Python, file: !1, producer: \"pycc\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)\n";
+  irStream << "!1 = !DIFile(filename: \"pycc\", directory: \".\")\n";
+  for (const auto& ds : dbgSubs) {
+    irStream << "!" << ds.id << " = distinct !DISubprogram(name: \"" << ds.name
+             << "\", linkageName: \"" << ds.name
+             << "\", scope: !1, file: !1, line: 1, unit: !0, spFlags: DISPFlagDefinition)\n";
   }
   // NOLINTEND
   return irStream.str();

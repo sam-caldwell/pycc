@@ -46,12 +46,21 @@ struct AstGeometry {
   std::optional<AstGeometry> geom_{};
   std::unordered_map<std::string, uint64_t> optimizerStats_{};
   std::unordered_map<std::string, std::unordered_map<std::string, uint64_t>> optimizerBreakdown_{};
+  std::unordered_map<std::string, uint64_t> counters_{};
+  std::unordered_map<std::string, uint64_t> gauges_{};
 
  public:
   void setOptimizerStat(const std::string& key, uint64_t value) { optimizerStats_[key] = value; }
   const std::unordered_map<std::string, uint64_t>& optimizerStats() const { return optimizerStats_; }
   void incOptimizerBreakdown(const std::string& pass, const std::string& key, uint64_t delta) { optimizerBreakdown_[pass][key] += delta; }
   const auto& optimizerBreakdown() const { return optimizerBreakdown_; }
+
+  // Generic counters/gauges for observability
+  void incCounter(const std::string& key, uint64_t delta = 1) { counters_[key] += delta; }
+  void setCounter(const std::string& key, uint64_t value) { counters_[key] = value; }
+  void setGauge(const std::string& key, uint64_t value) { gauges_[key] = value; }
+  const auto& counters() const { return counters_; }
+  const auto& gauges() const { return gauges_; }
 };
 
 } // namespace pycc::obs

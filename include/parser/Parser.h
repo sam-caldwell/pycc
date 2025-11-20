@@ -18,6 +18,7 @@
 #include "lexer/Lexer.h"
 #include <memory>
 #include <vector>
+#include <string>
 
 namespace pycc::parse {
 
@@ -28,12 +29,30 @@ class Parser {
 
  private:
   lex::ITokenStream& ts_;
+  // Buffered tokens to enable PEG-style backtracking/lookahead
+  std::vector<lex::Token> tokens_{};
+  size_t pos_{0};
+  bool initialized_{false};
+
+  // Best-effort farthest error tracking for improved messages
+  size_t farthestPos_{0};
+  std::string farthestExpected_{};
+
+  // Initialize token buffer from the underlying stream once
+  void initBuffer();
+
+  // Backtracking marks
+  using Mark = size_t;
+  Mark mark() const { return pos_; }
+  void rewind(Mark m) { pos_ = m; }
 
   const lex::Token& peek() const;
   const lex::Token& peekNext() const;
   lex::Token get();
   bool match(lex::TokenKind tokenKind);
   void expect(lex::TokenKind tokenKind, const char* msg);
+  // Record farthest parse expectation for better diagnostics
+  void recordExpectation(const char* msg);
 
   std::unique_ptr<ast::FunctionDef> parseFunction();
   std::unique_ptr<ast::ClassDef> parseClass();

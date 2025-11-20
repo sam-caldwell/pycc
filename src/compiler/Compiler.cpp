@@ -13,6 +13,7 @@
 #include "observability/Metrics.h"
 #include "optimizer/AlgebraicSimplify.h"
 #include "optimizer/ConstantFold.h"
+#include "optimizer/LocalProp.h"
 #include "optimizer/DCE.h"
 #include "optimizer/SimplifyCFG.h"
 #include "optimizer/Optimizer.h"
@@ -72,6 +73,11 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     parse::Parser parser(lexer);
     mod = parser.parseModule();
     metrics.stop("Parse");
+    // Counters after parse
+    if (mod) {
+      metrics.setCounter("parse.functions", static_cast<uint64_t>(mod->functions.size()));
+      metrics.setCounter("parse.classes", static_cast<uint64_t>(mod->classes.size()));
+    }
   } catch (const std::exception& ex) {
     sema::Diagnostic pd;
     pd.file = input;
@@ -94,6 +100,8 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
   std::vector<sema::Diagnostic> diags;
   const bool semaOk = sema.check(*mod, diags);
   metrics.stop("Sema");
+  metrics.setGauge("sema.ok", semaOk ? 1U : 0U);
+  metrics.setCounter("sema.diagnostics", static_cast<uint64_t>(diags.size()));
   if (!semaOk) {
     bool color = false;
     if (opts.color == cli::ColorMode::Always) { color = true; }
@@ -141,8 +149,17 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     opt::ConstantFold constFold; // NOLINT(misc-const-correctness)
     auto folds = constFold.run(*mod);
     metrics.setOptimizerStat("folds", static_cast<uint64_t>(folds));
+    metrics.setCounter("opt.constfold", static_cast<uint64_t>(folds));
     for (const auto& [key, count] : constFold.stats()) { metrics.incOptimizerBreakdown("constfold", key, count); }
     metrics.stop("ConstFold");
+  }
+
+  if (opts.optConstFold || opts.optAlgebraic) {
+    metrics.start("LocalProp");
+    opt::LocalProp lp; // NOLINT(misc-const-correctness)
+    auto props = lp.run(*mod);
+    metrics.setOptimizerStat("localprop", static_cast<uint64_t>(props));
+    metrics.stop("LocalProp");
   }
 
   if (opts.optAlgebraic) {
@@ -150,6 +167,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     opt::AlgebraicSimplify algebraic; // NOLINT(misc-const-correctness)
     auto rewrites = algebraic.run(*mod);
     metrics.setOptimizerStat("algebraic", static_cast<uint64_t>(rewrites));
+    metrics.setCounter("opt.algebraic", static_cast<uint64_t>(rewrites));
     for (const auto& [key, count] : algebraic.stats()) { metrics.incOptimizerBreakdown("algebraic", key, count); }
     metrics.stop("Algebraic");
   }
@@ -159,6 +177,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     opt::SimplifyCFG cfg; // NOLINT(misc-const-correctness)
     auto pruned = cfg.run(*mod);
     metrics.setOptimizerStat("cfg_pruned", static_cast<uint64_t>(pruned));
+    metrics.setCounter("opt.cfg_pruned", static_cast<uint64_t>(pruned));
     for (const auto& [key, count] : cfg.stats()) { metrics.incOptimizerBreakdown("cfg", key, count); }
     metrics.stop("CFG");
   }
@@ -168,6 +187,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     opt::DCE dce; // NOLINT(misc-const-correctness)
     auto removed = dce.run(*mod);
     metrics.setOptimizerStat("dce_removed", static_cast<uint64_t>(removed));
+    metrics.setCounter("opt.dce_removed", static_cast<uint64_t>(removed));
     for (const auto& [key, count] : dce.stats()) { metrics.incOptimizerBreakdown("dce", key, count); }
     metrics.stop("DCE");
   }
@@ -187,12 +207,32 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
   const codegen::Codegen codegenDriver(true, true);
   codegen::EmitResult res;
   const std::string outBase = opts.outputFile;
+  // Provide the source path to codegen for embedding source comments in IR output
+#ifdef __APPLE__
+  setenv("PYCC_SOURCE_PATH", input.c_str(), 1);
+#else
+  setenv("PYCC_SOURCE_PATH", input.c_str(), 1);
+#endif
   const std::string err = codegenDriver.emit(*mod, outBase, opts.emitAssemblyOnly, opts.compileOnly, res);
   metrics.stop("EmitIR");
   if (!err.empty()) {
     std::cerr << "pycc: codegen error: " << err << "\n";
     return 1;
   }
+
+  // Record lexer token count and IR sizes when metrics requested
+  auto recordPost = [&]() {
+    try {
+      const auto toks = lexer.tokens();
+      metrics.setCounter("lex.tokens", static_cast<uint64_t>(toks.size()));
+    } catch (...) { /* ignore */ }
+    try {
+      auto irText = codegen::Codegen::generateIR(*mod);
+      metrics.setGauge("codegen.ir_bytes", static_cast<uint64_t>(irText.size()));
+      uint64_t lines = 0; for (char c : irText) if (c == '\n') ++lines; metrics.setGauge("codegen.ir_lines", lines);
+    } catch (...) { /* ignore */ }
+  };
+  if (opts.metrics || opts.metricsJson) { recordPost(); }
 
   if (logsEnabled) {
     // Lexer log
@@ -212,8 +252,8 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     }
   }
 
-  if (opts.metricsJson) { std::cout << metrics.summaryJson(); } // NOLINT(bugprone-branch-clone)
-  else if (opts.metrics) { std::cout << metrics.summaryText(); } // NOLINT(bugprone-branch-clone)
+  // Emit JSON metrics to stdout for either --metrics or --metrics-json
+  if (opts.metrics || opts.metricsJson) { std::cout << metrics.summaryJson(); }
 
   // Always write metrics JSON to log directory when any metrics requested
   if (opts.metrics || opts.metricsJson) {

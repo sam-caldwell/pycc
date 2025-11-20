@@ -11,6 +11,7 @@ struct ComprehensionFor {
   std::unique_ptr<Expr> target;
   std::unique_ptr<Expr> iter;
   std::vector<std::unique_ptr<Expr>> ifs; // zero or more if guards
+  bool isAsync{false};
 };
 
 struct ListComp final : Expr, Acceptable<ListComp, NodeKind::ListComp> {
@@ -39,4 +40,3 @@ struct GeneratorExpr final : Expr, Acceptable<GeneratorExpr, NodeKind::Generator
 };
 
 } // namespace pycc::ast
-

@@ -21,6 +21,11 @@ constexpr int kIndent4 = 4;
 constexpr int kIndent6 = 6;
 } // namespace
 
+static std::string to_lower_copy(std::string s) {
+  for (auto& c : s) { if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a'); }
+  return s;
+}
+
 static void appendDurations(std::ostringstream& oss,
                             const std::map<std::string, uint64_t>& durations) {
   oss << "  \"durations_ms\": {";
@@ -29,7 +34,8 @@ static void appendDurations(std::ostringstream& oss,
     if (!first) { oss << ","; }
     first = false;
     const double millis = static_cast<double>(val) / kUsPerMs;
-    oss << "\n    \"" << key << "\": " << std::fixed << std::setprecision(3) << millis;
+    // JSON uses lowercase stage keys for stability (e2e contracts)
+    oss << "\n    \"" << to_lower_copy(key) << "\": " << std::fixed << std::setprecision(3) << millis;
   }
   oss << "\n  }";
 }
@@ -109,6 +115,16 @@ std::string Metrics::summaryJson() const {
   appendAst(oss, geom_);
   appendOptimizer(oss, optimizerStats_);
   appendOptimizerBreakdown(oss, optimizerBreakdown_);
+  if (!counters_.empty()) {
+    oss << ",\n  \"counters\": {";
+    appendKeyValueObject(oss, counters_, kIndent4);
+    oss << "\n  }";
+  }
+  if (!gauges_.empty()) {
+    oss << ",\n  \"gauges\": {";
+    appendKeyValueObject(oss, gauges_, kIndent4);
+    oss << "\n  }";
+  }
   oss << "\n}\n";
   return oss.str();
 }
