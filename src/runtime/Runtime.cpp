@@ -488,14 +488,89 @@ void gc_set_barrier_mode(int mode) {
 extern "C" void* pycc_list_new(uint64_t cap) { return list_new(static_cast<std::size_t>(cap)); }
 extern "C" void pycc_list_push(void** list_slot, void* elem) { list_push_slot(list_slot, elem); }
 extern "C" uint64_t pycc_list_len(void* list) { return static_cast<uint64_t>(list_len(list)); }
+extern "C" void* pycc_list_get(void* list, int64_t index) {
+  if (list == nullptr) { return nullptr; }
+  auto* meta = reinterpret_cast<std::size_t*>(list);
+  std::size_t len = meta[0];
+  int64_t idx = index;
+  if (idx < 0) { idx += static_cast<int64_t>(len); }
+  if (idx < 0) { return nullptr; }
+  return list_get(list, static_cast<std::size_t>(idx));
+}
+extern "C" void pycc_list_set(void* list, int64_t index, void* value) {
+  if (list == nullptr) { return; }
+  auto* meta = reinterpret_cast<std::size_t*>(list);
+  std::size_t len = meta[0];
+  int64_t idx = index;
+  if (idx < 0) { idx += static_cast<int64_t>(len); }
+  if (idx < 0) { return; }
+  list_set(list, static_cast<std::size_t>(idx), value);
+}
+
+// Dict interop
+extern "C" void* pycc_dict_new(uint64_t cap) { return dict_new(static_cast<std::size_t>(cap)); }
+extern "C" void pycc_dict_set(void** dict_slot, void* key, void* value) { dict_set(dict_slot, key, value); }
+extern "C" void* pycc_dict_get(void* dict, void* key) { return dict_get(dict, key); }
+extern "C" uint64_t pycc_dict_len(void* dict) { return static_cast<uint64_t>(dict_len(dict)); }
+
 extern "C" void* pycc_object_new(uint64_t fields) { return object_new(static_cast<std::size_t>(fields)); }
 extern "C" void pycc_object_set(void* obj, uint64_t idx, void* val) { object_set(obj, static_cast<std::size_t>(idx), val); }
 extern "C" void* pycc_object_get(void* obj, uint64_t idx) { return object_get(obj, static_cast<std::size_t>(idx)); }
+extern "C" void pycc_object_set_attr(void* obj, void* key_string, void* value) { object_set_attr(obj, key_string, value); }
+extern "C" void* pycc_object_get_attr(void* obj, void* key_string) { return object_get_attr(obj, key_string); }
+
 extern "C" void* pycc_box_int(int64_t value) { return box_int(value); }
 extern "C" void* pycc_box_float(double value) { return box_float(value); }
 extern "C" void* pycc_box_bool(bool value) { return box_bool(value); }
 extern "C" void* pycc_string_new(const char* data, size_t length) { return string_new(data, length); }
 extern "C" uint64_t pycc_string_len(void* str) { return static_cast<uint64_t>(string_len(str)); }
+extern "C" void* pycc_string_concat(void* a, void* b) { return string_concat(a, b); }
+extern "C" void* pycc_string_slice(void* s, int64_t start, int64_t len) {
+  std::size_t L = string_len(s);
+  int64_t st = start; if (st < 0) st += static_cast<int64_t>(L); if (st < 0) st = 0;
+  int64_t ln = len; if (ln < 0) ln = 0;
+  return string_slice(s, static_cast<std::size_t>(st), static_cast<std::size_t>(ln));
+}
+extern "C" void* pycc_string_concat(void* a, void* b) { return string_concat(a, b); }
+extern "C" void* pycc_string_repeat(void* s, int64_t n) {
+  if (n <= 0) return string_new("", 0);
+  const char* d = string_data(s);
+  std::size_t L = string_len(s);
+  std::string tmp; tmp.resize(L * static_cast<std::size_t>(n));
+  for (std::size_t i = 0; i < static_cast<std::size_t>(n); ++i) { std::memcpy(tmp.data() + (i * L), d, L); }
+  return string_new(tmp.data(), tmp.size());
+}
+extern "C" int pycc_string_contains(void* haystack, void* needle) {
+  if (haystack == nullptr || needle == nullptr) return 0;
+  const char* h = string_data(haystack);
+  const char* n = string_data(needle);
+  std::size_t lh = string_len(haystack), ln = string_len(needle);
+  if (ln == 0) return 1;
+  if (lh < ln) return 0;
+  for (std::size_t i = 0; i + ln <= lh; ++i) { if (std::memcmp(h + i, n, ln) == 0) return 1; }
+  return 0;
+}
+
+// Exception wrappers for codegen (C ABI)
+extern "C" void pycc_rt_raise(const char* type_name, const char* message) { rt_raise(type_name, message); }
+extern "C" int pycc_rt_has_exception(void) { return rt_has_exception() ? 1 : 0; }
+extern "C" void* pycc_rt_current_exception(void) { return rt_current_exception(); }
+extern "C" void pycc_rt_clear_exception(void) { rt_clear_exception(); }
+extern "C" void* pycc_rt_exception_type(void* exc) { return rt_exception_type(exc); }
+extern "C" void* pycc_rt_exception_message(void* exc) { return rt_exception_message(exc); }
+
+// String equality by content
+static bool string_eq(void* a, void* b) {
+  if (a == b) { return true; }
+  if (a == nullptr || b == nullptr) { return false; }
+  std::size_t la = string_len(a), lb = string_len(b);
+  if (la != lb) { return false; }
+  const char* da = string_data(a);
+  const char* db = string_data(b);
+  if (la == 0) { return true; }
+  return std::memcmp(da, db, la) == 0;
+}
+extern "C" int pycc_string_eq(void* a, void* b) { return string_eq(a, b) ? 1 : 0; }
 
 void gc_register_root(void** addr) {
   const std::lock_guard<std::mutex> lock(g_mu);
@@ -563,6 +638,27 @@ void* string_from_cstr(const char* cstr) {
   if (cstr == nullptr) { return string_new("", 0); }
   const std::size_t len = std::strlen(cstr);
   return string_new(cstr, len);
+}
+
+void* string_concat(void* a, void* b) {
+  const char* da = string_data(a);
+  const char* db = string_data(b);
+  std::size_t la = string_len(a);
+  std::size_t lb = string_len(b);
+  if (la == 0) return string_new(db, lb);
+  if (lb == 0) return string_new(da, la);
+  std::string tmp; tmp.resize(la + lb);
+  std::memcpy(tmp.data(), da, la);
+  std::memcpy(tmp.data() + la, db, lb);
+  return string_new(tmp.data(), tmp.size());
+}
+
+void* string_slice(void* s, std::size_t start, std::size_t len) {
+  const char* d = string_data(s);
+  const std::size_t L = string_len(s);
+  if (start > L) start = L;
+  std::size_t n = (start + len > L) ? (L - start) : len;
+  return string_new(d + start, n);
 }
 
 // UTF-8 validation helper
@@ -700,6 +796,27 @@ std::size_t list_len(void* list) {
   return meta[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
 }
 
+void* list_get(void* list, std::size_t index) {
+  if (list == nullptr) { return nullptr; }
+  const auto* meta = reinterpret_cast<const std::size_t*>(list); // NOLINT
+  const std::size_t len = meta[0];
+  if (index >= len) { return nullptr; }
+  auto* const* items = reinterpret_cast<void* const*>(meta + 2); // NOLINT
+  return items[index]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+}
+
+void list_set(void* list, std::size_t index, void* value) {
+  if (list == nullptr) { return; }
+  const std::lock_guard<std::mutex> lock(g_mu);
+  auto* meta = reinterpret_cast<std::size_t*>(list); // NOLINT
+  const std::size_t len = meta[0];
+  if (index >= len) { return; }
+  auto** items = reinterpret_cast<void**>(meta + 2); // NOLINT
+  gc_pre_barrier(&items[index]);
+  items[index] = value;
+  gc_write_barrier(&items[index], value);
+}
+
 // Dicts: open-addressed hash table (linear probe, pointer-identity keys)
 static std::size_t ptr_hash(void* p) {
   auto v = reinterpret_cast<std::uintptr_t>(p);
@@ -792,6 +909,36 @@ std::size_t dict_len(void* dict) {
   if (dict == nullptr) { return 0; }
   auto* meta = reinterpret_cast<std::size_t*>(dict);
   return meta[0];
+}
+
+extern "C" void* pycc_dict_iter_new(void* dict) {
+  const std::lock_guard<std::mutex> lock(g_mu);
+  void* it = object_new(2);
+  auto* meta = reinterpret_cast<std::size_t*>(it);
+  auto** vals = reinterpret_cast<void**>(meta + 1);
+  gc_pre_barrier(&vals[0]); vals[0] = dict; gc_write_barrier(&vals[0], dict);
+  void* zero = box_int(0);
+  gc_pre_barrier(&vals[1]); vals[1] = zero; gc_write_barrier(&vals[1], zero);
+  return it;
+}
+
+extern "C" void* pycc_dict_iter_next(void* it) {
+  if (it == nullptr) { return nullptr; }
+  const std::lock_guard<std::mutex> lock(g_mu);
+  auto* meta_it = reinterpret_cast<std::size_t*>(it);
+  auto** vals_it = reinterpret_cast<void**>(meta_it + 1);
+  void* dict = vals_it[0]; if (dict == nullptr) return nullptr;
+  auto* meta = reinterpret_cast<std::size_t*>(dict);
+  const std::size_t cap = meta[1];
+  auto** keys = reinterpret_cast<void**>(meta + 2);
+  std::size_t idx = static_cast<std::size_t>(box_int_value(vals_it[1]));
+  while (idx < cap) {
+    void* k = keys[idx];
+    ++idx;
+    if (k != nullptr) { vals_it[1] = box_int(static_cast<int64_t>(idx)); return k; }
+  }
+  vals_it[1] = box_int(static_cast<int64_t>(cap));
+  return nullptr;
 }
 
 // Objects (fixed-size field table)
@@ -936,6 +1083,9 @@ void rt_raise(const char* type_name, const char* message) {
   gc_pre_barrier(&vals[1]); vals[1] = m; gc_write_barrier(&vals[1], m);
   t_last_exception = exc;
   if (!t_exc_root_registered) { gc_register_root(&t_last_exception); t_exc_root_registered = true; }
+  // Phase 1 EH: throw a lightweight C++ exception instance
+  struct PyccCppExcLocal : public std::exception { const char* what() const noexcept override { return "pycc"; } };
+  throw PyccCppExcLocal();
 }
 
 bool rt_has_exception() { return t_last_exception != nullptr; }

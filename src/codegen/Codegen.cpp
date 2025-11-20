@@ -14,6 +14,12 @@
 #include "ast/WhileStmt.h"
 #include "ast/ForStmt.h"
 #include "ast/TryStmt.h"
+#include "ast/AugAssignStmt.h"
+#include "ast/BreakStmt.h"
+#include "ast/ContinueStmt.h"
+#include "ast/Attribute.h"
+#include "ast/DictLiteral.h"
+#include "ast/Subscript.h"
 #include "ast/IntLiteral.h"
 #include "ast/ListLiteral.h"
 #include "ast/Module.h"
@@ -102,6 +108,20 @@ std::string Codegen::emit(const ast::Module& mod, const std::string& outBase,
       }
     }
   }
+#else
+  // Fallback: allow fully environment-driven invocation when plugin path macro isn't compiled in.
+  if (emitLL_) {
+    const char* envEnable = std::getenv("PYCC_OPT_ELIDE_GCBARRIER");
+    const char* envPlugin = std::getenv("PYCC_LLVM_PASS_PLUGIN_PATH");
+    if (envEnable && *envEnable && envPlugin && *envPlugin) {
+      const std::string optLL = changeExt(outBase, ".opt.ll");
+      std::ostringstream optCmd;
+      optCmd << "opt -load-pass-plugin \"" << envPlugin << "\" -passes=\"function(pycc-elide-gcbarrier)\" -S \"" << result.llPath << "\" -o \"" << optLL << "\"";
+      std::string err;
+      if (runCmd(optCmd.str(), err)) { result.llPath = optLL; }
+      else { (void)err; }
+    }
+  }
 #endif
 
   // 2) Produce assembly/object/binary using clang
@@ -187,19 +207,48 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   irStream << "declare ptr @pycc_list_new(i64)\n";
   irStream << "declare void @pycc_list_push(ptr, ptr)\n";
   irStream << "declare i64 @pycc_list_len(ptr)\n";
+  irStream << "declare ptr @pycc_list_get(ptr, i64)\n";
+  irStream << "declare void @pycc_list_set(ptr, i64, ptr)\n";
   irStream << "declare ptr @pycc_object_new(i64)\n";
   irStream << "declare void @pycc_object_set(ptr, i64, ptr)\n";
   irStream << "declare ptr @pycc_object_get(ptr, i64)\n\n";
-  // Debug intrinsics for variable locations
+  // Dict and attribute helpers
+  irStream << "declare ptr @pycc_dict_new(i64)\n";
+  irStream << "declare void @pycc_dict_set(ptr, ptr, ptr)\n";
+  irStream << "declare ptr @pycc_dict_get(ptr, ptr)\n";
+  irStream << "declare i64 @pycc_dict_len(ptr)\n";
+  irStream << "declare void @pycc_object_set_attr(ptr, ptr, ptr)\n";
+  irStream << "declare ptr @pycc_object_get_attr(ptr, ptr)\n";
+  irStream << "declare ptr @pycc_string_new(ptr, i64)\n\n";
+  // Debug intrinsics for variable locations and GC roots
   irStream << "declare void @llvm.dbg.declare(metadata, metadata, metadata)\n\n";
+  irStream << "declare void @llvm.gcroot(ptr, ptr)\n\n";
+  // C++ EH personality (Phase 1 EH)
+  irStream << "declare i32 @__gxx_personality_v0(...)\n\n";
   // Boxing wrappers for primitives
   irStream << "declare ptr @pycc_box_int(i64)\n";
   irStream << "declare ptr @pycc_box_float(double)\n";
   irStream << "declare ptr @pycc_box_bool(i1)\n\n";
+  // String operations
+  irStream << "declare ptr @pycc_string_concat(ptr, ptr)\n";
+  irStream << "declare ptr @pycc_string_slice(ptr, i64, i64)\n\n";
+  irStream << "declare i1 @pycc_string_contains(ptr, ptr)\n";
+  irStream << "declare ptr @pycc_string_repeat(ptr, i64)\n\n";
   // Selected LLVM intrinsics used by codegen
   irStream << "declare double @llvm.powi.f64(double, i32)\n";
   irStream << "declare double @llvm.pow.f64(double, double)\n";
   irStream << "declare double @llvm.floor.f64(double)\n\n";
+  // Exceptions and string utils (C ABI)
+  irStream << "declare void @pycc_rt_raise(ptr, ptr)\n";
+  irStream << "declare i1 @pycc_rt_has_exception()\n";
+  irStream << "declare ptr @pycc_rt_current_exception()\n";
+  irStream << "declare void @pycc_rt_clear_exception()\n";
+  irStream << "declare ptr @pycc_rt_exception_type(ptr)\n";
+  irStream << "declare ptr @pycc_rt_exception_message(ptr)\n";
+  irStream << "declare i1 @pycc_string_eq(ptr, ptr)\n\n";
+  // Dict iteration helpers
+  irStream << "declare ptr @pycc_dict_iter_new(ptr)\n";
+  irStream << "declare ptr @pycc_dict_iter_next(ptr)\n\n";
 
   // Pre-scan functions to gather signatures
   struct Sig { ast::TypeKind ret{ast::TypeKind::NoneType}; std::vector<ast::TypeKind> params; };
@@ -289,6 +338,10 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       std::ostringstream nm; nm << ".str_" << std::hex << hasher(str);
       out->emplace(str, std::make_pair(nm.str(), str.size() + 1));
     }
+    void visit(const ast::Attribute& attr) override {
+      add(attr.attr);
+      if (attr.value) { attr.value->accept(*this); }
+    }
     void visit(const ast::Module& module) override {
       for (const auto& func : module.functions) { func->accept(*this); }
     }
@@ -303,6 +356,20 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       for (const auto& stmtElse : iff.elseBody) { stmtElse->accept(*this); }
     }
     void visit(const ast::ExprStmt& expr) override { if (expr.value) { expr.value->accept(*this); } }
+    void visit(const ast::RaiseStmt& rs) override {
+      // collect type name from raise Type("msg") or raise Type
+      if (!rs.exc) return;
+      if (rs.exc->kind == ast::NodeKind::Name) {
+        const auto* n = static_cast<const ast::Name*>(rs.exc.get());
+        add(n->id);
+      } else if (rs.exc->kind == ast::NodeKind::Call) {
+        const auto* c = static_cast<const ast::Call*>(rs.exc.get());
+        if (c->callee && c->callee->kind == ast::NodeKind::Name) {
+          const auto* cn = static_cast<const ast::Name*>(c->callee.get());
+          add(cn->id);
+        }
+      }
+    }
     void visit(const ast::Literal<long long, ast::NodeKind::IntLiteral>& litInt) override { (void)litInt; }
     void visit(const ast::Literal<bool, ast::NodeKind::BoolLiteral>& litBool) override { (void)litBool; }
     void visit(const ast::Literal<double, ast::NodeKind::FloatLiteral>& litFloat) override { (void)litFloat; }
@@ -321,12 +388,36 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     void visit(const ast::TupleLiteral& tuple) override { for (const auto& elem : tuple.elements) { if (elem) { elem->accept(*this); } } }
     void visit(const ast::ListLiteral& list) override { for (const auto& elem : list.elements) { if (elem) { elem->accept(*this); } } }
     void visit(const ast::ObjectLiteral& obj) override { for (const auto& fld : obj.fields) { if (fld) { fld->accept(*this); } } }
+    void visit(const ast::TryStmt& ts) override {
+      for (const auto& st : ts.body) { if (st) st->accept(*this); }
+      for (const auto& h : ts.handlers) {
+        if (!h) continue;
+        if (h->type && h->type->kind == ast::NodeKind::Name) {
+          const auto* n = static_cast<const ast::Name*>(h->type.get()); add(n->id);
+        } else if (h->type && h->type->kind == ast::NodeKind::TupleLiteral) {
+          const auto* tp = static_cast<const ast::TupleLiteral*>(h->type.get());
+          for (const auto& el : tp->elements) { if (el && el->kind == ast::NodeKind::Name) { add(static_cast<const ast::Name*>(el.get())->id); } }
+        }
+      }
+      for (const auto& st : ts.orelse) { if (st) st->accept(*this); }
+      for (const auto& st : ts.finalbody) { if (st) st->accept(*this); }
+    }
   };
 
   {
     StrCollector collector{&strGlobals, hash64};
     mod.accept(collector);
   }
+
+  // Ensure common exception strings exist for lowering raise/handlers
+  auto ensureStr = [&](const std::string& s) {
+    if (!strGlobals.contains(s)) {
+      std::ostringstream nm; nm << ".str_" << std::hex << hash64(s);
+      strGlobals.emplace(s, std::make_pair(nm.str(), s.size() + 1));
+    }
+  };
+  ensureStr("Exception");
+  ensureStr("");
 
   // Emit global string constants
   for (const auto& [content, info] : strGlobals) {
@@ -405,12 +496,12 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     // Attach a simple DISubprogram for function-level debug info
     dbgSubs.push_back(DebugSub{func->name, nextDbgId});
     const int subDbgId = nextDbgId;
-    irStream << ") !dbg !" << subDbgId << " {\n";
+    irStream << ") gc \"shadow-stack\" personality ptr @__gxx_personality_v0 !dbg !" << subDbgId << " {\n";
     nextDbgId++;
     irStream << "entry:\n";
 
     enum class ValKind : std::uint8_t { I32, I1, F64, Ptr };
-    enum class PtrTag : std::uint8_t { Unknown, Str, List, Object };
+    enum class PtrTag : std::uint8_t { Unknown, Str, List, Dict, Object };
     struct Slot { std::string ptr; ValKind kind{}; PtrTag tag{PtrTag::Unknown}; };
     std::unordered_map<std::string, Slot> slots; // var -> slot
     int temp = 0;
@@ -449,6 +540,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         irStream << "  " << ptr << " = alloca ptr\n";
         irStream << "  store ptr %" << param.name << ", ptr " << ptr << "\n";
         irStream << "  call void @pycc_gc_write_barrier(ptr " << ptr << ", ptr %" << param.name << ")\n";
+        irStream << "  call void @llvm.gcroot(ptr " << ptr << ", ptr null)\n";
         Slot s{ptr, ValKind::Ptr}; s.tag = PtrTag::Str; slots[param.name] = s;
       } else {
         throw std::runtime_error("unsupported param type");
@@ -517,6 +609,147 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         // Allow toggling between opaque-pointer and typed-pointer GEP styles
         // Use opaque-pointer friendly GEP form
         ir << "  " << reg.str() << " = getelementptr inbounds i8, ptr @" << gname.str() << ", i64 0\n";
+        out = Value{reg.str(), ValKind::Ptr};
+      }
+      void visit(const ast::Subscript& sub) override {
+        if (!sub.value || !sub.slice) { throw std::runtime_error("null subscript"); }
+        // Evaluate base and index
+        auto base = run(*sub.value);
+        if (base.k != ValKind::Ptr) { throw std::runtime_error("subscript base must be pointer"); }
+        auto idxV = run(*sub.slice);
+        std::string idx64;
+        if (idxV.k == ValKind::I32) {
+          std::ostringstream z; z << "%t" << temp++;
+          ir << "  " << z.str() << " = sext i32 " << idxV.s << " to i64\n"; idx64 = z.str();
+        } else {
+          throw std::runtime_error("subscript index must be int");
+        }
+        // Heuristic: decide between string/list/dict by literal or slot tag
+        bool isList = (sub.value->kind == ast::NodeKind::ListLiteral);
+        bool isStr = (sub.value->kind == ast::NodeKind::StringLiteral);
+        bool isDict = (sub.value->kind == ast::NodeKind::DictLiteral);
+        if (!isList && !isStr && !isDict && sub.value->kind == ast::NodeKind::Name) {
+          const auto* nm = static_cast<const ast::Name*>(sub.value.get());
+          auto it = slots.find(nm->id); if (it != slots.end()) {
+            isList = (it->second.tag == PtrTag::List);
+            isStr  = (it->second.tag == PtrTag::Str);
+            isDict = (it->second.tag == PtrTag::Dict);
+          }
+        }
+        if (isList) {
+          std::ostringstream r; r << "%t" << temp++;
+          ir << "  " << r.str() << " = call ptr @pycc_list_get(ptr " << base.s << ", i64 " << idx64 << ")\n";
+          out = Value{r.str(), ValKind::Ptr}; return;
+        }
+        if (isStr) {
+          // return 1-char slice
+          std::ostringstream r; r << "%t" << temp++;
+          ir << "  " << r.str() << " = call ptr @pycc_string_slice(ptr " << base.s << ", i64 " << idx64 << ", i64 1)\n";
+          out = Value{r.str(), ValKind::Ptr}; return;
+        }
+        if (isDict) {
+          // dict get: key must be ptr; box primitives
+          auto key = run(*sub.slice);
+          std::string kptr;
+          if (key.k == ValKind::Ptr) { kptr = key.s; }
+          else if (key.k == ValKind::I32) {
+            if (!key.s.empty() && key.s[0] != '%') { std::ostringstream w2; w2 << "%t" << temp++; ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << key.s << ")\n"; kptr = w2.str(); }
+            else { std::ostringstream w,w2; w << "%t" << temp++; w2 << "%t" << temp++; ir << "  " << w.str() << " = sext i32 " << key.s << " to i64\n"; ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")\n"; kptr = w2.str(); }
+          } else if (key.k == ValKind::F64) { std::ostringstream w; w << "%t" << temp++; ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << key.s << ")\n"; kptr = w.str(); }
+          else if (key.k == ValKind::I1) { std::ostringstream w; w << "%t" << temp++; ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << key.s << ")\n"; kptr = w.str(); }
+          else { throw std::runtime_error("unsupported dict key"); }
+          std::ostringstream r; r << "%t" << temp++;
+          ir << "  " << r.str() << " = call ptr @pycc_dict_get(ptr " << base.s << ", ptr " << kptr << ")\n";
+          out = Value{r.str(), ValKind::Ptr}; return;
+        }
+        throw std::runtime_error("unsupported subscript base");
+      }
+      void visit(const ast::DictLiteral& d) override { // NOLINT(readability-function-cognitive-complexity)
+        const std::size_t n = d.items.size();
+        std::ostringstream slot, dict, cap;
+        slot << "%t" << temp++;
+        dict << "%t" << temp++;
+        cap << (n == 0 ? 8 : n * 2);
+        ir << "  " << slot.str() << " = alloca ptr\n";
+        ir << "  " << dict.str() << " = call ptr @pycc_dict_new(i64 " << cap.str() << ")\n";
+        ir << "  store ptr " << dict.str() << ", ptr " << slot.str() << "\n";
+        ir << "  call void @pycc_gc_write_barrier(ptr " << slot.str() << ", ptr " << dict.str() << ")\n";
+        for (const auto& kv : d.items) {
+          if (!kv.first || !kv.second) { continue; }
+          auto k = run(*kv.first);
+          auto v = run(*kv.second);
+          std::string kptr;
+          if (k.k == ValKind::Ptr) { kptr = k.s; }
+          else if (k.k == ValKind::I32) {
+            if (!k.s.empty() && k.s[0] != '%') {
+              std::ostringstream w2; w2 << "%t" << temp++;
+              ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << k.s << ")\n";
+              kptr = w2.str();
+            } else {
+              std::ostringstream w, w2; w << "%t" << temp++; w2 << "%t" << temp++;
+              ir << "  " << w.str() << " = sext i32 " << k.s << " to i64\n";
+              ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")\n";
+              kptr = w2.str();
+            }
+          } else if (k.k == ValKind::F64) {
+            std::ostringstream w; w << "%t" << temp++;
+            ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << k.s << ")\n";
+            kptr = w.str();
+          } else if (k.k == ValKind::I1) {
+            std::ostringstream w; w << "%t" << temp++;
+            ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << k.s << ")\n";
+            kptr = w.str();
+          } else {
+            throw std::runtime_error("unsupported key in dict literal");
+          }
+          std::string vptr;
+          if (v.k == ValKind::Ptr) { vptr = v.s; }
+          else if (v.k == ValKind::I32) {
+            if (!v.s.empty() && v.s[0] != '%') {
+              std::ostringstream w2; w2 << "%t" << temp++;
+              ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << v.s << ")\n";
+              vptr = w2.str();
+            } else {
+              std::ostringstream w, w2; w << "%t" << temp++; w2 << "%t" << temp++;
+              ir << "  " << w.str() << " = sext i32 " << v.s << " to i64\n";
+              ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")\n";
+              vptr = w2.str();
+            }
+          } else if (v.k == ValKind::F64) {
+            std::ostringstream w; w << "%t" << temp++;
+            ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << v.s << ")\n";
+            vptr = w.str();
+          } else if (v.k == ValKind::I1) {
+            std::ostringstream w; w << "%t" << temp++;
+            ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << v.s << ")\n";
+            vptr = w.str();
+          } else {
+            throw std::runtime_error("unsupported value in dict literal");
+          }
+          ir << "  call void @pycc_dict_set(ptr " << slot.str() << ", ptr " << kptr << ", ptr " << vptr << ")\n";
+        }
+        std::ostringstream outReg; outReg << "%t" << temp++;
+        ir << "  " << outReg.str() << " = load ptr, ptr " << slot.str() << "\n";
+        out = Value{outReg.str(), ValKind::Ptr};
+      }
+      void visit(const ast::Attribute& attr) override {
+        if (!attr.value) { throw std::runtime_error("null attribute base"); }
+        auto base = run(*attr.value);
+        if (base.k != ValKind::Ptr) { throw std::runtime_error("attribute base must be pointer"); }
+        // Build constant pointer to attribute name text using same global emission naming
+        auto hash = [&](const std::string &str) {
+          constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ULL;
+          constexpr uint64_t kFnvPrime = 1099511628211ULL;
+          uint64_t hv = kFnvOffsetBasis; for (unsigned char ch : str) { hv ^= ch; hv *= kFnvPrime; } return hv;
+        };
+        const uint64_t h = hash(attr.attr);
+        std::ostringstream gname; gname << ".str_" << std::hex << h;
+        std::ostringstream dataPtr; dataPtr << "%t" << temp++;
+        ir << "  " << dataPtr.str() << " = getelementptr inbounds i8, ptr @" << gname.str() << ", i64 0\n";
+        std::ostringstream sobj; sobj << "%t" << temp++;
+        ir << "  " << sobj.str() << " = call ptr @pycc_string_new(ptr " << dataPtr.str() << ", i64 " << static_cast<long long>(attr.attr.size()) << ")\n";
+        std::ostringstream reg; reg << "%t" << temp++;
+        ir << "  " << reg.str() << " = call ptr @pycc_object_get_attr(ptr " << base.s << ", ptr " << sobj.str() << ")\n";
         out = Value{reg.str(), ValKind::Ptr};
       }
       void visit(const ast::ObjectLiteral& obj) override { // NOLINT(readability-function-cognitive-complexity)
@@ -618,10 +851,40 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         out = Value{reg.str(), it->second.kind};
       }
       void visit(const ast::Call& call) override { // NOLINT(readability-function-cognitive-complexity)
-        if (call.callee == nullptr || call.callee->kind != ast::NodeKind::Name) {
-          throw std::runtime_error("unsupported callee expression");
+        if (call.callee == nullptr) { throw std::runtime_error("unsupported callee expression"); }
+        // Polymorphic list.append(x)
+        if (call.callee->kind == ast::NodeKind::Attribute) {
+          const auto* at = static_cast<const ast::Attribute*>(call.callee.get());
+          if (!at->value) { throw std::runtime_error("null method base"); }
+          // identify list base
+          bool isList = (at->value->kind == ast::NodeKind::ListLiteral);
+          if (!isList && at->value->kind == ast::NodeKind::Name) {
+            auto* nm = static_cast<const ast::Name*>(at->value.get());
+            auto it = slots.find(nm->id); if (it != slots.end()) isList = (it->second.tag == PtrTag::List);
+          }
+          if (isList && at->attr == "append") {
+            if (call.args.size() != 1) throw std::runtime_error("append() takes one arg");
+            auto base = run(*at->value);
+            if (base.k != ValKind::Ptr) throw std::runtime_error("append base not ptr");
+            auto av = run(*call.args[0]);
+            std::string aptr;
+            if (av.k == ValKind::Ptr) { aptr = av.s; }
+            else if (av.k == ValKind::I32) { if (!av.s.empty() && av.s[0] != '%') { std::ostringstream w2; w2 << "%t" << temp++; ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << av.s << ")\n"; aptr = w2.str(); } else { std::ostringstream w,w2; w << "%t" << temp++; w2 << "%t" << temp++; ir << "  " << w.str() << " = sext i32 " << av.s << " to i64\n"; ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")\n"; aptr = w2.str(); } }
+            else if (av.k == ValKind::F64) { std::ostringstream w; w << "%t" << temp++; ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << av.s << ")\n"; aptr = w.str(); }
+            else if (av.k == ValKind::I1) { std::ostringstream w; w << "%t" << temp++; ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << av.s << ")\n"; aptr = w.str(); }
+            else { throw std::runtime_error("unsupported append arg"); }
+            // create slot for base and push
+            std::ostringstream slot; slot << "%t" << temp++;
+            ir << "  " << slot.str() << " = alloca ptr\n";
+            ir << "  store ptr " << base.s << ", ptr " << slot.str() << "\n";
+            ir << "  call void @pycc_list_push(ptr " << slot.str() << ", ptr " << aptr << ")\n";
+            out = Value{base.s, ValKind::Ptr};
+            return;
+          }
+          throw std::runtime_error("unsupported attribute call");
         }
         const auto* nmCall = dynamic_cast<const ast::Name*>(call.callee.get());
+        if (nmCall == nullptr) { throw std::runtime_error("unsupported callee expression"); }
         // Builtin: len(arg) -> i32 constant for tuple/list literal lengths
         if (nmCall->id == "len") {
           if (call.args.size() != 1) { throw std::runtime_error("len() takes exactly one argument"); }
@@ -835,6 +1098,20 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         // only need to inspect RHS structure without lowering it as a value.
         // Handle membership early to avoid lowering tuple/list RHS as a value.
         if (b.op == ast::BinaryOperator::In || b.op == ast::BinaryOperator::NotIn) {
+          // String membership: substring in string
+          bool rhsStr = (b.rhs->kind == ast::NodeKind::StringLiteral) ||
+                        (b.rhs->kind == ast::NodeKind::Name && [this,&b]() { auto it = slots.find(static_cast<const ast::Name*>(b.rhs.get())->id); return it != slots.end() && it->second.tag == PtrTag::Str; }());
+          bool lhsStr = (b.lhs->kind == ast::NodeKind::StringLiteral) ||
+                        (b.lhs->kind == ast::NodeKind::Name && [this,&b]() { auto it = slots.find(static_cast<const ast::Name*>(b.lhs.get())->id); return it != slots.end() && it->second.tag == PtrTag::Str; }());
+          if (rhsStr && lhsStr) {
+            auto H = run(*b.rhs);
+            auto N = run(*b.lhs);
+            std::ostringstream c; c << "%t" << temp++;
+            ir << "  " << c.str() << " = call i1 @pycc_string_contains(ptr " << H.s << ", ptr " << N.s << ")\n";
+            if (b.op == ast::BinaryOperator::NotIn) { std::ostringstream nx; nx << "%t" << temp++; ir << "  " << nx.str() << " = xor i1 " << c.str() << ", true\n"; out = Value{nx.str(), ValKind::I1}; }
+            else { out = Value{c.str(), ValKind::I1}; }
+            return;
+          }
           if (b.rhs->kind != ast::NodeKind::ListLiteral && b.rhs->kind != ast::NodeKind::TupleLiteral) {
             out = Value{"false", ValKind::I1};
             return;
@@ -1031,8 +1308,21 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         }
         // Membership handled above
         // For remaining operations, ensure RHS has been evaluated when needed (RV already computed for comparisons and used below).
-        // Arithmetic
+        // Arithmetic and string concatenation
         std::ostringstream reg; reg << "%t" << temp++;
+        if (LV.k == ValKind::Ptr && RV.k == ValKind::Ptr) {
+          // If both are strings, '+' means concatenate
+          bool strL = false, strR = false;
+          if (b.lhs->kind == ast::NodeKind::StringLiteral) strL = true;
+          else if (b.lhs->kind == ast::NodeKind::Name) { auto it = slots.find(static_cast<const ast::Name*>(b.lhs.get())->id); if (it != slots.end()) strL = (it->second.tag == PtrTag::Str); }
+          if (b.rhs->kind == ast::NodeKind::StringLiteral) strR = true;
+          else if (b.rhs->kind == ast::NodeKind::Name) { auto it = slots.find(static_cast<const ast::Name*>(b.rhs.get())->id); if (it != slots.end()) strR = (it->second.tag == PtrTag::Str); }
+          if (strL && strR && b.op == ast::BinaryOperator::Add) {
+            ir << "  " << reg.str() << " = call ptr @pycc_string_concat(ptr " << LV.s << ", ptr " << RV.s << ")\n";
+            out = Value{reg.str(), ValKind::Ptr};
+            return;
+          }
+        }
         if (LV.k == ValKind::I32 && RV.k == ValKind::I32) {
           const char* op = "add";
           switch (b.op) {
@@ -1057,6 +1347,17 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           }
           ir << "  " << reg.str() << " = " << op << " double " << LV.s << ", " << RV.s << "\n";
           out = Value{reg.str(), ValKind::F64};
+        } else if ((LV.k == ValKind::Ptr && RV.k == ValKind::I32) || (LV.k == ValKind::I32 && RV.k == ValKind::Ptr)) {
+          // String repetition: str * int or int * str
+          if (b.op != ast::BinaryOperator::Mul) throw std::runtime_error("unsupported op on str,int");
+          std::string strV; std::string intV;
+          if (LV.k == ValKind::Ptr) { strV = LV.s; intV = RV.s; }
+          else { std::ostringstream z; z << "%t" << temp++; // ensure RHS int in i64
+                 ir << "  " << z.str() << " = sext i32 " << LV.s << " to i64\n"; strV = RV.s; intV = z.str(); }
+          if (LV.k == ValKind::Ptr && RV.k == ValKind::I32) { std::ostringstream z; z << "%t" << temp++; ir << "  " << z.str() << " = sext i32 " << RV.s << " to i64\n"; intV = z.str(); }
+          ir << "  " << reg.str() << " = call ptr @pycc_string_repeat(ptr " << strV << ", i64 " << intV << ")\n";
+          out = Value{reg.str(), ValKind::Ptr};
+          return;
         } else {
           throw std::runtime_error("arithmetic type mismatch");
         }
@@ -1081,6 +1382,57 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     bool returned = false;
     int ifCounter = 0;
 
+    // Basic capture analysis using 'nonlocal' statements as a starting signal.
+    std::vector<std::string> capturedNames;
+    struct CaptureScan : public ast::VisitorBase {
+      std::vector<std::string>& out;
+      explicit CaptureScan(std::vector<std::string>& o) : out(o) {}
+      void visit(const ast::NonlocalStmt& ns) override {
+        for (const auto& n : ns.names) out.push_back(n);
+      }
+      // Default traversal for body-containing nodes
+      void visit(const ast::FunctionDef&) override {}
+      void visit(const ast::Module&) override {}
+      void visit(const ast::ReturnStmt&) override {}
+      void visit(const ast::AssignStmt&) override {}
+      void visit(const ast::IfStmt&) override {}
+      void visit(const ast::ExprStmt&) override {}
+      void visit(const ast::WhileStmt&) override {}
+      void visit(const ast::ForStmt&) override {}
+      void visit(const ast::TryStmt&) override {}
+      void visit(const ast::IntLiteral&) override {}
+      void visit(const ast::BoolLiteral&) override {}
+      void visit(const ast::FloatLiteral&) override {}
+      void visit(const ast::Name&) override {}
+      void visit(const ast::Call&) override {}
+      void visit(const ast::Binary&) override {}
+      void visit(const ast::Unary&) override {}
+      void visit(const ast::StringLiteral&) override {}
+      void visit(const ast::NoneLiteral&) override {}
+      void visit(const ast::TupleLiteral&) override {}
+      void visit(const ast::ListLiteral&) override {}
+      void visit(const ast::ObjectLiteral&) override {}
+    };
+    {
+      CaptureScan scan{capturedNames};
+      for (const auto& st : func->body) { if (st) st->accept(scan); }
+      if (!capturedNames.empty()) {
+        // Emit a simple env struct alloca holding pointers to captured variables, if available
+        irStream << "  ; env for function '" << func->name << "' captures: ";
+        for (size_t i = 0; i < capturedNames.size(); ++i) { if (i) irStream << ", "; irStream << capturedNames[i]; }
+        irStream << "\n";
+        std::ostringstream envTy; envTy << "{ "; for (size_t i = 0; i < capturedNames.size(); ++i) { if (i) envTy << ", "; envTy << "ptr"; } envTy << " }";
+        std::ostringstream env; env << "%env." << func->name;
+        irStream << "  " << env.str() << " = alloca " << envTy.str() << "\n";
+        for (size_t i = 0; i < capturedNames.size(); ++i) {
+          auto it = slots.find(capturedNames[i]); if (it == slots.end()) continue;
+          std::ostringstream gep; gep << "%t" << temp++;
+          irStream << "  " << gep.str() << " = getelementptr inbounds " << envTy.str() << ", ptr " << env.str() << ", i32 0, i32 " << i << "\n";
+          irStream << "  store ptr " << it->second.ptr << ", ptr " << gep.str() << "\n";
+        }
+      }
+    }
+
     struct StmtEmitter : public ast::VisitorBase {
       StmtEmitter(std::ostringstream& ir_, int& temp_, int& ifCounter_, std::unordered_map<std::string, Slot>& slots_, const ast::FunctionDef& fn_, std::function<Value(const ast::Expr*)> eval_, std::string& retStructTy_, std::vector<std::string>& tupleElemTys_, const std::unordered_map<std::string, Sig>& sigs_, const std::unordered_map<std::string, int>& retParamIdxs_, int subDbgId_, int& nextDbgId_, std::vector<DebugLoc>& dbgLocs_, std::unordered_map<unsigned long long, int>& dbgLocKeyToId_, std::unordered_map<std::string,int>& varMdId_, std::vector<DbgVar>& dbgVars_, int diIntId_, int diBoolId_, int diDoubleId_, int diPtrId_, int diExprId_)
         : ir(ir_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_), eval(std::move(eval_)), retStructTyRef(retStructTy_), tupleElemTysRef(tupleElemTys_), sigs(sigs_), retParamIdxs(retParamIdxs_), subDbgId(subDbgId_), nextDbgId(nextDbgId_), dbgLocs(dbgLocs_), dbgLocKeyToId(dbgLocKeyToId_), varMdId(varMdId_), dbgVars(dbgVars_), diIntId(diIntId_), diBoolId(diBoolId_), diDoubleId(diDoubleId_), diPtrId(diPtrId_), diExprId(diExprId_) {}
@@ -1103,6 +1455,35 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       std::unordered_map<std::string,int>& varMdId;
       std::vector<DbgVar>& dbgVars;
       int diIntId; int diBoolId; int diDoubleId; int diPtrId; int diExprId;
+      // Loop label stacks for break/continue
+      std::vector<std::string> breakLabels;
+      std::vector<std::string> continueLabels;
+      // Exception check label for enclosing try (used by raise)
+      std::string excCheckLabel;
+      // Landingpad label when under try
+      std::string lpadLabel;
+
+      // Emit a call that may be turned into invoke (void return)
+      void emitCallOrInvokeVoid(const std::string& calleeAndArgs) {
+        if (!lpadLabel.empty()) {
+          std::ostringstream cont; cont << "inv.cont" << temp++;
+          ir << "  invoke void " << calleeAndArgs << " to label %" << cont.str() << " unwind label %" << lpadLabel << "\n";
+          ir << cont.str() << ":\n";
+        } else {
+          ir << "  call void " << calleeAndArgs << "\n";
+        }
+      }
+      // Emit a ptr-returning call that may be turned into invoke; returns the SSA name
+      std::string emitCallOrInvokePtr(const std::string& dest, const std::string& calleeAndArgs) {
+        if (!lpadLabel.empty()) {
+          std::ostringstream cont; cont << "inv.cont" << temp++;
+          ir << "  " << dest << " = invoke ptr " << calleeAndArgs << " to label %" << cont.str() << " unwind label %" << lpadLabel << "\n";
+          ir << cont.str() << ":\n";
+        } else {
+          ir << "  " << dest << " = call ptr " << calleeAndArgs << "\n";
+        }
+        return dest;
+      }
 
       static void emitLoc(std::ostringstream& irOut, const ast::Node& n, const char* kind) {
         irOut << "  ; loc: "
@@ -1124,6 +1505,48 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           }
         } else { curLocId = 0; }
         auto dbg = [this]() -> std::string { return (curLocId > 0) ? (std::string(", !dbg !") + std::to_string(curLocId)) : std::string(); };
+        // First, support general target if provided (e.g., subscript store)
+        if (!asg.targets.empty()) {
+          const ast::Expr* tgtExpr = asg.targets[0].get();
+          if (tgtExpr && tgtExpr->kind == ast::NodeKind::Subscript) {
+            const auto* sub = static_cast<const ast::Subscript*>(tgtExpr);
+            if (!sub->value || !sub->slice) { throw std::runtime_error("null subscript target"); }
+            // Evaluate container and index
+            auto base = eval(sub->value.get());
+            if (base.k != ValKind::Ptr) { throw std::runtime_error("subscript base must be pointer"); }
+            auto idxV = eval(sub->slice.get());
+            std::string idx64;
+            if (idxV.k == ValKind::I32) { std::ostringstream z; z << "%t" << temp++; ir << "  " << z.str() << " = sext i32 " << idxV.s << " to i64" << dbg() << "\n"; idx64 = z.str(); }
+            else { throw std::runtime_error("subscript index must be int"); }
+            bool isList = (sub->value->kind == ast::NodeKind::ListLiteral);
+            bool isDict = (sub->value->kind == ast::NodeKind::DictLiteral);
+            if (!isList && !isDict && sub->value->kind == ast::NodeKind::Name) {
+              const auto* nm = static_cast<const ast::Name*>(sub->value.get());
+              auto itn = slots.find(nm->id); if (itn != slots.end()) { isList = (itn->second.tag == PtrTag::List); isDict = (itn->second.tag == PtrTag::Dict); }
+            }
+            if (!isList && !isDict) { throw std::runtime_error("only list/dict subscripting supported in assignment"); }
+            // Evaluate RHS and box to ptr if needed
+            auto rv = eval(asg.value.get());
+            std::string vptr;
+            if (rv.k == ValKind::Ptr) { vptr = rv.s; }
+            else if (rv.k == ValKind::I32) {
+              if (!rv.s.empty() && rv.s[0] != '%') { std::ostringstream w2; w2 << "%t" << temp++; ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << rv.s << ")" << dbg() << "\n"; vptr = w2.str(); }
+              else { std::ostringstream w, w2; w << "%t" << temp++; w2 << "%t" << temp++; ir << "  " << w.str() << " = sext i32 " << rv.s << " to i64" << dbg() << "\n"; ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")" << dbg() << "\n"; vptr = w2.str(); }
+            } else if (rv.k == ValKind::F64) { std::ostringstream w; w << "%t" << temp++; ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << rv.s << ")" << dbg() << "\n"; vptr = w.str(); }
+            else if (rv.k == ValKind::I1) { std::ostringstream w; w << "%t" << temp++; ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << rv.s << ")" << dbg() << "\n"; vptr = w.str(); }
+            else { throw std::runtime_error("unsupported rhs for list store"); }
+            if (isList) {
+              ir << "  call void @pycc_list_set(ptr " << base.s << ", i64 " << idx64 << ", ptr " << vptr << ")" << dbg() << "\n";
+            } else {
+              // dict_set takes a slot; create a temp slot around base
+              std::ostringstream slot; slot << "%t" << temp++;
+              ir << "  " << slot.str() << " = alloca ptr" << dbg() << "\n";
+              ir << "  store ptr " << base.s << ", ptr " << slot.str() << dbg() << "\n";
+              ir << "  call void @pycc_dict_set(ptr " << slot.str() << ", ptr " << (idxV.k==ValKind::Ptr? idxV.s : idx64) << ", ptr " << vptr << ")" << dbg() << "\n";
+            }
+            return;
+          }
+        }
         auto val = eval(asg.value.get());
         auto it = slots.find(asg.target);
         if (it == slots.end()) {
@@ -1131,7 +1554,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           if (val.k == ValKind::I32) ir << "  " << ptr << " = alloca i32\n";
           else if (val.k == ValKind::I1) ir << "  " << ptr << " = alloca i1\n";
           else if (val.k == ValKind::F64) ir << "  " << ptr << " = alloca double\n";
-          else ir << "  " << ptr << " = alloca ptr\n";
+          else { ir << "  " << ptr << " = alloca ptr\n"; ir << "  call void @llvm.gcroot(ptr " << ptr << ", ptr null)\n"; }
           slots[asg.target] = Slot{ptr, val.k};
           it = slots.find(asg.target);
           // Emit local variable debug declaration at first definition
@@ -1149,11 +1572,12 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         else if (val.k == ValKind::F64) ir << "  store double " << val.s << ", ptr " << it->second.ptr << dbg() << "\n";
         else {
           ir << "  store ptr " << val.s << ", ptr " << it->second.ptr << dbg() << "\n";
-          ir << "  call void @pycc_gc_write_barrier(ptr " << it->second.ptr << ", ptr " << val.s << ")" << dbg() << "\n";
+          { std::ostringstream ca; ca << "@pycc_gc_write_barrier(ptr " << it->second.ptr << ", ptr " << val.s << ")"; emitCallOrInvokeVoid(ca.str()); }
         }
         if (val.k == ValKind::Ptr && asg.value) {
           // Tag from literal kinds
           if (asg.value->kind == ast::NodeKind::ListLiteral) { it->second.tag = PtrTag::List; }
+          else if (asg.value->kind == ast::NodeKind::DictLiteral) { it->second.tag = PtrTag::Dict; }
           else if (asg.value->kind == ast::NodeKind::StringLiteral) { it->second.tag = PtrTag::Str; }
           else if (asg.value->kind == ast::NodeKind::ObjectLiteral) { it->second.tag = PtrTag::Object; }
           // Propagate tag from name-to-name assignments
@@ -1174,7 +1598,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
                 if (itSig != sigs.end()) {
                   if (itSig->second.ret == ast::TypeKind::Str) { it->second.tag = PtrTag::Str; }
                   else if (itSig->second.ret == ast::TypeKind::List) { it->second.tag = PtrTag::List; }
-                  else if (itSig->second.ret == ast::TypeKind::Dict) { it->second.tag = PtrTag::Object; }
+                  else if (itSig->second.ret == ast::TypeKind::Dict) { it->second.tag = PtrTag::Dict; }
                 }
                 // Interprocedural propagation: if callee forwards one of its params, take tag from that arg
                 auto itRet = retParamIdxs.find(cname->id);
@@ -1327,7 +1751,12 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         ir << "  br i1 " << cond << ", label %" << bodyLbl.str() << ", label %" << endLbl.str() << dbg() << "\n";
         // Body
         ir << bodyLbl.str() << ":\n";
+        // Push loop labels for nested break/continue
+        breakLabels.push_back(endLbl.str());
+        continueLabels.push_back(condLbl.str());
         bool bodyReturned = emitStmtList(ws.thenBody);
+        continueLabels.pop_back();
+        breakLabels.pop_back();
         if (!bodyReturned) {
           // Re-evaluate condition
           ir << "  br label %" << condLbl.str() << dbg() << "\n";
@@ -1339,7 +1768,82 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         (void)elseReturned;
       }
 
-      void visit(const ast::ForStmt& fs) override { // limited lowering: iterate list/tuple literals
+      void visit(const ast::BreakStmt& brk) override {
+        emitLoc(ir, brk, "break");
+        if (!breakLabels.empty()) {
+          ir << "  br label %" << breakLabels.back() << "\n";
+          returned = true;
+        }
+      }
+
+      void visit(const ast::ContinueStmt& cont) override {
+        emitLoc(ir, cont, "continue");
+        if (!continueLabels.empty()) {
+          ir << "  br label %" << continueLabels.back() << "\n";
+          returned = true;
+        }
+      }
+
+      void visit(const ast::AugAssignStmt& asg) override {
+        emitLoc(ir, asg, "augassign");
+        if (!asg.target || asg.target->kind != ast::NodeKind::Name) { return; }
+        const auto* tgt = static_cast<const ast::Name*>(asg.target.get());
+        auto it = slots.find(tgt->id);
+        if (it == slots.end()) throw std::runtime_error("augassign to undefined name");
+        std::ostringstream cur; cur << "%t" << temp++;
+        if (it->second.kind == ValKind::I32)
+          ir << "  " << cur.str() << " = load i32, ptr " << it->second.ptr << "\n";
+        else if (it->second.kind == ValKind::F64)
+          ir << "  " << cur.str() << " = load double, ptr " << it->second.ptr << "\n";
+        else if (it->second.kind == ValKind::I1)
+          ir << "  " << cur.str() << " = load i1, ptr " << it->second.ptr << "\n";
+        else return;
+        auto rhs = eval(asg.value.get());
+        std::ostringstream res; res << "%t" << temp++;
+        if (it->second.kind == ValKind::I32 && rhs.k == ValKind::I32) {
+          const char* op = nullptr;
+          switch (asg.op) {
+            case ast::BinaryOperator::Add: op = "add"; break;
+            case ast::BinaryOperator::Sub: op = "sub"; break;
+            case ast::BinaryOperator::Mul: op = "mul"; break;
+            case ast::BinaryOperator::Div: op = "sdiv"; break;
+            case ast::BinaryOperator::Mod: op = "srem"; break;
+            case ast::BinaryOperator::LShift: op = "shl"; break;
+            case ast::BinaryOperator::RShift: op = "ashr"; break;
+            case ast::BinaryOperator::BitAnd: op = "and"; break;
+            case ast::BinaryOperator::BitOr: op = "or"; break;
+            case ast::BinaryOperator::BitXor: op = "xor"; break;
+            default: throw std::runtime_error("unsupported augassign op for int");
+          }
+          ir << "  " << res.str() << " = " << op << " i32 " << cur.str() << ", " << rhs.s << "\n";
+          ir << "  store i32 " << res.str() << ", ptr " << it->second.ptr << "\n";
+        } else if (it->second.kind == ValKind::F64 && rhs.k == ValKind::F64) {
+          const char* op = nullptr;
+          switch (asg.op) {
+            case ast::BinaryOperator::Add: op = "fadd"; break;
+            case ast::BinaryOperator::Sub: op = "fsub"; break;
+            case ast::BinaryOperator::Mul: op = "fmul"; break;
+            case ast::BinaryOperator::Div: op = "fdiv"; break;
+            default: throw std::runtime_error("unsupported augassign op for float");
+          }
+          ir << "  " << res.str() << " = " << op << " double " << cur.str() << ", " << rhs.s << "\n";
+          ir << "  store double " << res.str() << ", ptr " << it->second.ptr << "\n";
+        } else if (it->second.kind == ValKind::I1 && rhs.k == ValKind::I1) {
+          const char* op = nullptr;
+          switch (asg.op) {
+            case ast::BinaryOperator::BitXor: op = "xor"; break;
+            case ast::BinaryOperator::BitOr: op = "or"; break;
+            case ast::BinaryOperator::BitAnd: op = "and"; break;
+            default: throw std::runtime_error("unsupported augassign op for bool");
+          }
+          ir << "  " << res.str() << " = " << op << " i1 " << cur.str() << ", " << rhs.s << "\n";
+          ir << "  store i1 " << res.str() << ", ptr " << it->second.ptr << "\n";
+        } else {
+          throw std::runtime_error("augassign type mismatch");
+        }
+      }
+
+      void visit(const ast::ForStmt& fs) override { // limited lowering: iterate list/tuple literals and dict keys
         emitLoc(ir, fs, "for");
         if (fs.line > 0) {
           const unsigned long long key = (static_cast<unsigned long long>(static_cast<unsigned int>(subDbgId)) << 32ULL)
@@ -1378,7 +1882,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           if (v.k == ValKind::I32) ir << "  store i32 " << v.s << ", ptr " << addr << dbg() << "\n";
           else if (v.k == ValKind::I1) ir << "  store i1 " << v.s << ", ptr " << addr << dbg() << "\n";
           else if (v.k == ValKind::F64) ir << "  store double " << v.s << ", ptr " << addr << dbg() << "\n";
-          else { ir << "  store ptr " << v.s << ", ptr " << addr << dbg() << "\n"; ir << "  call void @pycc_gc_write_barrier(ptr " << addr << ", ptr " << v.s << ")" << dbg() << "\n"; }
+          else { ir << "  store ptr " << v.s << ", ptr " << addr << dbg() << "\n"; { std::ostringstream ca; ca << "@pycc_gc_write_barrier(ptr " << addr << ", ptr " << v.s << ")"; emitCallOrInvokeVoid(ca.str()); } }
           (void)emitStmtList(fs.thenBody);
         };
         if (fs.iterable && fs.iterable->kind == ast::NodeKind::ListLiteral) {
@@ -1393,6 +1897,36 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           for (const auto& el : tp->elements) {
             if (!el) continue; auto v = eval(el.get()); emitBodyWithValue(v);
           }
+        } else if (fs.iterable && fs.iterable->kind == ast::NodeKind::Name) {
+          // If dict, iterate keys using iterator API
+          const auto* nm = static_cast<const ast::Name*>(fs.iterable.get());
+          auto itn = slots.find(nm->id);
+          if (itn != slots.end() && itn->second.kind == ValKind::Ptr && itn->second.tag == PtrTag::Dict) {
+            std::ostringstream itv, key, condLbl, bodyLbl, endLbl;
+            itv << "%t" << temp++;
+            { std::ostringstream args; args << "@pycc_dict_iter_new(ptr " << itn->second.ptr << ")"; emitCallOrInvokePtr(itv.str(), args.str()); }
+            condLbl << "for.cond" << ifCounter;
+            bodyLbl << "for.body" << ifCounter;
+            endLbl << "for.end" << ifCounter;
+            ++ifCounter;
+            ir << "  br label %" << condLbl.str() << dbg() << "\n";
+            ir << condLbl.str() << ":\n";
+            key << "%t" << temp++;
+            { std::ostringstream args; args << "@pycc_dict_iter_next(ptr " << itv.str() << ")"; emitCallOrInvokePtr(key.str(), args.str()); }
+            std::ostringstream test; test << "%t" << temp++;
+            ir << "  " << test.str() << " = icmp ne ptr " << key.str() << ", null" << dbg() << "\n";
+            ir << "  br i1 " << test.str() << ", label %" << bodyLbl.str() << ", label %" << endLbl.str() << dbg() << "\n";
+            ir << bodyLbl.str() << ":\n";
+            // bind key to target
+            const std::string addr = ensureSlotFor(tgt->id, ValKind::Ptr);
+            ir << "  store ptr " << key.str() << ", ptr " << addr << dbg() << "\n";
+            { std::ostringstream ca; ca << "@pycc_gc_write_barrier(ptr " << addr << ", ptr " << key.str() << ")"; emitCallOrInvokeVoid(ca.str()); }
+            (void)emitStmtList(fs.thenBody);
+            ir << "  br label %" << condLbl.str() << dbg() << "\n";
+            ir << endLbl.str() << ":\n";
+            (void)emitStmtList(fs.elseBody);
+            return;
+          }
         } else {
           // Unsupported iterator in this subset; no-op
         }
@@ -1402,10 +1936,120 @@ std::string Codegen::generateIR(const ast::Module& mod) {
 
       void visit(const ast::TryStmt& ts) override {
         emitLoc(ir, ts, "try");
-        // No exception runtime in this subset; lower as: try-body, else (if present), finally (always runs).
-        (void)emitStmtList(ts.body);
+        // Labels
+        std::ostringstream chkLbl, excLbl, elseLbl, finLbl, endLbl, lpadLbl;
+        chkLbl << "try.check" << ifCounter;
+        excLbl << "try.except" << ifCounter;
+        elseLbl << "try.else" << ifCounter;
+        finLbl << "try.finally" << ifCounter;
+        endLbl << "try.end" << ifCounter;
+        lpadLbl << "try.lpad" << ifCounter;
+        ++ifCounter;
+        // Emit try body with EH landingpad and raise forwarding to check label
+        const std::string prevExc = excCheckLabel;
+        const std::string prevLpad = lpadLabel;
+        excCheckLabel = chkLbl.str();
+        lpadLabel = lpadLbl.str();
+        bool bodyReturned = emitStmtList(ts.body);
+        lpadLabel = prevLpad;
+        excCheckLabel = prevExc;
+        if (!bodyReturned) { ir << "  br label %" << chkLbl.str() << dbg() << "\n"; }
+        // Landingpad to translate C++ EH into runtime pending-exception path
+        ir << lpadLbl.str() << ":\n";
+        ir << "  %lp" << temp++ << " = landingpad { ptr, i32 } cleanup\n";
+        ir << "  br label %" << excLbl.str() << dbg() << "\n";
+        ir << chkLbl.str() << ":\n";
+        // Branch on pending exception
+        std::ostringstream has; has << "%t" << temp++;
+        ir << "  " << has.str() << " = call i1 @pycc_rt_has_exception()" << dbg() << "\n";
+        ir << "  br i1 " << has.str() << ", label %" << excLbl.str() << ", label %" << elseLbl.str() << dbg() << "\n";
+        // Except dispatch
+        ir << excLbl.str() << ":\n";
+        std::ostringstream excReg, tyReg; excReg << "%t" << temp++; tyReg << "%t" << temp++;
+        ir << "  " << excReg.str() << " = call ptr @pycc_rt_current_exception()" << dbg() << "\n";
+        ir << "  " << tyReg.str() << " = call ptr @pycc_rt_exception_type(ptr " << excReg.str() << ")" << dbg() << "\n";
+        // Build match chain for handlers
+        std::string fallthrough = finLbl.str();
+        bool hasBare = false;
+        int hidx = 0;
+        std::vector<std::string> handlerLabels;
+        for (const auto& h : ts.handlers) {
+          if (!h) continue;
+          std::ostringstream hl; hl << "handler." << hidx++;
+          handlerLabels.push_back(hl.str());
+          if (!h->type) { hasBare = true; continue; }
+          if (h->type->kind == ast::NodeKind::Name) {
+            const auto* n = static_cast<const ast::Name*>(h->type.get());
+            // materialize handler type String from global cstring
+            auto hash = [&](const std::string &str) {
+              constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ULL;
+              constexpr uint64_t kFnvPrime = 1099511628211ULL;
+              uint64_t hv = kFnvOffsetBasis; for (unsigned char ch : str) { hv ^= ch; hv *= kFnvPrime; } return hv;
+            };
+            std::ostringstream gname; gname << ".str_" << std::hex << hash(n->id);
+            std::ostringstream dataPtr, sObj, eq;
+            dataPtr << "%t" << temp++; sObj << "%t" << temp++; eq << "%t" << temp++;
+            ir << "  " << dataPtr.str() << " = getelementptr inbounds i8, ptr @" << gname.str() << ", i64 0" << dbg() << "\n";
+            ir << "  " << sObj.str() << " = call ptr @pycc_string_new(ptr " << dataPtr.str() << ", i64 " << (long long)n->id.size() << ")" << dbg() << "\n";
+            ir << "  " << eq.str() << " = call i1 @pycc_string_eq(ptr " << tyReg.str() << ", ptr " << sObj.str() << ")" << dbg() << "\n";
+            ir << "  br i1 " << eq.str() << ", label %" << handlerLabels.back() << ", label %" << (hasBare ? "handler.bare" : finLbl.str()) << dbg() << "\n";
+          } else {
+            // Unsupported typed handler: fall through to bare or finally
+            ir << "  br label %" << (hasBare ? "handler.bare" : finLbl.str()) << dbg() << "\n";
+          }
+        }
+        if (hasBare) {
+          ir << "handler.bare:\n";
+          // Treat as match: clear exception and execute bare body
+          ir << "  call void @pycc_rt_clear_exception()" << dbg() << "\n";
+          // Find bare handler body index
+          for (size_t i = 0; i < ts.handlers.size(); ++i) {
+            const auto& h = ts.handlers[i]; if (!h || h->type) continue;
+            // Bind name if provided
+            if (!h->name.empty()) {
+              std::string ptr = "%" + h->name + ".addr";
+              // allocate slot (ptr)
+              ir << "  " << ptr << " = alloca ptr\n";
+              slots[h->name] = Slot{ptr, ValKind::Ptr};
+              // dbg.declare omitted for brevity (could be added similarly to assigns)
+              ir << "  store ptr " << excReg.str() << ", ptr " << ptr << dbg() << "\n";
+              ir << "  call void @pycc_gc_write_barrier(ptr " << ptr << ", ptr " << excReg.str() << ")" << dbg() << "\n";
+            }
+            (void)emitStmtList(h->body);
+            break;
+          }
+          ir << "  br label %" << finLbl.str() << dbg() << "\n";
+        }
+        // Typed handlers bodies
+        for (size_t i = 0; i < ts.handlers.size(); ++i) {
+          const auto& h = ts.handlers[i]; if (!h) continue; if (!h->type) continue;
+          ir << handlerLabels[i] << ":\n";
+          ir << "  call void @pycc_rt_clear_exception()" << dbg() << "\n";
+          if (!h->name.empty()) {
+            std::string ptr = "%" + h->name + ".addr";
+            ir << "  " << ptr << " = alloca ptr\n";
+            slots[h->name] = Slot{ptr, ValKind::Ptr};
+            ir << "  store ptr " << excReg.str() << ", ptr " << ptr << dbg() << "\n";
+            ir << "  call void @pycc_gc_write_barrier(ptr " << ptr << ", ptr " << excReg.str() << ")" << dbg() << "\n";
+          }
+          (void)emitStmtList(h->body);
+          ir << "  br label %" << finLbl.str() << dbg() << "\n";
+        }
+        // Else block when no exception
+        ir << elseLbl.str() << ":\n";
         (void)emitStmtList(ts.orelse);
+        ir << "  br label %" << finLbl.str() << dbg() << "\n";
+        // Finally always
+        ir << finLbl.str() << ":\n";
         (void)emitStmtList(ts.finalbody);
+        if (!excCheckLabel.empty()) {
+          std::ostringstream has2; has2 << "%t" << temp++;
+          ir << "  " << has2.str() << " = call i1 @pycc_rt_has_exception()" << dbg() << "\n";
+          ir << "  br i1 " << has2.str() << ", label %" << excCheckLabel << ", label %" << endLbl.str() << dbg() << "\n";
+        } else {
+          ir << "  br label %" << endLbl.str() << dbg() << "\n";
+        }
+        ir << endLbl.str() << ":\n";
       }
 
       // Unused here
@@ -1424,11 +2068,49 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       void visit(const ast::TupleLiteral&) override {}
       void visit(const ast::ListLiteral&) override {}
       void visit(const ast::ObjectLiteral&) override {}
+      void visit(const ast::RaiseStmt& rs) override {
+        emitLoc(ir, rs, "raise");
+        // materialize type name and message strings from globals
+        auto hash = [&](const std::string &str) {
+          constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ULL;
+          constexpr uint64_t kFnvPrime = 1099511628211ULL;
+          uint64_t hv = kFnvOffsetBasis; for (unsigned char ch : str) { hv ^= ch; hv *= kFnvPrime; } return hv;
+        };
+        std::string typeName = "Exception";
+        std::string msg = "";
+        if (rs.exc) {
+          if (rs.exc->kind == ast::NodeKind::Name) {
+            typeName = static_cast<const ast::Name*>(rs.exc.get())->id;
+          } else if (rs.exc->kind == ast::NodeKind::Call) {
+            const auto* c = static_cast<const ast::Call*>(rs.exc.get());
+            if (c->callee && c->callee->kind == ast::NodeKind::Name) { typeName = static_cast<const ast::Name*>(c->callee.get())->id; }
+            if (!c->args.empty() && c->args[0] && c->args[0]->kind == ast::NodeKind::StringLiteral) {
+              msg = static_cast<const ast::StringLiteral*>(c->args[0].get())->value;
+            }
+          }
+        }
+        std::ostringstream tgl, mgl, tptr, mptr; tgl << ".str_" << std::hex << hash(typeName); mgl << ".str_" << std::hex << hash(msg);
+        tptr << "%t" << temp++; mptr << "%t" << temp++;
+        ir << "  " << tptr.str() << " = getelementptr inbounds i8, ptr @" << tgl.str() << ", i64 0\n";
+        ir << "  " << mptr.str() << " = getelementptr inbounds i8, ptr @" << mgl.str() << ", i64 0\n";
+        if (!lpadLabel.empty()) {
+          std::ostringstream cont; cont << "raise.cont" << temp++;
+          ir << "  invoke void @pycc_rt_raise(ptr " << tptr.str() << ", ptr " << mptr.str() << ") to label %" << cont.str() << " unwind label %" << lpadLabel << "\n";
+          ir << cont.str() << ":\n";
+          if (!excCheckLabel.empty()) { ir << "  br label %" << excCheckLabel << "\n"; }
+        } else {
+          ir << "  call void @pycc_rt_raise(ptr " << tptr.str() << ", ptr " << mptr.str() << ")\n";
+          if (!excCheckLabel.empty()) { ir << "  br label %" << excCheckLabel << "\n"; }
+        }
+        returned = true;
+      }
 
       bool emitStmtList(const std::vector<std::unique_ptr<ast::Stmt>>& stmts) {
         bool brReturned = false;
         for (const auto& st : stmts) {
-          StmtEmitter child{ir, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef, sigs, retParamIdxs};
+          StmtEmitter child{ir, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef, sigs, retParamIdxs, subDbgId, nextDbgId, dbgLocs, dbgLocKeyToId, varMdId, dbgVars, diIntId, diBoolId, diDoubleId, diPtrId, diExprId};
+          child.breakLabels = breakLabels;
+          child.continueLabels = continueLabels;
           st->accept(child);
           if (child.returned) brReturned = true;
         }
@@ -1464,6 +2146,8 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     }
     irStream << "}\n\n";
   }
+  // Module initialization stub (placeholder for future globals/registrations)
+  irStream << "define i32 @pycc_module_init() {\n  ret i32 0\n}\n\n";
   // Emit lightweight debug metadata at end of module
   irStream << "\n!llvm.dbg.cu = !{!0}\n";
   irStream << "!0 = distinct !DICompileUnit(language: DW_LANG_Python, file: !1, producer: \"pycc\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)\n";

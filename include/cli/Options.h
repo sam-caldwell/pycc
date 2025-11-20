@@ -24,9 +24,9 @@ namespace pycc::cli {
         bool optAlgebraic{false};     // --opt-algebraic
         bool optDCE{false};           // --opt-dce
         bool optCFG{false};           // --opt-cfg
-        bool optElideGCBarrier{false}; // --opt-elide-gcbarrier (LLVM IR pass plugin)
         std::string outputFile{"a.out"};
         std::vector<std::string> inputs{};
+        std::vector<std::string> defines{}; // -DMACRO[=VALUE]
         ColorMode color{ColorMode::Auto};
         int diagContext{1};
         AstLogMode astLog{AstLogMode::None};

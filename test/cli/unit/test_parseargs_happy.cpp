@@ -120,3 +120,11 @@ TEST(CLI_Happy, OptFlagsAndLogs) {
   EXPECT_TRUE(o.logAst);
   EXPECT_TRUE(o.logCodegen);
 }
+
+TEST(CLI_Happy, DDefineIsParsed) {
+  const char* argv[] = {"pycc", "-DOPT_ELIDE_GCBARRIER", "main.py"};
+  Options o; ASSERT_TRUE(ParseArgs(3, const_cast<char**>(argv), o));
+  bool found = false;
+  for (const auto& d : o.defines) { if (d == "OPT_ELIDE_GCBARRIER") { found = true; break; } }
+  EXPECT_TRUE(found);
+}

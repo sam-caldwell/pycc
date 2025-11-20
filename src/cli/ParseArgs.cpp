@@ -51,7 +51,6 @@ static bool applySimpleBoolFlags(std::string_view arg, Options& out) {
   if (isFlag(arg, "--opt-algebraic")) { out.optAlgebraic = true; return true; }
   if (isFlag(arg, "--opt-dce")) { out.optDCE = true; return true; }
   if (isFlag(arg, "--opt-cfg")) { out.optCFG = true; return true; }
-  if (isFlag(arg, "--opt-elide-gcbarrier")) { out.optElideGCBarrier = true; return true; }
   if (isFlag(arg, "--log-lexer")) { out.logLexer = true; return true; }
   if (isFlag(arg, "--log-ast")) { out.logAst = true; return true; }
   if (isFlag(arg, "--log-codegen")) { out.logCodegen = true; return true; }
@@ -96,6 +95,11 @@ bool ParseArgs(const int argc, char** argv, Options& out) {
   for (int i = 1; i < argc; ++i) {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     const std::string_view arg{argv[i]};
+    // Handle -DNAME[=VALUE] style defines
+    if (arg.rfind("-D", 0) == 0 && arg.size() > 2) {
+      out.defines.emplace_back(std::string(arg.substr(2)));
+      continue;
+    }
     if (isFlag(arg, "--")) { collectRemainingAsInputs(i + 1, argc, argv, out); break; }
     if (handleOutputFileFlag(i, argc, argv, out)) { continue; }
     if (applySimpleBoolFlags(arg, out)) { continue; }

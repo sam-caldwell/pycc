@@ -214,8 +214,14 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
 #else
   setenv("PYCC_SOURCE_PATH", input.c_str(), 1);
 #endif
-  // Enable optional LLVM IR pass to elide GC barriers on stack writes
-  if (opts.optElideGCBarrier) {
+  // Enable optional LLVM IR pass to elide GC barriers on stack writes via -DOPT_ELIDE_GCBARRIER
+  auto hasDefine = [&](const std::string& key) {
+    for (const auto& d : opts.defines) {
+      if (d == key || d.rfind(key + "=", 0) == 0) return true;
+    }
+    return false;
+  };
+  if (hasDefine("OPT_ELIDE_GCBARRIER")) {
     setenv("PYCC_OPT_ELIDE_GCBARRIER", "1", /*overwrite*/1);
   }
   const std::string err = codegenDriver.emit(*mod, outBase, opts.emitAssemblyOnly, opts.compileOnly, res);

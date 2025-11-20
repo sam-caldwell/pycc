@@ -57,6 +57,10 @@ void* string_new(const char* data, std::size_t len);
 std::size_t string_len(void* str);
 const char* string_data(void* str);
 void* string_from_cstr(const char* cstr);
+void* string_concat(void* a, void* b);
+void* string_slice(void* s, std::size_t start, std::size_t len);
+void* string_repeat(void* s, std::size_t n);
+bool string_contains(void* haystack, void* needle);
 
 // Unicode / text encodings (helpers operate on raw buffers)
 bool utf8_is_valid(const char* data, std::size_t len);
@@ -75,12 +79,17 @@ bool box_bool_value(void* obj);
 void* list_new(std::size_t capacity);
 void list_push_slot(void** list_slot, void* elem);
 std::size_t list_len(void* list);
+void* list_get(void* list, std::size_t index);
+void list_set(void* list, std::size_t index, void* value);
 
 // Dict operations (opaque hash map from ptr->ptr; keys typically string objects)
 void* dict_new(std::size_t capacity);
 void dict_set(void** dict_slot, void* key, void* value);
 void* dict_get(void* dict, void* key);
 std::size_t dict_len(void* dict);
+// Dict iteration (iterator object with [0]=dict, [1]=index)
+void* dict_iter_new(void* dict);
+void* dict_iter_next(void* it); // returns next key or nullptr when done
 
 // Object operations (fixed-size field table of ptr values)
 void* object_new(std::size_t field_count);

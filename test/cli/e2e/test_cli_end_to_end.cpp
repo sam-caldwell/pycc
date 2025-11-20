@@ -61,6 +61,13 @@ TEST(CLI_EndToEnd, AssemblyAndObjectOnlyModes) {
   ASSERT_TRUE(fs::exists("out.o"));
 }
 
+TEST(CLI_EndToEnd, DDefineElideGCBarrierAccepted) {
+  write_file("d.py", "def main() -> int:\n  return 3\n");
+  int rc = std::system("../pycc -DOPT_ELIDE_GCBARRIER -o d_out d.py > /dev/null 2>&1");
+  ASSERT_EQ(rc, 0);
+  ASSERT_TRUE(fs::exists("d_out"));
+}
+
 TEST(CLI_EndToEnd, IRContainsSourceComments) {
   write_file("src.py", "def main() -> int:\n  return 2\n");
   int rc = std::system("../pycc -o out src.py > /dev/null 2>&1");
