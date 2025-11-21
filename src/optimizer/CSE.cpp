@@ -17,6 +17,8 @@
 #include "ast/BoolLiteral.h"
 #include "ast/StringLiteral.h"
 #include "ast/Name.h"
+#include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <unordered_set>
 
@@ -32,8 +34,8 @@ static void hashExpr(const Expr* e, std::string& out) {
     case NodeKind::FloatLiteral: out += std::to_string(static_cast<const FloatLiteral*>(e)->value); break;
     case NodeKind::BoolLiteral: out += (static_cast<const BoolLiteral*>(e)->value ? "1" : "0"); break;
     case NodeKind::StringLiteral: out += static_cast<const StringLiteral*>(e)->value; break;
-    case NodeKind::Unary: hashExpr(static_cast<const Unary*>(e)->operand.get(), out); break;
-    case NodeKind::Binary: {
+    case NodeKind::UnaryExpr: hashExpr(static_cast<const Unary*>(e)->operand.get(), out); break;
+    case NodeKind::BinaryExpr: {
       const auto* b = static_cast<const Binary*>(e);
       out += std::to_string(static_cast<int>(b->op));
       hashExpr(b->lhs.get(), out); hashExpr(b->rhs.get(), out);
@@ -79,9 +81,9 @@ static int exprComplexity(const Expr* e) {
     case NodeKind::StringLiteral:
     case NodeKind::Name:
       return 1;
-    case NodeKind::Unary:
+    case NodeKind::UnaryExpr:
       return 1 + exprComplexity(static_cast<const Unary*>(e)->operand.get());
-    case NodeKind::Binary: {
+    case NodeKind::BinaryExpr: {
       auto* b = static_cast<const Binary*>(e);
       return 1 + exprComplexity(b->lhs.get()) + exprComplexity(b->rhs.get());
     }
@@ -103,15 +105,13 @@ static std::unique_ptr<Expr> cloneExpr(const Expr* e) {
     case NodeKind::BoolLiteral: return std::make_unique<BoolLiteral>(static_cast<const BoolLiteral*>(e)->value);
     case NodeKind::StringLiteral: return std::make_unique<StringLiteral>(static_cast<const StringLiteral*>(e)->value);
     case NodeKind::Name: return std::make_unique<Name>(static_cast<const Name*>(e)->id);
-    case NodeKind::Unary: {
+    case NodeKind::UnaryExpr: {
       auto* u = static_cast<const Unary*>(e);
-      auto c = std::make_unique<Unary>(u->op); c->operand = cloneExpr(u->operand.get()); return c;
+      auto c = std::make_unique<Unary>(u->op, cloneExpr(u->operand.get())); return c;
     }
-    case NodeKind::Binary: {
+    case NodeKind::BinaryExpr: {
       auto* b = static_cast<const Binary*>(e);
-      auto c = std::make_unique<Binary>(b->op);
-      c->lhs = cloneExpr(b->lhs.get()); c->rhs = cloneExpr(b->rhs.get());
-      return c;
+      return std::make_unique<Binary>(b->op, cloneExpr(b->lhs.get()), cloneExpr(b->rhs.get()));
     }
     case NodeKind::TupleLiteral: {
       auto* t = static_cast<const TupleLiteral*>(e);
@@ -137,8 +137,8 @@ static bool equalExpr(const Expr* a, const Expr* b) {
     case NodeKind::BoolLiteral: return static_cast<const BoolLiteral*>(a)->value == static_cast<const BoolLiteral*>(b)->value;
     case NodeKind::StringLiteral: return static_cast<const StringLiteral*>(a)->value == static_cast<const StringLiteral*>(b)->value;
     case NodeKind::Name: return static_cast<const Name*>(a)->id == static_cast<const Name*>(b)->id;
-    case NodeKind::Unary: return static_cast<const Unary*>(a)->op == static_cast<const Unary*>(b)->op && equalExpr(static_cast<const Unary*>(a)->operand.get(), static_cast<const Unary*>(b)->operand.get());
-    case NodeKind::Binary: return static_cast<const Binary*>(a)->op == static_cast<const Binary*>(b)->op && equalExpr(static_cast<const Binary*>(a)->lhs.get(), static_cast<const Binary*>(b)->lhs.get()) && equalExpr(static_cast<const Binary*>(a)->rhs.get(), static_cast<const Binary*>(b)->rhs.get());
+    case NodeKind::UnaryExpr: return static_cast<const Unary*>(a)->op == static_cast<const Unary*>(b)->op && equalExpr(static_cast<const Unary*>(a)->operand.get(), static_cast<const Unary*>(b)->operand.get());
+    case NodeKind::BinaryExpr: return static_cast<const Binary*>(a)->op == static_cast<const Binary*>(b)->op && equalExpr(static_cast<const Binary*>(a)->lhs.get(), static_cast<const Binary*>(b)->lhs.get()) && equalExpr(static_cast<const Binary*>(a)->rhs.get(), static_cast<const Binary*>(b)->rhs.get());
     case NodeKind::TupleLiteral: {
       auto* ta = static_cast<const TupleLiteral*>(a); auto* tb = static_cast<const TupleLiteral*>(b);
       if (ta->elements.size() != tb->elements.size()) return false;
@@ -179,10 +179,13 @@ static std::size_t cseSubexprInStmt(std::vector<std::unique_ptr<Stmt>>& body, st
     void visit(const BoolLiteral& n) override { add(&n); }
     void visit(const StringLiteral& n) override { add(&n); }
     void visit(const Name& n) override { add(&n); }
+    void visit(const NoneLiteral&) override {}
+    void visit(const Call&) override {}
     void visit(const Unary& u) override { add(&u); if (u.operand) u.operand->accept(*this); }
     void visit(const Binary& b) override { add(&b); if (b.lhs) b.lhs->accept(*this); if (b.rhs) b.rhs->accept(*this); }
     void visit(const TupleLiteral& t) override { add(&t); for (const auto& el : t.elements) if (el) el->accept(*this); }
     void visit(const ListLiteral& l) override { add(&l); for (const auto& el : l.elements) if (el) el->accept(*this); }
+    void visit(const ObjectLiteral&) override {}
   };
   Walker w{counts, exemplar};
   if ((*it)->kind == NodeKind::ExprStmt) { (*it)->accept(w); }
@@ -219,6 +222,8 @@ static std::size_t cseSubexprInStmt(std::vector<std::unique_ptr<Stmt>>& body, st
     void visit(const BoolLiteral&) override {}
     void visit(const StringLiteral&) override {}
     void visit(const Name&) override {}
+    void visit(const NoneLiteral&) override {}
+    void visit(const Call&) override {}
     void visit(const Unary& u) override {
       auto* un = const_cast<Unary*>(&u);
       if (EffectAlias::isPureExpr(un)) {
@@ -241,6 +246,7 @@ static std::size_t cseSubexprInStmt(std::vector<std::unique_ptr<Stmt>>& body, st
     }
     void visit(const TupleLiteral& t) override { auto* tp = const_cast<TupleLiteral*>(&t); for (auto& el : tp->elements) replace(el); }
     void visit(const ListLiteral& l) override { auto* li = const_cast<ListLiteral*>(&l); for (auto& el : li->elements) replace(el); }
+    void visit(const ObjectLiteral&) override {}
   };
   Replacer rr{candKey, candExpr, tempName};
   if ((*it)->kind == NodeKind::ExprStmt) { (*it)->accept(rr); }

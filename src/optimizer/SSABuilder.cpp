@@ -17,11 +17,11 @@ namespace pycc::opt {
 using namespace pycc::ast;
 
 namespace {
-static bool isTerminator(const Stmt* s) {
+[[maybe_unused]] static bool isTerminator(const Stmt* s) {
   if (!s) return false;
   return (s->kind == NodeKind::ReturnStmt || s->kind == NodeKind::RaiseStmt);
 }
-static bool isSplit(const Stmt* s) {
+[[maybe_unused]] static bool isSplit(const Stmt* s) {
   if (!s) return false;
   switch (s->kind) {
     case NodeKind::IfStmt:
@@ -134,8 +134,8 @@ SSAFunction SSABuilder::build(FunctionDef& fn) {
       }
       case NodeKind::ReturnStmt:
       case NodeKind::RaiseStmt: {
-        const int b = placeStmtInNewBlock(s, ins);
-        // Terminators produce no fallthrough
+        // Place terminator in its own block; no fallthrough
+        (void)placeStmtInNewBlock(s, ins);
         return {};
       }
       default: {

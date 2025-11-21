@@ -19,6 +19,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <unordered_map>
 
 namespace pycc::parse {
 
@@ -26,6 +27,8 @@ class Parser {
  public:
   explicit Parser(lex::ITokenStream& stream) : ts_(stream) {}
   std::unique_ptr<ast::Module> parseModule();
+  // Aggregated parser errors collected during error-recovery; empty when parsing succeeded without recovery
+  const std::vector<std::string>& errors() const { return errors_; }
 
  private:
   lex::ITokenStream& ts_;
@@ -37,6 +40,12 @@ class Parser {
   // Best-effort farthest error tracking for improved messages
   size_t farthestPos_{0};
   std::string farthestExpected_{};
+  std::vector<std::string> errors_{}; // aggregated error messages during recovery
+
+  // Lazy source cache for error context
+  std::unordered_map<std::string, std::vector<std::string>> fileLines_{};
+  bool loadFileIfNeeded(const std::string& path);
+  std::string formatContext(const lex::Token& tok, const std::string& headMsg) const;
 
   // Initialize token buffer from the underlying stream once
   void initBuffer();
@@ -53,6 +62,10 @@ class Parser {
   void expect(lex::TokenKind tokenKind, const char* msg);
   // Record farthest parse expectation for better diagnostics
   void recordExpectation(const char* msg);
+  void addError(const std::string& msg);
+  void synchronize(); // best-effort recovery: skip to newline/dedent/end
+  // Skip until one of the given tokens is reached at top-level nesting for (), [], {}
+  void synchronizeUntil(std::initializer_list<lex::TokenKind> terms);
 
   std::unique_ptr<ast::FunctionDef> parseFunction();
   std::unique_ptr<ast::ClassDef> parseClass();

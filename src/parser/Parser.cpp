@@ -58,7 +58,10 @@
 #include <cstddef>
 #include <memory>
 #include <stdexcept>
+#include <sstream>
 #include <string>
+#include <fstream>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -111,6 +114,66 @@ void Parser::recordExpectation(const char* msg) {
   }
 }
 
+void Parser::addError(const std::string& msg) {
+  // Build a context-rich message using current token
+  const auto& got = peek();
+  std::ostringstream head;
+  head << "parse error: " << msg << " (got " << to_string(got.kind) << " '" << got.text << "')";
+  errors_.push_back(formatContext(got, head.str()));
+}
+
+void Parser::synchronize() {
+  // Delimiter-aware synchronization: balance (), [], {} while skipping ahead.
+  int paren = 0, bracket = 0, brace = 0;
+  for (;;) {
+    const auto& t = peek();
+    if (t.kind == TK::End) break;
+    if (t.kind == TK::LParen) { ++paren; (void)get(); continue; }
+    if (t.kind == TK::RParen) { if (paren > 0) --paren; (void)get(); continue; }
+    if (t.kind == TK::LBracket) { ++bracket; (void)get(); continue; }
+    if (t.kind == TK::RBracket) { if (bracket > 0) --bracket; (void)get(); continue; }
+    if (t.kind == TK::LBrace) { ++brace; (void)get(); continue; }
+    if (t.kind == TK::RBrace) { if (brace > 0) --brace; (void)get(); continue; }
+    // When not nested inside delimiters, newline/dedent is a good boundary
+    if (paren == 0 && bracket == 0 && brace == 0) {
+      if (t.kind == TK::Newline || t.kind == TK::Dedent) { break; }
+    }
+    (void)get();
+  }
+  if (peek().kind == TK::Newline) { (void)get(); }
+}
+
+void Parser::synchronizeUntil(std::initializer_list<lex::TokenKind> terms) {
+  int paren = 0, bracket = 0, brace = 0;
+  auto isTerm = [&](lex::TokenKind k) {
+    for (auto x : terms) if (x == k) return true; return false;
+  };
+  for (;;) {
+    const auto& t = peek();
+    if (t.kind == TK::End) break;
+    if (t.kind == TK::LParen) { ++paren; (void)get(); continue; }
+    if (t.kind == TK::RParen) {
+      if (paren > 0) { --paren; (void)get(); continue; }
+      if (paren == 0 && isTerm(TK::RParen)) break;
+      (void)get(); continue;
+    }
+    if (t.kind == TK::LBracket) { ++bracket; (void)get(); continue; }
+    if (t.kind == TK::RBracket) {
+      if (bracket > 0) { --bracket; (void)get(); continue; }
+      if (bracket == 0 && isTerm(TK::RBracket)) break;
+      (void)get(); continue;
+    }
+    if (t.kind == TK::LBrace) { ++brace; (void)get(); continue; }
+    if (t.kind == TK::RBrace) {
+      if (brace > 0) { --brace; (void)get(); continue; }
+      if (brace == 0 && isTerm(TK::RBrace)) break;
+      (void)get(); continue;
+    }
+    if (paren == 0 && bracket == 0 && brace == 0 && isTerm(t.kind)) break;
+    (void)get();
+  }
+}
+
 void Parser::expect(TK tokenKind, const char* msg) {
   if (!match(tokenKind)) {
     recordExpectation(msg);
@@ -129,25 +192,109 @@ void Parser::expect(TK tokenKind, const char* msg) {
 std::unique_ptr<ast::Module> Parser::parseModule() {
   initBuffer();
   auto mod = std::make_unique<ast::Module>();
+  // Stamp module with source filename from the first token, if any
+  if (!tokens_.empty()) {
+    mod->file = tokens_[0].file;
+    mod->line = 1; mod->col = 1;
+  }
   while (peek().kind != TK::End) {
     if (peek().kind == TK::Newline) { get(); continue; }
-    // Collect decorators if any
-    auto decorators = parseDecorators();
-    if (peek().kind == TK::Async && peekNext().kind == TK::Def) { get(); }
-    if (peek().kind == TK::Def) {
-      auto fn = parseFunction();
-      fn->decorators = std::move(decorators);
-      mod->functions.emplace_back(std::move(fn));
-    } else if (peek().kind == TK::Class) {
-      auto cls = parseClass();
-      cls->decorators = std::move(decorators);
-      mod->classes.emplace_back(std::move(cls));
-    } else {
-      // Skip unknown top-level constructs
-      get();
+    // Collect decorators if any, but recover if decorator expression parsing fails
+    std::vector<std::unique_ptr<ast::Expr>> decorators;
+    try {
+      decorators = parseDecorators();
+    } catch (const std::exception& ex) {
+      addError(ex.what());
+      synchronize();
+      continue;
+    }
+    try {
+      if (peek().kind == TK::Async && peekNext().kind == TK::Def) { get(); }
+      if (peek().kind == TK::Def) {
+        auto fn = parseFunction();
+        fn->decorators = std::move(decorators);
+        mod->functions.emplace_back(std::move(fn));
+      } else if (peek().kind == TK::Class) {
+        auto cls = parseClass();
+        cls->decorators = std::move(decorators);
+        mod->classes.emplace_back(std::move(cls));
+      } else {
+        // Fallback: attempt a statement at top-level; if it fails, recover
+        (void)parseStatement(); // shape-only at top level; discard
+      }
+    } catch (const std::exception& ex) {
+      addError(ex.what());
+      synchronize();
     }
   }
+  if (!errors_.empty()) {
+    // Build a primary message at the farthest point, with context
+    std::ostringstream oss;
+    if (!farthestExpected_.empty() && !tokens_.empty()) {
+      size_t idx = (farthestPos_ < tokens_.size()) ? farthestPos_ : (tokens_.size() - 1);
+      const auto& tok = tokens_[idx];
+      std::ostringstream head;
+      head << "expected " << farthestExpected_ << ", got " << to_string(tok.kind) << " '" << tok.text << "'";
+      oss << formatContext(tok, head.str());
+    } else {
+      oss << errors_.front();
+    }
+    // Append notes for additional recovered errors (limit to 3)
+    size_t notes = 0;
+    for (const auto& e : errors_) {
+      if (notes >= 3) break;
+      // Avoid duplicating the primary if same text
+      if (e == errors_.front()) continue;
+      oss << "\nnote: " << e;
+      ++notes;
+    }
+    throw std::runtime_error(oss.str());
+  }
   return mod;
+}
+
+bool Parser::loadFileIfNeeded(const std::string& path) {
+  if (path.empty()) return false;
+  if (fileLines_.find(path) != fileLines_.end()) return true;
+  std::ifstream in(path);
+  if (!in) { return false; }
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(in, line)) { lines.push_back(line); }
+  fileLines_[path] = std::move(lines);
+  return true;
+}
+
+std::string Parser::formatContext(const lex::Token& tok, const std::string& headMsg) const {
+  std::ostringstream out;
+  out << tok.file << ":" << tok.line << ":" << tok.col << ": " << headMsg;
+  // Try to print the source line and a caret under the token
+  auto it = fileLines_.find(tok.file);
+  bool have = (it != fileLines_.end());
+  if (!have) {
+    // const_cast to call non-const helper via this; safe since we only populate cache
+    auto* self = const_cast<Parser*>(this);
+    have = self->loadFileIfNeeded(tok.file);
+    it = self->fileLines_.find(tok.file);
+  }
+  if (have && tok.line > 0) {
+    const auto& lines = it->second;
+    if (static_cast<size_t>(tok.line) - 1 < lines.size()) {
+      const std::string& srcLine = lines[static_cast<size_t>(tok.line) - 1];
+      out << "\n" << srcLine;
+      // Build caret line
+      std::string caret;
+      int col = tok.col;
+      if (col < 1) col = 1;
+      caret.assign(static_cast<size_t>(col - 1), ' ');
+      caret.push_back('^');
+      // underline token length if available
+      size_t len = tok.text.size();
+      if (len > 1) caret.append(len - 1, '~');
+      out << "\n" << caret;
+    }
+  }
+  return out.str();
 }
 
 std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
@@ -156,35 +303,55 @@ std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
   if (nameTok.kind != TK::Ident) { throw std::runtime_error("Parse error: expected function name"); }
   expect(TK::LParen, "'('");
   std::vector<ast::Param> params;
-  parseParamList(params);
+  try {
+    parseParamList(params);
+  } catch (const std::exception& ex) {
+    addError(ex.what());
+    synchronizeUntil({TK::RParen, TK::Newline, TK::Dedent});
+  }
   expect(TK::RParen, "')'");
   expect(TK::Arrow, "'->'");
-  auto typeTok = get();
-  if (typeTok.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected return type ident"); }
-  // Optional generic shape: list[int], dict[str, int], tuple[int, str]
-  if (peek().kind == TK::LBracket) {
-    int depth = 0;
-    do {
+  ast::TypeKind retKind = ast::TypeKind::NoneType;
+  if (peek().kind == TK::LParen) {
+    // Parenthesized type grouping: record first TypeIdent as return kind (shape-only)
+    int depth = 1; get();
+    bool set = false;
+    while (depth > 0) {
       const auto& t = get();
-      if (t.kind == TK::LBracket) { ++depth; }
-      else if (t.kind == TK::RBracket) { --depth; }
-      else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) { break; }
-    } while (depth > 0);
-  }
-  // Accept union pipe syntax: T | U | ... (shape-only)
-  while (peek().kind == TK::Pipe) {
-    get(); // consume '|'
-    const auto& typeTok2 = get();
-    if (typeTok2.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected type ident after '|'"); }
+      if (!set && t.kind == TK::TypeIdent) { retKind = toTypeKind(t.text); set = true; }
+      if (t.kind == TK::LParen) ++depth;
+      else if (t.kind == TK::RParen) --depth;
+      else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break;
+    }
+  } else {
+    auto typeTok = get();
+    if (typeTok.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected return type ident"); }
+    retKind = toTypeKind(typeTok.text);
+    // Optional generic shape: list[int], dict[str, int], tuple[int, str]
     if (peek().kind == TK::LBracket) {
-      int d = 0; do { const auto& t = get(); if (t.kind == TK::LBracket) ++d; else if (t.kind == TK::RBracket) --d; else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break; } while (d > 0);
+      int depth = 0;
+      do {
+        const auto& t = get();
+        if (t.kind == TK::LBracket) { ++depth; }
+        else if (t.kind == TK::RBracket) { --depth; }
+        else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) { break; }
+      } while (depth > 0);
+    }
+    // Accept union pipe syntax: T | U | ... (shape-only)
+    while (peek().kind == TK::Pipe) {
+      get(); // consume '|'
+      const auto& typeTok2 = get();
+      if (typeTok2.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected type ident after '|'"); }
+      if (peek().kind == TK::LBracket) {
+        int d = 0; do { const auto& t = get(); if (t.kind == TK::LBracket) ++d; else if (t.kind == TK::RBracket) --d; else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break; } while (d > 0);
+      }
     }
   }
   expect(TK::Colon, "':'");
   if (peek().kind == TK::Newline) { get(); }
   expect(TK::Indent, "indent");
 
-  auto func = std::make_unique<ast::FunctionDef>(nameTok.text, toTypeKind(typeTok.text));
+  auto func = std::make_unique<ast::FunctionDef>(nameTok.text, retKind);
   func->params = std::move(params);
   while (peek().kind != TK::Dedent && peek().kind != TK::End) {
     if (peek().kind == TK::Newline) { get(); continue; }
@@ -202,10 +369,12 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
     return std::make_unique<ast::DefStmt>(std::move(fn));
   }
   if (peek().kind == TK::Return) {
-    get();
+    const auto retTok = get();
     auto expr = parseExpr();
     // NEWLINE may follow (but parseFunction loop also handles)
-    return std::make_unique<ast::ReturnStmt>(std::move(expr));
+    auto node = std::make_unique<ast::ReturnStmt>(std::move(expr));
+    node->line = retTok.line; node->col = retTok.col; node->file = retTok.file;
+    return node;
   }
   if (peek().kind == TK::Del) {
     get();
@@ -263,7 +432,11 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
       }
       if (!isValidAssignmentTarget(target.get())) { throw std::runtime_error("Parse error: invalid augmented assignment target"); }
       setTargetContext(target.get(), ast::ExprContext::Store);
-      return std::make_unique<ast::AugAssignStmt>(std::move(target), op, std::move(rhs));
+      auto node = std::make_unique<ast::AugAssignStmt>(std::move(target), op, std::move(rhs));
+      // Prefer the target's source location; fallback to operator token
+      if (node->target) { node->line = node->target->line; node->col = node->target->col; node->file = node->target->file; }
+      else { node->line = opTok.line; node->col = opTok.col; node->file = opTok.file; }
+      return node;
     }
   }
   // Assignment (supports tuple/list/attr/subscript targets, possibly comma-separated)
@@ -292,7 +465,14 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
     }
     auto nameExpr = std::make_unique<ast::Name>(nameTok.text);
     if (tkind != ast::TypeKind::NoneType) nameExpr->setType(tkind);
-    if (peek().kind == TK::Equal) { get(); auto rhs = parseExpr(); auto asg = std::make_unique<ast::AssignStmt>(nameTok.text, std::move(rhs)); asg->targets.emplace_back(std::move(nameExpr)); return asg; }
+    if (peek().kind == TK::Equal) {
+      get();
+      auto rhs = parseExpr();
+      auto asg = std::make_unique<ast::AssignStmt>(nameTok.text, std::move(rhs));
+      asg->targets.emplace_back(std::move(nameExpr));
+      asg->line = nameTok.line; asg->col = nameTok.col; asg->file = nameTok.file;
+      return asg;
+    }
     return std::make_unique<ast::ExprStmt>(std::move(nameExpr));
   }
   if (hasPendingEqualOnLine()) {
@@ -323,6 +503,10 @@ std::unique_ptr<ast::Stmt> Parser::parseStatement() {
     }
     auto asg = std::make_unique<ast::AssignStmt>(legacy, std::move(rhs));
     for (auto& t : targets) { asg->targets.emplace_back(std::move(t)); }
+    if (!asg->targets.empty()) {
+      const auto* t0 = asg->targets.front().get();
+      asg->line = t0->line; asg->col = t0->col; asg->file = t0->file;
+    }
     return asg;
   }
   // Fallback: expression statement
@@ -363,10 +547,21 @@ void Parser::parseParamList(std::vector<ast::Param>& outParams) {
       if (peek().kind == TK::RParen) { break; }
       // Else continue parsing next param normally
     } else {
-      const auto& pNameTok = get(); if (pNameTok.kind != TK::Ident) { throw std::runtime_error("Parse error: expected parameter name"); }
+      const auto& pNameTok = get();
+      if (pNameTok.kind != TK::Ident) {
+        addError("Parse error: expected parameter name");
+        synchronizeUntil({TK::Comma, TK::RParen});
+        if (peek().kind == TK::Comma) { get(); if (peek().kind == TK::RParen) break; continue; }
+        break;
+      }
       ast::Param param; param.name = pNameTok.text; param.type = ast::TypeKind::NoneType; param.isKwOnly = kwOnly;
-      parseOptionalParamType(param);
-      if (peek().kind == TK::Equal) { get(); param.defaultValue = parseExpr(); }
+      try { parseOptionalParamType(param); }
+      catch (const std::exception& ex) { addError(ex.what()); synchronizeUntil({TK::Comma, TK::RParen}); }
+      if (peek().kind == TK::Equal) {
+        get();
+        try { param.defaultValue = parseExpr(); }
+        catch (const std::exception& ex) { addError(ex.what()); synchronizeUntil({TK::Comma, TK::RParen}); }
+      }
       outParams.push_back(std::move(param));
     }
     if (peek().kind != TK::Comma) break; get(); if (peek().kind == TK::RParen) break;
@@ -376,6 +571,22 @@ void Parser::parseParamList(std::vector<ast::Param>& outParams) {
 void Parser::parseOptionalParamType(ast::Param& param) {
   if (peek().kind != TK::Colon) { return; }
   get();
+  if (peek().kind == TK::LParen) {
+    // Parenthesized grouping: take first TypeIdent inside as shape-only
+    int depth = 1; get();
+    bool set = false;
+    while (depth > 0) {
+      const auto& t = get();
+      if (!set && t.kind == TK::TypeIdent) { param.type = toTypeKind(t.text); set = true; }
+      if (t.kind == TK::LParen) ++depth;
+      else if (t.kind == TK::RParen) --depth;
+      else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break;
+    }
+    if (!set) { param.type = ast::TypeKind::NoneType; }
+    param.unionTypes.clear();
+    param.unionTypes.push_back(param.type);
+    return;
+  }
   const auto& pTypeTok = get();
   if (pTypeTok.kind != TK::TypeIdent) { throw std::runtime_error("Parse error: expected type ident after ':'"); }
   param.type = toTypeKind(pTypeTok.text);
@@ -407,6 +618,16 @@ void Parser::parseOptionalParamType(ast::Param& param) {
     if (peek().kind == TK::LBracket) {
       int d = 1; get();
       while (d > 0) { const auto& t = get(); if (t.kind == TK::LBracket) ++d; else if (t.kind == TK::RBracket) --d; else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break; }
+    }
+  }
+  // Accept parenthesized grouping for type annotations: NAME: (T | U)
+  if (peek().kind == TK::LParen) {
+    int depth = 1; get();
+    while (depth > 0) {
+      const auto& t = get();
+      if (t.kind == TK::LParen) ++depth;
+      else if (t.kind == TK::RParen) --depth;
+      else if (t.kind == TK::End || t.kind == TK::Newline || t.kind == TK::Dedent) break;
     }
   }
 }
@@ -901,7 +1122,14 @@ std::vector<std::unique_ptr<ast::Expr>> Parser::parseDecorators() {
   std::vector<std::unique_ptr<ast::Expr>> decs;
   while (peek().kind == TK::At) {
     get();
-    decs.emplace_back(parseExpr());
+    // Defensive: decorator expressions should be a single logical line; try/catch to recover
+    try {
+      decs.emplace_back(parseExpr());
+    } catch (const std::exception& ex) {
+      addError(ex.what());
+      synchronize();
+      continue;
+    }
     if (peek().kind == TK::Newline) { get(); }
   }
   return decs;
@@ -1161,20 +1389,25 @@ Parser::ArgList Parser::parseArgList() {
   bool seenKeyword = false;
   if (peek().kind != TK::RParen) {
     for (;;) {
-      if (peek().kind == TK::StarStar) {
-        get(); out.kwStarArgs.emplace_back(parseExpr());
-      } else if (peek().kind == TK::Star) {
-        get(); out.starArgs.emplace_back(parseExpr());
-      } else if (peek().kind == TK::Ident && peekNext().kind == TK::Equal) {
-        // keyword argument
-        const auto nameTok = get(); get(); // consume '='
-        ast::KeywordArg kw{nameTok.text, parseExpr()};
-        out.keywords.emplace_back(std::move(kw));
-        seenKeyword = true;
-      } else {
-        // positional argument
-        if (seenKeyword) { throw std::runtime_error("Parse error: positional argument follows keyword argument"); }
-        out.positional.emplace_back(parseExpr());
+      try {
+        if (peek().kind == TK::StarStar) {
+          get(); out.kwStarArgs.emplace_back(parseExpr());
+        } else if (peek().kind == TK::Star) {
+          get(); out.starArgs.emplace_back(parseExpr());
+        } else if (peek().kind == TK::Ident && peekNext().kind == TK::Equal) {
+          // keyword argument
+          const auto nameTok = get(); get(); // consume '='
+          ast::KeywordArg kw{nameTok.text, parseExpr()};
+          out.keywords.emplace_back(std::move(kw));
+          seenKeyword = true;
+        } else {
+          // positional argument
+          if (seenKeyword) { throw std::runtime_error("Parse error: positional argument follows keyword argument"); }
+          out.positional.emplace_back(parseExpr());
+        }
+      } catch (const std::exception& ex) {
+        addError(ex.what());
+        synchronizeUntil({TK::Comma, TK::RParen});
       }
       if (peek().kind != TK::Comma) break;
       get();

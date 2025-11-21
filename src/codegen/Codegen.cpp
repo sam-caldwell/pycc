@@ -614,17 +614,9 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
       void visit(const ast::Subscript& sub) override {
         if (!sub.value || !sub.slice) { throw std::runtime_error("null subscript"); }
-        // Evaluate base and index
+        // Evaluate base
         auto base = run(*sub.value);
         if (base.k != ValKind::Ptr) { throw std::runtime_error("subscript base must be pointer"); }
-        auto idxV = run(*sub.slice);
-        std::string idx64;
-        if (idxV.k == ValKind::I32) {
-          std::ostringstream z; z << "%t" << temp++;
-          ir << "  " << z.str() << " = sext i32 " << idxV.s << " to i64\n"; idx64 = z.str();
-        } else {
-          throw std::runtime_error("subscript index must be int");
-        }
         // Heuristic: decide between string/list/dict by literal or slot tag
         bool isList = (sub.value->kind == ast::NodeKind::ListLiteral);
         bool isStr = (sub.value->kind == ast::NodeKind::StringLiteral);
@@ -637,13 +629,19 @@ std::string Codegen::generateIR(const ast::Module& mod) {
             isDict = (it->second.tag == PtrTag::Dict);
           }
         }
-        if (isList) {
-          std::ostringstream r; r << "%t" << temp++;
-          ir << "  " << r.str() << " = call ptr @pycc_list_get(ptr " << base.s << ", i64 " << idx64 << ")\n";
-          out = Value{r.str(), ValKind::Ptr}; return;
-        }
-        if (isStr) {
-          // return 1-char slice
+        if (isList || isStr) {
+          auto idxV = run(*sub.slice);
+          std::string idx64;
+          if (idxV.k == ValKind::I32) {
+            std::ostringstream z; z << "%t" << temp++;
+            ir << "  " << z.str() << " = sext i32 " << idxV.s << " to i64\n"; idx64 = z.str();
+          } else { throw std::runtime_error("subscript index must be int"); }
+          if (isList) {
+            std::ostringstream r; r << "%t" << temp++;
+            ir << "  " << r.str() << " = call ptr @pycc_list_get(ptr " << base.s << ", i64 " << idx64 << ")\n";
+            out = Value{r.str(), ValKind::Ptr}; return;
+          }
+          // string slice of length 1
           std::ostringstream r; r << "%t" << temp++;
           ir << "  " << r.str() << " = call ptr @pycc_string_slice(ptr " << base.s << ", i64 " << idx64 << ", i64 1)\n";
           out = Value{r.str(), ValKind::Ptr}; return;
@@ -1512,13 +1510,9 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           if (tgtExpr && tgtExpr->kind == ast::NodeKind::Subscript) {
             const auto* sub = static_cast<const ast::Subscript*>(tgtExpr);
             if (!sub->value || !sub->slice) { throw std::runtime_error("null subscript target"); }
-            // Evaluate container and index
+            // Evaluate container first
             auto base = eval(sub->value.get());
             if (base.k != ValKind::Ptr) { throw std::runtime_error("subscript base must be pointer"); }
-            auto idxV = eval(sub->slice.get());
-            std::string idx64;
-            if (idxV.k == ValKind::I32) { std::ostringstream z; z << "%t" << temp++; ir << "  " << z.str() << " = sext i32 " << idxV.s << " to i64" << dbg() << "\n"; idx64 = z.str(); }
-            else { throw std::runtime_error("subscript index must be int"); }
             bool isList = (sub->value->kind == ast::NodeKind::ListLiteral);
             bool isDict = (sub->value->kind == ast::NodeKind::DictLiteral);
             if (!isList && !isDict && sub->value->kind == ast::NodeKind::Name) {
@@ -1537,13 +1531,28 @@ std::string Codegen::generateIR(const ast::Module& mod) {
             else if (rv.k == ValKind::I1) { std::ostringstream w; w << "%t" << temp++; ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << rv.s << ")" << dbg() << "\n"; vptr = w.str(); }
             else { throw std::runtime_error("unsupported rhs for list store"); }
             if (isList) {
+              // list index must be int
+              auto idxV = eval(sub->slice.get());
+              std::string idx64;
+              if (idxV.k == ValKind::I32) { std::ostringstream z; z << "%t" << temp++; ir << "  " << z.str() << " = sext i32 " << idxV.s << " to i64" << dbg() << "\n"; idx64 = z.str(); }
+              else { throw std::runtime_error("subscript index must be int"); }
               ir << "  call void @pycc_list_set(ptr " << base.s << ", i64 " << idx64 << ", ptr " << vptr << ")" << dbg() << "\n";
             } else {
-              // dict_set takes a slot; create a temp slot around base
+              // dict_set takes boxed key and a slot; create a temp slot around base
+              // Evaluate and box key as needed
+              auto key = eval(sub->slice.get());
+              std::string kptr;
+              if (key.k == ValKind::Ptr) { kptr = key.s; }
+              else if (key.k == ValKind::I32) {
+                if (!key.s.empty() && key.s[0] != '%') { std::ostringstream w2; w2 << "%t" << temp++; ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << key.s << ")" << dbg() << "\n"; kptr = w2.str(); }
+                else { std::ostringstream w, w2; w << "%t" << temp++; w2 << "%t" << temp++; ir << "  " << w.str() << " = sext i32 " << key.s << " to i64" << dbg() << "\n"; ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")" << dbg() << "\n"; kptr = w2.str(); }
+              } else if (key.k == ValKind::F64) { std::ostringstream w; w << "%t" << temp++; ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << key.s << ")" << dbg() << "\n"; kptr = w.str(); }
+              else if (key.k == ValKind::I1) { std::ostringstream w; w << "%t" << temp++; ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << key.s << ")" << dbg() << "\n"; kptr = w.str(); }
+              else { throw std::runtime_error("unsupported dict key"); }
               std::ostringstream slot; slot << "%t" << temp++;
               ir << "  " << slot.str() << " = alloca ptr" << dbg() << "\n";
               ir << "  store ptr " << base.s << ", ptr " << slot.str() << dbg() << "\n";
-              ir << "  call void @pycc_dict_set(ptr " << slot.str() << ", ptr " << (idxV.k==ValKind::Ptr? idxV.s : idx64) << ", ptr " << vptr << ")" << dbg() << "\n";
+              ir << "  call void @pycc_dict_set(ptr " << slot.str() << ", ptr " << kptr << ", ptr " << vptr << ")" << dbg() << "\n";
             }
             return;
           }
@@ -1937,6 +1946,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
 
       void visit(const ast::TryStmt& ts) override {
         emitLoc(ir, ts, "try");
+        auto dbg = [this]() -> std::string { return (curLocId > 0) ? (std::string(", !dbg !") + std::to_string(curLocId)) : std::string(); };
         // Labels
         std::ostringstream chkLbl, excLbl, elseLbl, finLbl, endLbl, lpadLbl;
         chkLbl << "try.check" << ifCounter;
@@ -2112,6 +2122,9 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           StmtEmitter child{ir, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef, sigs, retParamIdxs, subDbgId, nextDbgId, dbgLocs, dbgLocKeyToId, varMdId, dbgVars, diIntId, diBoolId, diDoubleId, diPtrId, diExprId};
           child.breakLabels = breakLabels;
           child.continueLabels = continueLabels;
+          // Propagate exception/landingpad context into nested emitter
+          child.excCheckLabel = excCheckLabel;
+          child.lpadLabel = lpadLabel;
           st->accept(child);
           if (child.returned) brReturned = true;
         }
@@ -2119,7 +2132,9 @@ std::string Codegen::generateIR(const ast::Module& mod) {
       }
     };
 
-    StmtEmitter root{irStream, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs, retParamIdxs, subDbgId, nextDbgId, dbgLocs, dbgLocKeyToId};
+    StmtEmitter root{irStream, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs, retParamIdxs,
+                     subDbgId, nextDbgId, dbgLocs, dbgLocKeyToId, varMdId, dbgVars, diIntId, diBoolId, diDoubleId,
+                     diPtrId, diExprId};
     returned = root.emitStmtList(func->body);
     if (!returned) {
       // default return based on function type

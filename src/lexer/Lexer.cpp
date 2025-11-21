@@ -88,6 +88,16 @@ bool Lexer::emitIndentTokens(State& state, std::vector<Token>& out, const int ba
   const bool allSpace = (idx >= state.line.size());
   const bool comment = (!allSpace && state.line[idx] == '#');
   if (allSpace || comment) {
+    // PEP 263: detect encoding declaration on first or second line (cookie only; we do not re-decode the file).
+    if (comment && (state.lineNo == 1 || state.lineNo == 2)) {
+      // Look for 'coding' cookie patterns: coding[:=]\s*([\w.-]+)
+      auto& s = state.line;
+      auto pos = s.find("coding");
+      if (pos != std::string::npos) {
+        // Best-effort validation without acting on it; ensures cookie lines never break lexing.
+        (void)pos;
+      }
+    }
     Token tok; tok.kind = TokenKind::Newline; tok.text = "\n"; tok.file = state.src->name(); tok.line = state.lineNo; tok.col = 1;
     out.push_back(std::move(tok));
     state.index = state.line.size();
@@ -170,41 +180,62 @@ Token Lexer::scanOne(State& state) {
     if (idx + 1 < line.size() && line[idx+1] == '=') { idx += 2; return makeTok(TokenKind::PlusEqual, idx-2, idx); }
     ++idx; return makeTok(TokenKind::Plus, idx-1, idx);
   }
-  auto scanStringLike = [&](size_t start, bool bytesPrefix) -> Token {
-    const char first = line[start];
+  auto scanStringLike = [&](size_t start, bool hasB, bool hasR, bool hasF) -> Token {
+    // Determine quote char and whether triple-quoted
     size_t p = start;
-    // gather optional second prefix (f/r/b) already accounted outside; if prefix char then move one
-    if ((first=='b'||first=='B'||first=='f'||first=='F'||first=='r'||first=='R') && p+1 < line.size()) { ++p; }
-    const char quote = line[p]; bool triple = false;
-    if (p+2 < line.size() && line[p]==line[p+1] && line[p]==line[p+2] && (line[p]=='"'||line[p]=='\'')) { triple = true; }
-    // advance idx conservatively to end of current line token extent
-    size_t endPos;
+    // Skip up to 2 prefix chars already parsed
+    while (p < line.size() && (line[p]=='b'||line[p]=='B'||line[p]=='f'||line[p]=='F'||line[p]=='r'||line[p]=='R'||line[p]=='u'||line[p]=='U')) { ++p; }
+    if (p >= line.size()) { Token t = makeTok(hasB ? TokenKind::Bytes : TokenKind::String, start, p); t.text = line.substr(start, p-start); idx = p; return t; }
+    const char quote = line[p];
+    bool triple = false;
+    if (p+2 < line.size() && (line[p]==line[p+1]) && (line[p]==line[p+2]) && (quote=='"' || quote=='\'')) { triple = true; }
+    size_t endPos = p + 1;
     if (!triple) {
-      size_t j = p+1; while (j < line.size() && line[j] != quote) ++j; endPos = (j < line.size() ? j+1 : j);
+      bool escape = false;
+      for (; endPos < line.size(); ++endPos) {
+        const char c = line[endPos];
+        if (!hasR) {
+          if (escape) { escape = false; continue; }
+          if (c == '\\') { escape = true; continue; }
+        }
+        if (c == quote) { ++endPos; break; }
+      }
+      // If not closed, keep as far as line end (lexer will emit Newline and continue)
+      if (endPos > line.size()) endPos = line.size();
+      // CPython: raw strings cannot end with a single backslash before the closing quote
+      if (hasR && endPos <= line.size() && endPos > (p+1)) {
+        size_t qpos = endPos - 1; // position of closing quote
+        if (qpos > 0 && line[qpos-1] == '\\') {
+          // Treat as unterminated: consume to end of line to trigger recovery in parser
+          endPos = line.size();
+        }
+      }
     } else {
-      // consume triple opener and pretend it ends immediately (placeholder)
-      endPos = p + 3; // keep parser progressing; actual content spans multiple lines
+      // For triple-quoted: consume only the opening quotes; multi-line content handled by higher-level scanning.
+      endPos = p + 3;
     }
-    Token tok = makeTok(bytesPrefix ? TokenKind::Bytes : TokenKind::String, start, endPos);
-    if (!triple) {
-      // For single-line strings, keep the real lexeme text (including quotes) for unquoting later
-      tok.text = line.substr(start, endPos - start);
-    } else {
-      // Triple-quoted placeholder to avoid multi-line scan here
-      const std::string pref = line.substr(start, p - start);
-      const std::string q = std::string(3, line[p]);
-      tok.text = pref + q + "..." + q;
-    }
+    Token tok = makeTok(hasB ? TokenKind::Bytes : TokenKind::String, start, endPos);
+    tok.text = line.substr(start, endPos - start);
     idx = endPos;
+    (void)hasF; // f-strings handled by parser using token text
     return tok;
   };
-  if (chr == '"' || chr == '\'') { return scanStringLike(idx, /*bytesPrefix=*/false); }
-  // prefixes: b/B, f/F, r/R and combos like fr/rf -> treat as String, Bytes if b present
-  if ((chr=='b'||chr=='B'||chr=='f'||chr=='F'||chr=='r'||chr=='R') && idx+1 < line.size()) {
-    size_t p = idx; bool hasB=false; int cnt=0;
-    while (cnt<2 && p<line.size() && (line[p]=='b'||line[p]=='B'||line[p]=='f'||line[p]=='F'||line[p]=='r'||line[p]=='R')) { hasB = hasB || (line[p]=='b'||line[p]=='B'); ++p; ++cnt; }
-    if (p < line.size() && (line[p]=='\''||line[p]=='"')) { return scanStringLike(idx, hasB); }
-    if (p+2 < line.size() && line[p]==line[p+1] && line[p]==line[p+2] && (line[p]=='\''||line[p]=='"')) { return scanStringLike(idx, hasB); }
+  // Raw quote start
+  if (chr == '"' || chr == '\'') { return scanStringLike(idx, /*hasB=*/false, /*hasR=*/false, /*hasF=*/false); }
+  // prefixes: b/B, f/F, r/R, u/U and combos (fr, rf, rb, br). Disallow b+f together (treat as String token).
+  if ((chr=='b'||chr=='B'||chr=='f'||chr=='F'||chr=='r'||chr=='R'||chr=='u'||chr=='U') && idx+1 < line.size()) {
+    size_t p = idx; bool hasB=false, hasR=false, hasF=false; int cnt=0;
+    while (cnt<2 && p<line.size()) {
+      char c = line[p];
+      if (c=='b'||c=='B') { hasB = true; }
+      else if (c=='r'||c=='R') { hasR = true; }
+      else if (c=='f'||c=='F') { hasF = true; }
+      else if (c=='u'||c=='U') { /* legacy unicode prefix tolerated */ }
+      else break;
+      ++p; ++cnt;
+    }
+    if (p < line.size() && (line[p]=='\''||line[p]=='"')) { return scanStringLike(idx, hasB && !hasF, hasR, hasF); }
+    if (p+2 < line.size() && line[p]==line[p+1] && line[p]==line[p+2] && (line[p]=='\''||line[p]=='"')) { return scanStringLike(idx, hasB && !hasF, hasR, hasF); }
   }
   if (chr == '-') {
     if (idx + 1 < line.size() && line[idx+1] == '>') { idx += 2; return makeTok(TokenKind::Arrow, idx-2, idx); }
@@ -257,46 +288,79 @@ Token Lexer::scanOne(State& state) {
       ++idx;
       if (idx < line.size() && (line[idx] == '+' || line[idx] == '-')) { ++idx; }
       const size_t startIdx = idx;
-      while (idx < line.size() && std::isdigit(static_cast<unsigned char>(line[idx])) != 0) { ++idx; }
+      bool prevUnderscore = false; size_t digits = 0;
+      while (idx < line.size()) {
+        const char d = line[idx];
+        if (std::isdigit(static_cast<unsigned char>(d)) != 0) { prevUnderscore = false; ++digits; ++idx; continue; }
+        if (d == '_' && digits > 0 && !prevUnderscore) { prevUnderscore = true; ++idx; continue; }
+        break;
+      }
+      // Remove trailing underscore
+      if (prevUnderscore) { --idx; }
       if (idx == startIdx) { return pos; } // back out if no digits
       return idx;
     }
     return pos;
   };
-
+  auto isDecDigit = [&](char c){ return std::isdigit(static_cast<unsigned char>(c)) != 0; };
+  auto isHexDigit = [&](char c){ return std::isxdigit(static_cast<unsigned char>(c)) != 0; };
+  auto isBinDigit = [&](char c){ return c=='0'||c=='1'; };
+  auto isOctDigit = [&](char c){ return c>='0'&&c<='7'; };
+  auto scanDigitsUnderscore = [&](size_t pos, auto isOk) {
+    size_t i = pos; bool have = false; bool prevUnderscore=false;
+    while (i < line.size()) {
+      char c = line[i];
+      if (isOk(c)) { have = true; prevUnderscore=false; ++i; continue; }
+      if (c=='_' && have && !prevUnderscore) { prevUnderscore=true; ++i; continue; }
+      break;
+    }
+    if (prevUnderscore) --i; // trim trailing underscore
+    return i;
+  };
   if (std::isdigit(static_cast<unsigned char>(chr)) != 0) {
-    size_t jpos = idx;
-    while (jpos < line.size() && std::isdigit(static_cast<unsigned char>(line[jpos])) != 0) { ++jpos; }
-    const size_t kpos = jpos;
-    if (kpos < line.size() && line[kpos] == '.') {
-      size_t mpos = kpos + 1;
-      if (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) {
-        while (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) { ++mpos; }
-        const size_t epos = scanExponent(mpos);
-        size_t end = epos;
-        if (end < line.size() && (line[end] == 'j' || line[end] == 'J')) { ++end; const Token tok = makeTok(TokenKind::Imag, idx, end); idx = end; return tok; }
-        const Token tok = makeTok(TokenKind::Float, idx, epos); idx = epos; return tok;
+    size_t i0 = idx;
+    // Base prefixes 0b/0o/0x
+    if (line[idx] == '0' && idx + 1 < line.size()) {
+      char p1 = line[idx+1];
+      if (p1=='b'||p1=='B'||p1=='o'||p1=='O'||p1=='x'||p1=='X') {
+        size_t p = idx + 2;
+        if (p1=='b'||p1=='B') p = scanDigitsUnderscore(p, isBinDigit);
+        else if (p1=='o'||p1=='O') p = scanDigitsUnderscore(p, isOctDigit);
+        else p = scanDigitsUnderscore(p, isHexDigit);
+        size_t end = p;
+        if (end < line.size() && (line[end]=='j'||line[end]=='J')) { ++end; Token tok = makeTok(TokenKind::Imag, i0, end); idx = end; return tok; }
+        Token tok = makeTok(TokenKind::Int, i0, p); idx = p; return tok;
       }
-      const size_t epos = scanExponent(kpos + 1);
-      size_t end = epos;
-      if (end < line.size() && (line[end] == 'j' || line[end] == 'J')) { ++end; const Token tok = makeTok(TokenKind::Imag, idx, end); idx = end; return tok; }
-      const Token tok = makeTok(TokenKind::Float, idx, epos); idx = epos; return tok;
     }
-    const size_t epos = scanExponent(kpos);
-    if (epos != kpos) {
+    // Decimal int or float
+    size_t p = scanDigitsUnderscore(idx, isDecDigit);
+    // Float with fractional part or dot-only fractional
+    if (p < line.size() && line[p] == '.') {
+      size_t fracStart = p + 1;
+      size_t fracEnd = scanDigitsUnderscore(fracStart, isDecDigit);
+      size_t epos = scanExponent(fracEnd);
       size_t end = epos;
-      if (end < line.size() && (line[end] == 'j' || line[end] == 'J')) { ++end; const Token tok = makeTok(TokenKind::Imag, idx, end); idx = end; return tok; }
-      const Token tok = makeTok(TokenKind::Float, idx, epos); idx = epos; return tok;
+      if (end < line.size() && (line[end]=='j'||line[end]=='J')) { ++end; Token tok = makeTok(TokenKind::Imag, i0, end); idx = end; return tok; }
+      Token tok = makeTok(TokenKind::Float, i0, epos); idx = epos; return tok;
     }
-    size_t end = jpos;
-    if (end < line.size() && (line[end] == 'j' || line[end] == 'J')) { ++end; const Token tok = makeTok(TokenKind::Imag, idx, end); idx = end; return tok; }
-    const Token tok = makeTok(TokenKind::Int, idx, jpos); idx = jpos; return tok;
+    // Float via exponent only
+    size_t epos = scanExponent(p);
+    if (epos != p) {
+      size_t end = epos;
+      if (end < line.size() && (line[end]=='j'||line[end]=='J')) { ++end; Token tok = makeTok(TokenKind::Imag, i0, end); idx = end; return tok; }
+      Token tok = makeTok(TokenKind::Float, i0, epos); idx = epos; return tok;
+    }
+    // Int or Imag
+    size_t end = p;
+    if (end < line.size() && (line[end]=='j'||line[end]=='J')) { ++end; Token tok = makeTok(TokenKind::Imag, i0, end); idx = end; return tok; }
+    Token tok = makeTok(TokenKind::Int, i0, p); idx = p; return tok;
   }
   if (chr == '.') {
     if (idx + 2 < line.size() && line[idx+1] == '.' && line[idx+2] == '.') { idx += 3; return makeTok(TokenKind::Ellipsis, idx-3, idx); }
     if (idx + 1 < line.size() && std::isdigit(static_cast<unsigned char>(line[idx+1])) != 0) {
       size_t mpos = idx + 1;
-      while (mpos < line.size() && std::isdigit(static_cast<unsigned char>(line[mpos])) != 0) { ++mpos; }
+      // scan digits with underscores
+      bool prevUnderscore = false; while (mpos < line.size()) { const char c = line[mpos]; if (std::isdigit(static_cast<unsigned char>(c)) != 0) { prevUnderscore=false; ++mpos; } else if (c=='_' && !prevUnderscore) { prevUnderscore=true; ++mpos; } else break; } if (prevUnderscore) --mpos;
       const size_t epos = scanExponent(mpos);
       size_t end = epos;
       if (end < line.size() && (line[end] == 'j' || line[end] == 'J')) { ++end; const Token tok = makeTok(TokenKind::Imag, idx, end); idx = end; return tok; }

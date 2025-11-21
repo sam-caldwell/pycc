@@ -36,8 +36,8 @@ static void hashExpr(const Expr* e, std::string& out) {
     case NodeKind::BoolLiteral: out += (static_cast<const BoolLiteral*>(e)->value ? "1" : "0"); break;
     case NodeKind::StringLiteral: out += static_cast<const StringLiteral*>(e)->value; break;
     case NodeKind::Name: out += static_cast<const Name*>(e)->id; break;
-    case NodeKind::Unary: hashExpr(static_cast<const Unary*>(e)->operand.get(), out); break;
-    case NodeKind::Binary: { const auto* b = static_cast<const Binary*>(e); out += std::to_string(static_cast<int>(b->op)); hashExpr(b->lhs.get(), out); hashExpr(b->rhs.get(), out); break; }
+    case NodeKind::UnaryExpr: hashExpr(static_cast<const Unary*>(e)->operand.get(), out); break;
+    case NodeKind::BinaryExpr: { const auto* b = static_cast<const Binary*>(e); out += std::to_string(static_cast<int>(b->op)); hashExpr(b->lhs.get(), out); hashExpr(b->rhs.get(), out); break; }
     case NodeKind::TupleLiteral: { const auto* t = static_cast<const TupleLiteral*>(e); for (const auto& el : t->elements) hashExpr(el.get(), out); break; }
     case NodeKind::ListLiteral: { const auto* l = static_cast<const ListLiteral*>(e); for (const auto& el : l->elements) hashExpr(el.get(), out); break; }
     case NodeKind::Attribute: { const auto* a = static_cast<const Attribute*>(e); hashExpr(a->value.get(), out); out += '.'; out += a->attr; break; }
@@ -66,11 +66,20 @@ static std::size_t gvnBlock(SSABlock& bb,
     std::unique_ptr<Expr>* slot{nullptr};
     explicit Rewriter(std::unordered_map<std::string,std::string>& vt, std::size_t& ch) : valTable(vt), changes(ch) {}
     void rw(std::unique_ptr<Expr>& e) { if (!e) return; slot = &e; e->accept(*this); }
+    // Required pure virtual stubs
+    void visit(const Module&) override {}
+    void visit(const FunctionDef&) override {}
+    void visit(const ReturnStmt&) override {}
+    void visit(const AssignStmt&) override {}
+    void visit(const IfStmt&) override {}
+    void visit(const ExprStmt&) override {}
     void visit(const IntLiteral&) override {}
     void visit(const FloatLiteral&) override {}
     void visit(const BoolLiteral&) override {}
     void visit(const StringLiteral&) override {}
     void visit(const Name&) override {}
+    void visit(const NoneLiteral&) override {}
+    void visit(const Call&) override {}
     void visit(const Unary& u) override {
       auto* un = const_cast<Unary*>(&u);
       if (EffectAlias::isPureExpr(un)) {
@@ -109,6 +118,7 @@ static std::size_t gvnBlock(SSABlock& bb,
       }
       if (sb->value) rw(sb->value); if (sb->slice) rw(sb->slice);
     }
+    void visit(const ObjectLiteral&) override {}
   };
 
   // Collect exprs into table when assigned to names

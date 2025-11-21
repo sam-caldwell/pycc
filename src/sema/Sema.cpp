@@ -43,6 +43,16 @@
 
 namespace pycc::sema {
 
+namespace {
+// Current function's locally assigned names (pre-scan), used to enforce UnboundLocal
+static const std::unordered_set<std::string>* g_locals_assigned = nullptr;
+struct ScopedLocalsAssigned {
+  const std::unordered_set<std::string>* prev;
+  explicit ScopedLocalsAssigned(const std::unordered_set<std::string>* cur) : prev(g_locals_assigned) { g_locals_assigned = cur; }
+  ~ScopedLocalsAssigned() { g_locals_assigned = prev; }
+};
+}
+
 using Type = ast::TypeKind;
 
 struct SigParam {
@@ -92,6 +102,12 @@ static void addDiag(std::vector<Diagnostic>& diags, const std::string& msg, cons
 // Simple effect scanner for may-raise classification
 struct EffectsScan : public ast::VisitorBase {
   bool mayRaise{false};
+  void visit(const ast::Module&) override {}
+  void visit(const ast::FunctionDef&) override {}
+  void visit(const ast::ReturnStmt& r) override { if (r.value) r.value->accept(*this); }
+  void visit(const ast::AssignStmt& as) override { if (as.value) as.value->accept(*this); }
+  void visit(const ast::IfStmt& iff) override { if (iff.cond) iff.cond->accept(*this); for (const auto& s: iff.thenBody) if (s) s->accept(*this); for (const auto& s: iff.elseBody) if (s) s->accept(*this); }
+  void visit(const ast::ExprStmt& es) override { if (es.value) es.value->accept(*this); }
   void visit(const ast::Call& c) override { mayRaise = true; if (c.callee) c.callee->accept(*this); for (const auto& a : c.args) if (a) a->accept(*this); }
   void visit(const ast::Attribute& a) override { mayRaise = true; if (a.value) a.value->accept(*this); }
   void visit(const ast::Subscript& s) override { mayRaise = true; if (s.value) s.value->accept(*this); if (s.slice) s.slice->accept(*this); }
@@ -99,9 +115,13 @@ struct EffectsScan : public ast::VisitorBase {
   void visit(const ast::Unary& u) override { if (u.operand) u.operand->accept(*this); }
   void visit(const ast::TupleLiteral& t) override { for (const auto& el : t.elements) if (el) el->accept(*this); }
   void visit(const ast::ListLiteral& l) override { for (const auto& el : l.elements) if (el) el->accept(*this); }
-  void visit(const ast::ExprStmt& es) override { if (es.value) es.value->accept(*this); }
-  void visit(const ast::ReturnStmt& rs) override { if (rs.value) rs.value->accept(*this); }
-  void visit(const ast::AssignStmt& as) override { if (as.value) as.value->accept(*this); }
+  void visit(const ast::Name&) override {}
+  void visit(const ast::IntLiteral&) override {}
+  void visit(const ast::BoolLiteral&) override {}
+  void visit(const ast::FloatLiteral&) override {}
+  void visit(const ast::StringLiteral&) override {}
+  void visit(const ast::NoneLiteral&) override {}
+  void visit(const ast::ObjectLiteral&) override {}
 };
 
 struct ExpressionTyper : public ast::VisitorBase {
@@ -279,6 +299,12 @@ struct ExpressionTyper : public ast::VisitorBase {
   }
   void visit(const ast::Name& n) override {
     uint32_t maskVal = env->getSet(n.id);
+    // Enforce strict local scoping: if this name is assigned locally anywhere in function,
+    // treat it as a local and error if read before assignment.
+    if (maskVal == 0U && g_locals_assigned && g_locals_assigned->count(n.id)) {
+      addDiag(*diags, std::string("local variable referenced before assignment: ") + n.id, &n);
+      ok = false; return;
+    }
     if (maskVal == 0U && outers != nullptr) {
       for (const auto* o : *outers) { if (!o) continue; const uint32_t m = o->getSet(n.id); if (m != 0U) { maskVal = m; break; } }
     }
@@ -1477,14 +1503,30 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
   // Function flags: generator/coroutine pre-scan
   struct FnTraitScan : public ast::VisitorBase {
     bool hasYield{false}; bool hasAwait{false};
+    // Stubs for pure virtuals
+    void visit(const ast::Module&) override {}
+    void visit(const ast::FunctionDef&) override {}
     void visit(const ast::YieldExpr&) override { hasYield = true; }
     void visit(const ast::AwaitExpr&) override { hasAwait = true; }
+    void visit(const ast::AssignStmt&) override {}
     void visit(const ast::ExprStmt& es) override { if (es.value) es.value->accept(*this); }
     void visit(const ast::ReturnStmt& rs) override { if (rs.value) rs.value->accept(*this); }
     void visit(const ast::IfStmt& is) override { if (is.cond) is.cond->accept(*this); for (const auto& s : is.thenBody) if (s) s->accept(*this); for (const auto& s : is.elseBody) if (s) s->accept(*this); }
     void visit(const ast::WhileStmt& ws) override { if (ws.cond) ws.cond->accept(*this); for (const auto& s : ws.thenBody) if (s) s->accept(*this); for (const auto& s : ws.elseBody) if (s) s->accept(*this); }
     void visit(const ast::ForStmt& fs) override { if (fs.target) fs.target->accept(*this); if (fs.iterable) fs.iterable->accept(*this); for (const auto& s : fs.thenBody) if (s) s->accept(*this); for (const auto& s : fs.elseBody) if (s) s->accept(*this); }
     void visit(const ast::TryStmt& ts) override { for (const auto& s : ts.body) if (s) s->accept(*this); for (const auto& h : ts.handlers) if (h) for (const auto& s : h->body) if (s) s->accept(*this); for (const auto& s : ts.orelse) if (s) s->accept(*this); for (const auto& s : ts.finalbody) if (s) s->accept(*this); }
+    void visit(const ast::IntLiteral&) override {}
+    void visit(const ast::BoolLiteral&) override {}
+    void visit(const ast::FloatLiteral&) override {}
+    void visit(const ast::StringLiteral&) override {}
+    void visit(const ast::NoneLiteral&) override {}
+    void visit(const ast::Name&) override {}
+    void visit(const ast::Call&) override {}
+    void visit(const ast::Binary&) override {}
+    void visit(const ast::Unary&) override {}
+    void visit(const ast::TupleLiteral&) override {}
+    void visit(const ast::ListLiteral&) override {}
+    void visit(const ast::ObjectLiteral&) override {}
   };
   for (const auto& func : mod.functions) {
     FnTraitScan scan; for (const auto& st : func->body) if (st) st->accept(scan);
@@ -1494,6 +1536,54 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
   for (const auto& func : mod.functions) {
     if (!(typeIsInt(func->returnType) || typeIsBool(func->returnType) || typeIsFloat(func->returnType) || typeIsStr(func->returnType) || func->returnType == Type::Tuple)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/tuple returns supported"; diags.push_back(std::move(diagVar)); return false; }
     TypeEnv env;
+    // Pre-scan for local assignments and nonlocal/global declarations in this function
+    struct LocalAssignScan : public ast::VisitorBase {
+      std::unordered_set<std::string> locals;
+      std::unordered_set<std::string> globs;
+      std::unordered_set<std::string> nls;
+      void visit(const ast::GlobalStmt& gs) override { for (const auto& n : gs.names) globs.insert(n); }
+      void visit(const ast::NonlocalStmt& ns) override { for (const auto& n : ns.names) nls.insert(n); }
+      void visit(const ast::AssignStmt& as) override {
+        auto addName = [&](const ast::Expr* e){ if (!e) return; if (e->kind == ast::NodeKind::Name) { const auto* nm = static_cast<const ast::Name*>(e); if (!globs.count(nm->id) && !nls.count(nm->id)) locals.insert(nm->id); } };
+        if (!as.target.empty()) { if (!globs.count(as.target) && !nls.count(as.target)) locals.insert(as.target); }
+        for (const auto& t : as.targets) addName(t.get());
+      }
+      void visit(const ast::AugAssignStmt& aa) override {
+        if (aa.target && aa.target->kind == ast::NodeKind::Name) {
+          const auto* nm = static_cast<const ast::Name*>(aa.target.get());
+          if (!globs.count(nm->id) && !nls.count(nm->id)) locals.insert(nm->id);
+        }
+      }
+      // Recurse into same-scope statements; skip nested functions/classes
+      void visit(const ast::IfStmt& iff) override { for (const auto& s: iff.thenBody) if (s) s->accept(*this); for (const auto& s: iff.elseBody) if (s) s->accept(*this); }
+      void visit(const ast::WhileStmt& ws) override { for (const auto& s: ws.thenBody) if (s) s->accept(*this); for (const auto& s: ws.elseBody) if (s) s->accept(*this); }
+      void visit(const ast::ForStmt& fs) override { for (const auto& s: fs.thenBody) if (s) s->accept(*this); for (const auto& s: fs.elseBody) if (s) s->accept(*this); }
+      void visit(const ast::TryStmt& ts) override { for (const auto& s: ts.body) if (s) s->accept(*this); for (const auto& h: ts.handlers) if (h) for (const auto& s: h->body) if (s) s->accept(*this); for (const auto& s: ts.orelse) if (s) s->accept(*this); for (const auto& s: ts.finalbody) if (s) s->accept(*this); }
+      void visit(const ast::WithStmt& ws) override { for (const auto& s: ws.body) if (s) s->accept(*this); }
+      // No-op for expressions and non-scope-bearing nodes
+      void visit(const ast::Module&) override {}
+      void visit(const ast::FunctionDef&) override {}
+      void visit(const ast::ClassDef&) override {}
+      void visit(const ast::ReturnStmt&) override {}
+      void visit(const ast::ExprStmt&) override {}
+      void visit(const ast::PassStmt&) override {}
+      void visit(const ast::BreakStmt&) override {}
+      void visit(const ast::ContinueStmt&) override {}
+      void visit(const ast::Name&) override {}
+      void visit(const ast::Call&) override {}
+      void visit(const ast::Binary&) override {}
+      void visit(const ast::Unary&) override {}
+      void visit(const ast::TupleLiteral&) override {}
+      void visit(const ast::ListLiteral&) override {}
+      void visit(const ast::ObjectLiteral&) override {}
+      void visit(const ast::Literal<long long, ast::NodeKind::IntLiteral>&) override {}
+      void visit(const ast::Literal<bool, ast::NodeKind::BoolLiteral>&) override {}
+      void visit(const ast::Literal<double, ast::NodeKind::FloatLiteral>&) override {}
+      void visit(const ast::Literal<std::string, ast::NodeKind::StringLiteral>&) override {}
+      void visit(const ast::NoneLiteral&) override {}
+    } lscan;
+    for (const auto& st : func->body) { if (st) st->accept(lscan); }
+    ScopedLocalsAssigned localsGuard(&lscan.locals);
     for (const auto& param : func->params) {
       if (!(typeIsInt(param.type) || typeIsBool(param.type) || typeIsFloat(param.type) || typeIsStr(param.type) || param.type == Type::List)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/list params supported"; diags.push_back(std::move(diagVar)); return false; }
       // Apply union/optional modeling via type sets
@@ -2695,6 +2785,8 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
   struct EffStmtScan : public ast::VisitorBase {
     std::unordered_map<const ast::Stmt*, bool>& out;
     explicit EffStmtScan(std::unordered_map<const ast::Stmt*, bool>& o) : out(o) {}
+    void visit(const ast::Module&) override {}
+    void visit(const ast::FunctionDef&) override {}
     void visit(const ast::ExprStmt& es) override { EffectsScan eff; if (es.value) es.value->accept(eff); out[&es] = eff.mayRaise; }
     void visit(const ast::ReturnStmt& rs) override { EffectsScan eff; if (rs.value) rs.value->accept(eff); out[&rs] = eff.mayRaise; }
     void visit(const ast::AssignStmt& as) override { EffectsScan eff; if (as.value) as.value->accept(eff); out[&as] = eff.mayRaise; }
@@ -2703,6 +2795,18 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
     void visit(const ast::WhileStmt& ws) override { bool mr=false; EffectsScan e; if (ws.cond) ws.cond->accept(e); mr = e.mayRaise; for (const auto& s: ws.thenBody){ EffStmtScan sub{out}; if (s) s->accept(sub); mr = mr || out[s.get()]; } for (const auto& s: ws.elseBody){ EffStmtScan sub2{out}; if (s) s->accept(sub2); mr = mr || out[s.get()]; } out[&ws] = mr; }
     void visit(const ast::ForStmt& fs) override { bool mr=false; EffectsScan e; if (fs.iterable) fs.iterable->accept(e); mr = e.mayRaise; for (const auto& s: fs.thenBody){ EffStmtScan sub{out}; if (s) s->accept(sub); mr = mr || out[s.get()]; } for (const auto& s: fs.elseBody){ EffStmtScan sub2{out}; if (s) s->accept(sub2); mr = mr || out[s.get()]; } out[&fs] = mr; }
     void visit(const ast::TryStmt& ts) override { out[&ts] = true; for (const auto& s: ts.body) if (s) s->accept(*this); for (const auto& h: ts.handlers) if (h) for (const auto& s: h->body) if (s) s->accept(*this); for (const auto& s: ts.orelse) if (s) s->accept(*this); for (const auto& s: ts.finalbody) if (s) s->accept(*this); }
+    void visit(const ast::IntLiteral&) override {}
+    void visit(const ast::FloatLiteral&) override {}
+    void visit(const ast::BoolLiteral&) override {}
+    void visit(const ast::StringLiteral&) override {}
+    void visit(const ast::Name&) override {}
+    void visit(const ast::Call&) override {}
+    void visit(const ast::Binary&) override {}
+    void visit(const ast::Unary&) override {}
+    void visit(const ast::TupleLiteral&) override {}
+    void visit(const ast::ListLiteral&) override {}
+    void visit(const ast::ObjectLiteral&) override {}
+    void visit(const ast::NoneLiteral&) override {}
   };
   for (const auto& func : mod.functions) {
     EffStmtScan ess{stmtMayRaise_};

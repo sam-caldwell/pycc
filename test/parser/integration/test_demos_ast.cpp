@@ -36,7 +36,7 @@ static void assert_contains_all(const std::string& hay, const std::vector<std::s
 TEST(DemosAst, AllDemosParseAndMatchExpectedAstStructures) {
   // Resolve demos directory relative to test working dir.
   // For integration tests, working dir is build/tmp...; demos is three levels up.
-  std::vector<fs::path> candidates = {fs::path("../../../demos"), fs::path("../../demos"), fs::path("demos")};
+  std::vector<fs::path> candidates = {fs::path("../../../demos"), fs::path("../../demos"), fs::path("../demos"), fs::path("demos")};
   fs::path demosDir;
   for (const auto& c : candidates) { if (fs::exists(c)) { demosDir = c; break; } }
   ASSERT_FALSE(demosDir.empty()) << "demos directory not found in expected relative locations";

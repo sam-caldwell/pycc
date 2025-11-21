@@ -20,7 +20,9 @@ static inline bool is_ignored_line(const std::string& line, bool ignoreComments,
   if (ignoreComments && !line.empty() && line[0] == ';') return true;
   if (ignoreDebug) {
     if (!line.empty() && line[0] == '!') return true; // pure metadata lines
-    if (line.find("!dbg ") != std::string::npos) return true;
+    // Standalone metadata-only lines can also begin with whitespace then '!'
+    auto trimmed = trim_left(line);
+    if (!trimmed.empty() && trimmed[0] == '!') return true;
     if (line.find("!DILocation(") != std::string::npos) return true;
     if (line.find("!DICompileUnit(") != std::string::npos) return true;
     if (line.find("!DISubprogram(") != std::string::npos) return true;
@@ -36,6 +38,17 @@ static std::vector<std::string> filter_lines(const std::string& s, bool ignoreCo
   std::vector<std::string> out;
   std::string line;
   while (std::getline(in, line)) {
+    if (ignoreDebug) {
+      // Strip inline debug attachments like ", !dbg !123"
+      auto pos = line.find("!dbg ");
+      if (pos != std::string::npos) {
+        // find preceding comma that starts the attachment
+        auto comma = line.rfind(',', pos);
+        if (comma != std::string::npos) {
+          line.erase(comma);
+        }
+      }
+    }
     if (is_ignored_line(line, ignoreComments, ignoreDebug)) continue;
     out.push_back(trim_left(line));
   }
@@ -61,4 +74,3 @@ std::string diffIR(const std::string& a, const std::string& b, bool ignoreCommen
 }
 
 } // namespace pycc::obs
-

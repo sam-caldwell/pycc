@@ -524,14 +524,12 @@ extern "C" void* pycc_box_float(double value) { return box_float(value); }
 extern "C" void* pycc_box_bool(bool value) { return box_bool(value); }
 extern "C" void* pycc_string_new(const char* data, size_t length) { return string_new(data, length); }
 extern "C" uint64_t pycc_string_len(void* str) { return static_cast<uint64_t>(string_len(str)); }
-extern "C" void* pycc_string_concat(void* a, void* b) { return string_concat(a, b); }
 extern "C" void* pycc_string_slice(void* s, int64_t start, int64_t len) {
   std::size_t L = string_len(s);
   int64_t st = start; if (st < 0) st += static_cast<int64_t>(L); if (st < 0) st = 0;
   int64_t ln = len; if (ln < 0) ln = 0;
   return string_slice(s, static_cast<std::size_t>(st), static_cast<std::size_t>(ln));
 }
-extern "C" void* pycc_string_concat(void* a, void* b) { return string_concat(a, b); }
 extern "C" void* pycc_string_repeat(void* s, int64_t n) {
   if (n <= 0) return string_new("", 0);
   const char* d = string_data(s);

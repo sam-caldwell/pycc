@@ -25,9 +25,9 @@ static void countExpr(const Expr* e, std::size_t& vals, std::size_t& insts) {
     case NodeKind::StringLiteral:
     case NodeKind::Name:
       ++vals; break;
-    case NodeKind::Unary:
+    case NodeKind::UnaryExpr:
       ++insts; ++vals; countExpr(static_cast<const Unary*>(e)->operand.get(), vals, insts); break;
-    case NodeKind::Binary: {
+    case NodeKind::BinaryExpr: {
       ++insts; ++vals; auto* b = static_cast<const Binary*>(e); countExpr(b->lhs.get(), vals, insts); countExpr(b->rhs.get(), vals, insts); break;
     }
     case NodeKind::TupleLiteral: {
@@ -53,4 +53,3 @@ SSAStats SSA::analyze(const Module& module) {
 }
 
 } // namespace pycc::opt
-

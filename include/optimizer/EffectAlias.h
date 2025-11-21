@@ -31,11 +31,11 @@ struct EffectAlias {
         if (!(vk == NK::StringLiteral || vk == NK::TupleLiteral || vk == NK::BytesLiteral)) return false;
         return isPureExpr(s->slice.get());
       }
-      case NK::Unary: {
+      case NK::UnaryExpr: {
         auto* u = static_cast<const ast::Unary*>(e);
         return isPureExpr(u->operand.get());
       }
-      case NK::Binary: {
+      case NK::BinaryExpr: {
         auto* b = static_cast<const ast::Binary*>(e);
         return isPureExpr(b->lhs.get()) && isPureExpr(b->rhs.get());
       }

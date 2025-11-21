@@ -26,8 +26,8 @@ static void hashExpr(const Expr* e, std::string& out) {
     case NodeKind::FloatLiteral: out += std::to_string(static_cast<const FloatLiteral*>(e)->value); break;
     case NodeKind::BoolLiteral: out += (static_cast<const BoolLiteral*>(e)->value ? "1" : "0"); break;
     case NodeKind::StringLiteral: out += static_cast<const StringLiteral*>(e)->value; break;
-    case NodeKind::Unary: hashExpr(static_cast<const Unary*>(e)->operand.get(), out); break;
-    case NodeKind::Binary: {
+    case NodeKind::UnaryExpr: hashExpr(static_cast<const Unary*>(e)->operand.get(), out); break;
+    case NodeKind::BinaryExpr: {
       const auto* b = static_cast<const Binary*>(e);
       out += std::to_string(static_cast<int>(b->op));
       hashExpr(b->lhs.get(), out); hashExpr(b->rhs.get(), out); break;

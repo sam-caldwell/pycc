@@ -42,8 +42,240 @@
 #include <system_error>
 #include <unistd.h>
 #include <vector>
+#include <unordered_set>
+#include <optional>
 
 namespace pycc {
+
+namespace {
+// Turn a dotted module name into a relative filesystem path candidate.
+std::filesystem::path dottedToPath(const std::string& dotted) {
+  std::filesystem::path p;
+  std::string seg;
+  for (const char c : dotted) {
+    if (c == '.') { p /= seg; seg.clear(); }
+    else { seg.push_back(c); }
+  }
+  if (!seg.empty()) p /= seg;
+  return p;
+}
+
+// Resolve a module or relative import to a file path. Returns first existing candidate if any.
+std::optional<std::filesystem::path> resolveImportPath(const std::filesystem::path& importerFile,
+                                                              const std::string& module,
+                                                              int level,
+                                                              const std::string* nameInFrom = nullptr) {
+  namespace fs = std::filesystem;
+  fs::path baseDir = importerFile.parent_path();
+  fs::path startDir = baseDir;
+  // Apply relative level: go up 'level' directories if requested
+  for (int i = 0; i < level; ++i) { startDir = startDir.parent_path(); }
+
+  // Build candidate module path
+  fs::path modPath;
+  if (!module.empty()) {
+    modPath = startDir / dottedToPath(module);
+  } else if (nameInFrom != nullptr && !nameInFrom->empty()) {
+    modPath = startDir / dottedToPath(*nameInFrom);
+  } else {
+    modPath = startDir;
+  }
+
+  const fs::path candFile = modPath;
+  const fs::path filePy = candFile.string() + ".py";
+  const fs::path pkgInit = modPath / "__init__.py";
+  std::error_code ec;
+  if (fs::exists(filePy, ec)) return fs::weakly_canonical(filePy, ec);
+  if (fs::exists(pkgInit, ec)) return fs::weakly_canonical(pkgInit, ec);
+  return std::nullopt;
+}
+
+// Build a flat group for a single module: nested dependencies (depth-first) followed by the module itself.
+std::vector<std::filesystem::path>
+buildModuleGroup(const std::filesystem::path& moduleFile,
+                 std::unordered_set<std::string>& visitedCanonical) {
+  namespace fs = std::filesystem;
+  std::vector<fs::path> group;
+  std::error_code ec;
+  const auto canon = fs::weakly_canonical(moduleFile, ec).string();
+  if (visitedCanonical.count(canon)) { return group; }
+  visitedCanonical.insert(canon);
+
+  // Scan imports inside this module
+  lex::Lexer scan;
+  scan.pushFile(moduleFile.string());
+  auto toks = scan.tokens();
+  int indentDepth = 0;
+  for (size_t i = 0; i < toks.size(); ++i) {
+    const auto& t = toks[i];
+    if (t.kind == lex::TokenKind::Indent) { ++indentDepth; continue; }
+    if (t.kind == lex::TokenKind::Dedent) { if (indentDepth > 0) --indentDepth; continue; }
+    if (indentDepth != 0) { continue; }
+    if (t.kind == lex::TokenKind::Import) {
+      // import a, b.c as x
+      ++i;
+      while (i < toks.size()) {
+        // dotted name
+        std::string dotted;
+        if (i >= toks.size() || toks[i].kind != lex::TokenKind::Ident) break;
+        dotted = toks[i].text; ++i;
+        while (i + 1 < toks.size() && toks[i].kind == lex::TokenKind::Dot && toks[i+1].kind == lex::TokenKind::Ident) {
+          ++i; dotted += "."; dotted += toks[i].text; ++i;
+        }
+        // optional 'as alias'
+        if (i + 1 < toks.size() && toks[i].kind == lex::TokenKind::As && toks[i+1].kind == lex::TokenKind::Ident) { i += 2; }
+        // resolve
+        if (!dotted.empty()) {
+          if (auto p = resolveImportPath(moduleFile, dotted, 0)) {
+            auto sub = buildModuleGroup(*p, visitedCanonical);
+            group.insert(group.end(), sub.begin(), sub.end());
+            group.push_back(*p);
+          }
+        }
+        if (i < toks.size() && toks[i].kind == lex::TokenKind::Comma) { ++i; continue; }
+        break;
+      }
+    } else if (t.kind == lex::TokenKind::From) {
+      // from [.]...pkg import a, b or '*'
+      int level = 0; size_t j = i + 1;
+      while (j < toks.size() && (toks[j].kind == lex::TokenKind::Dot || toks[j].kind == lex::TokenKind::Ellipsis)) {
+        if (toks[j].kind == lex::TokenKind::Dot) { ++level; }
+        else { level += 3; }
+        ++j;
+      }
+      std::string module;
+      if (j < toks.size() && toks[j].kind == lex::TokenKind::Ident) {
+        module = toks[j].text; ++j;
+        while (j + 1 < toks.size() && toks[j].kind == lex::TokenKind::Dot && toks[j+1].kind == lex::TokenKind::Ident) {
+          ++j; module += "."; module += toks[j].text; ++j;
+        }
+      }
+      // expect 'import'
+      while (j < toks.size() && toks[j].kind != lex::TokenKind::Import && toks[j].kind != lex::TokenKind::Newline) { ++j; }
+      if (j >= toks.size() || toks[j].kind != lex::TokenKind::Import) { i = j; continue; }
+      ++j;
+      if (j < toks.size() && toks[j].kind == lex::TokenKind::Star) {
+        if (auto p = resolveImportPath(moduleFile, module, level)) {
+          auto sub = buildModuleGroup(*p, visitedCanonical);
+          group.insert(group.end(), sub.begin(), sub.end());
+          group.push_back(*p);
+        }
+        i = j; continue;
+      }
+      // Parentheses optional; gather names
+      if (j < toks.size() && toks[j].kind == lex::TokenKind::LParen) { ++j; }
+      while (j < toks.size()) {
+        if (toks[j].kind != lex::TokenKind::Ident) break;
+        const std::string nm = toks[j].text; ++j;
+        if (j + 1 < toks.size() && toks[j].kind == lex::TokenKind::As && toks[j+1].kind == lex::TokenKind::Ident) { j += 2; }
+        if (auto p = resolveImportPath(moduleFile, module, level, &nm)) {
+          auto sub = buildModuleGroup(*p, visitedCanonical);
+          group.insert(group.end(), sub.begin(), sub.end());
+          group.push_back(*p);
+        } else if (auto p2 = resolveImportPath(moduleFile, module, level)) {
+          auto sub = buildModuleGroup(*p2, visitedCanonical);
+          group.insert(group.end(), sub.begin(), sub.end());
+          group.push_back(*p2);
+        }
+        if (j < toks.size() && toks[j].kind == lex::TokenKind::Comma) { ++j; continue; }
+        break;
+      }
+      // skip optional ')'
+      if (j < toks.size() && toks[j].kind == lex::TokenKind::RParen) { ++j; }
+      i = j - 1;
+    }
+  }
+  return group;
+}
+
+// Discover imports encountered at top-level in a file; returns groups in encounter order (each group is a flat
+// sequence of files: nested dependencies followed by the module itself).
+std::vector<std::vector<std::filesystem::path>>
+discoverTopLevelImportGroups(const std::filesystem::path& file,
+                             std::unordered_set<std::string>& visitedCanonical) {
+  namespace fs = std::filesystem;
+  std::vector<std::vector<fs::path>> groups;
+  lex::Lexer scan;
+  scan.pushFile(file.string());
+  auto toks = scan.tokens();
+  int indentDepth = 0;
+  for (size_t i = 0; i < toks.size(); ++i) {
+    const auto& t = toks[i];
+    if (t.kind == lex::TokenKind::Indent) { ++indentDepth; continue; }
+    if (t.kind == lex::TokenKind::Dedent) { if (indentDepth > 0) --indentDepth; continue; }
+    if (indentDepth != 0) { continue; }
+    if (t.kind == lex::TokenKind::Import) {
+      ++i; // after 'import'
+      while (i < toks.size()) {
+        std::string dotted;
+        if (i >= toks.size() || toks[i].kind != lex::TokenKind::Ident) break;
+        dotted = toks[i].text; ++i;
+        while (i + 1 < toks.size() && toks[i].kind == lex::TokenKind::Dot && toks[i+1].kind == lex::TokenKind::Ident) {
+          ++i; dotted += "."; dotted += toks[i].text; ++i;
+        }
+        if (i + 1 < toks.size() && toks[i].kind == lex::TokenKind::As && toks[i+1].kind == lex::TokenKind::Ident) { i += 2; }
+        if (!dotted.empty()) {
+          if (auto p = resolveImportPath(file, dotted, 0)) {
+            auto grp = buildModuleGroup(*p, visitedCanonical);
+            if (!grp.empty()) groups.emplace_back(std::move(grp));
+          }
+        }
+        if (i < toks.size() && toks[i].kind == lex::TokenKind::Comma) { ++i; continue; }
+        break;
+      }
+    } else if (t.kind == lex::TokenKind::From) {
+      int level = 0; size_t j = i + 1;
+      while (j < toks.size() && (toks[j].kind == lex::TokenKind::Dot || toks[j].kind == lex::TokenKind::Ellipsis)) {
+        if (toks[j].kind == lex::TokenKind::Dot) { ++level; } else { level += 3; }
+        ++j;
+      }
+      std::string module;
+      if (j < toks.size() && toks[j].kind == lex::TokenKind::Ident) {
+        module = toks[j].text; ++j;
+        while (j + 1 < toks.size() && toks[j].kind == lex::TokenKind::Dot && toks[j+1].kind == lex::TokenKind::Ident) {
+          ++j; module += "."; module += toks[j].text; ++j;
+        }
+      }
+      while (j < toks.size() && toks[j].kind != lex::TokenKind::Import && toks[j].kind != lex::TokenKind::Newline) { ++j; }
+      if (j >= toks.size() || toks[j].kind != lex::TokenKind::Import) { i = j; continue; }
+      ++j;
+      if (j < toks.size() && toks[j].kind == lex::TokenKind::Star) {
+        if (auto p = resolveImportPath(file, module, level)) {
+          auto grp = buildModuleGroup(*p, visitedCanonical);
+          if (!grp.empty()) groups.emplace_back(std::move(grp));
+        }
+        i = j; continue;
+      }
+      if (j < toks.size() && toks[j].kind == lex::TokenKind::LParen) { ++j; }
+      bool any = false;
+      while (j < toks.size()) {
+        if (toks[j].kind != lex::TokenKind::Ident) break;
+        any = true;
+        const std::string nm = toks[j].text; ++j;
+        if (j + 1 < toks.size() && toks[j].kind == lex::TokenKind::As && toks[j+1].kind == lex::TokenKind::Ident) { j += 2; }
+        if (auto p = resolveImportPath(file, module, level, &nm)) {
+          auto grp = buildModuleGroup(*p, visitedCanonical);
+          if (!grp.empty()) groups.emplace_back(std::move(grp));
+        } else if (auto p2 = resolveImportPath(file, module, level)) {
+          auto grp = buildModuleGroup(*p2, visitedCanonical);
+          if (!grp.empty()) groups.emplace_back(std::move(grp));
+        }
+        if (j < toks.size() && toks[j].kind == lex::TokenKind::Comma) { ++j; continue; }
+        break;
+      }
+      if (!any) {
+        if (auto p = resolveImportPath(file, module, level)) {
+          auto grp = buildModuleGroup(*p, visitedCanonical);
+          if (!grp.empty()) groups.emplace_back(std::move(grp));
+        }
+      }
+      if (j < toks.size() && toks[j].kind == lex::TokenKind::RParen) { ++j; }
+      i = j - 1;
+    }
+  }
+  return groups;
+}
+} // namespace
 
 // removed in favor of streaming lexer input
 
@@ -58,6 +290,19 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
   metrics.start("Lex");
   lex::Lexer lexer; // NOLINT(misc-const-correctness)
   lexer.pushFile(input);
+  {
+    // Pre-scan top-level imports and push dependencies LIFO to unify source stream
+    std::unordered_set<std::string> visited;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    auto canonRoot = fs::weakly_canonical(input, ec).string();
+    if (!canonRoot.empty()) visited.insert(canonRoot);
+    auto groups = discoverTopLevelImportGroups(input, visited);
+    // Push groups in reverse encounter order; within each group push in order so that deepest comes first at runtime
+    for (auto it = groups.rbegin(); it != groups.rend(); ++it) {
+      for (const auto& p : *it) { lexer.pushFile(p.string()); }
+    }
+  }
   metrics.stop("Lex");
 
   // Optional log directory creation
@@ -218,15 +463,8 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
   }
 
   // Analyses: GVN/Range (non-mutating), recorded for metrics only
-  {
-    opt::GVN gvn; auto g = gvn.analyze(*mod);
-    metrics.setOptimizerStat("gvn_classes", static_cast<uint64_t>(g.classes));
-    metrics.setOptimizerStat("gvn_expressions", static_cast<uint64_t>(g.expressions));
-  }
-  {
-    opt::RangeAnalysis ra; auto ranges = ra.analyze(*mod);
-    metrics.setOptimizerStat("range_vars", static_cast<uint64_t>(ranges.size()));
-  }
+  // Optional analyses (non-mutating): disabled instantiation for abstract Pass subclasses.
+  // GVN/Range analysis metrics can be re-enabled when concrete run() is provided.
   {
     opt::SSA ssa; auto ss = ssa.analyze(*mod);
     metrics.setOptimizerStat("ssa_values", static_cast<uint64_t>(ss.values));
@@ -283,12 +521,12 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     try {
       const auto toks = lexer.tokens();
       metrics.setCounter("lex.tokens", static_cast<uint64_t>(toks.size()));
-    } catch (...) { /* ignore */ }
+    } catch (const std::exception& ex) { (void)ex; }
     try {
       auto irText = codegen::Codegen::generateIR(*mod);
       metrics.setGauge("codegen.ir_bytes", static_cast<uint64_t>(irText.size()));
-      uint64_t lines = 0; for (char c : irText) if (c == '\n') ++lines; metrics.setGauge("codegen.ir_lines", lines);
-    } catch (...) { /* ignore */ }
+      uint64_t lines = 0; for (const char c : irText) if (c == '\n') ++lines; metrics.setGauge("codegen.ir_lines", lines);
+    } catch (const std::exception& ex) { (void)ex; }
   };
   if (opts.metrics || opts.metricsJson) { recordPost(); }
 
@@ -331,7 +569,7 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
         }
         std::ofstream codegenFile(logDir + "/" + tsPrefix + "codegen.codegen.log");
         codegenFile << irText;
-      } catch (...) { /* no-op: best-effort IR log */ } // NOLINT(bugprone-empty-catch)
+      } catch (const std::exception& ex) { (void)ex; }
     }
   }
 

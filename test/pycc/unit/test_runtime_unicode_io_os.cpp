@@ -20,7 +20,7 @@ TEST(RuntimeUnicode, Utf8Validation) {
 TEST(RuntimeIOOS, ReadWriteFileAndGetenv) {
   gc_reset_for_tests();
   const char* path = "_rt_tmp_test.txt";
-  void* s = string_from_cstr("abc\n\x00def"); // includes NUL in the middle
+  void* s = string_from_cstr("abc\n\0def"); // includes NUL in the middle
   ASSERT_TRUE(io_write_file(path, s));
   void* read = io_read_file(path);
   ASSERT_NE(read, nullptr);
@@ -38,4 +38,3 @@ TEST(RuntimeIOOS, ReadWriteFileAndGetenv) {
   ASSERT_NE(envval, nullptr);
   EXPECT_STREQ(string_data(envval), "xyz");
 }
-
