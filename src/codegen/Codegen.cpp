@@ -48,6 +48,8 @@
 #include <utility>
 #include <vector>
 
+#include "parser/Parser.h"
+
 namespace pycc::codegen {
 
 static std::string changeExt(const std::string& base, const std::string& ext) {
@@ -235,6 +237,14 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   irStream << "declare ptr @pycc_string_slice(ptr, i64, i64)\n\n";
   irStream << "declare i1 @pycc_string_contains(ptr, ptr)\n";
   irStream << "declare ptr @pycc_string_repeat(ptr, i64)\n\n";
+  // Concurrency/runtime (scaffolding)
+  irStream << "declare ptr @pycc_rt_spawn(ptr, ptr, i64)\n";
+  irStream << "declare i1 @pycc_rt_join(ptr, ptr*, i64*)\n";
+  irStream << "declare void @pycc_rt_thread_handle_destroy(ptr)\n";
+  irStream << "declare ptr @pycc_chan_new(i64)\n";
+  irStream << "declare void @pycc_chan_close(ptr)\n";
+  irStream << "declare void @pycc_chan_send(ptr, ptr)\n";
+  irStream << "declare ptr @pycc_chan_recv(ptr)\n\n";
   // Selected LLVM intrinsics used by codegen
   irStream << "declare double @llvm.powi.f64(double, i32)\n";
   irStream << "declare double @llvm.pow.f64(double, double)\n";
@@ -849,7 +859,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
           ir << "  " << reg.str() << " = load ptr, ptr " << it->second.ptr << "\n";
         out = Value{reg.str(), it->second.kind};
       }
-      void visit(const ast::Call& call) override { // NOLINT(readability-function-cognitive-complexity)
+  void visit(const ast::Call& call) override { // NOLINT(readability-function-cognitive-complexity)
         if (call.callee == nullptr) { throw std::runtime_error("unsupported callee expression"); }
         // Polymorphic list.append(x)
         if (call.callee->kind == ast::NodeKind::Attribute) {
@@ -884,6 +894,151 @@ std::string Codegen::generateIR(const ast::Module& mod) {
         }
         const auto* nmCall = dynamic_cast<const ast::Name*>(call.callee.get());
         if (nmCall == nullptr) { throw std::runtime_error("unsupported callee expression"); }
+        // Compile-time only eval/exec using a restricted AST evaluator for small expressions
+        if (nmCall->id == "eval") {
+          if (call.args.size() != 1 || !call.args[0] || call.args[0]->kind != ast::NodeKind::StringLiteral) {
+            throw std::runtime_error("eval(): literal string required");
+          }
+          const auto* s = static_cast<const ast::StringLiteral*>(call.args[0].get());
+          std::string txt = s->value;
+          // Trim whitespace
+          auto trim = [](std::string& t){ size_t a=0; while(a<t.size()&&isspace(static_cast<unsigned char>(t[a]))) ++a; size_t b=t.size(); while(b>a&&isspace(static_cast<unsigned char>(t[b-1]))) --b; t=t.substr(a,b-a); };
+          trim(txt);
+          // Parse into AST using the normal parser
+          std::unique_ptr<ast::Expr> exprAst;
+          try {
+            exprAst = parse::Parser::parseSmallExprFromString(txt, "<eval>");
+          } catch (...) {
+            exprAst.reset();
+          }
+          // Restricted evaluator supporting small expressions only
+          struct CTVal {
+            enum class K { None, I, F, B } k{K::None};
+            long long i{0};
+            double f{0.0};
+            bool b{false};
+          };
+          std::function<CTVal(const ast::Expr*)> evalCt;
+          evalCt = [&](const ast::Expr* e) -> CTVal {
+            if (!e) throw std::runtime_error("eval(): empty");
+            switch (e->kind) {
+              case ast::NodeKind::IntLiteral: {
+                const auto* n = static_cast<const ast::IntLiteral*>(e);
+                return CTVal{CTVal::K::I, static_cast<long long>(n->value), 0.0, false};
+              }
+              case ast::NodeKind::FloatLiteral: {
+                const auto* n = static_cast<const ast::FloatLiteral*>(e);
+                CTVal v; v.k = CTVal::K::F; v.f = n->value; return v;
+              }
+              case ast::NodeKind::BoolLiteral: {
+                const auto* n = static_cast<const ast::BoolLiteral*>(e);
+                CTVal v; v.k = CTVal::K::B; v.b = n->value; return v;
+              }
+              case ast::NodeKind::UnaryExpr: {
+                const auto* u = static_cast<const ast::Unary*>(e);
+                CTVal v = evalCt(u->operand.get());
+                if (u->op == ast::UnaryOperator::Neg) {
+                  if (v.k == CTVal::K::I) { v.i = -v.i; return v; }
+                  if (v.k == CTVal::K::F) { v.f = -v.f; return v; }
+                  throw std::runtime_error("eval(): unary '-' only on int/float");
+                }
+                if (u->op == ast::UnaryOperator::BitNot) {
+                  if (v.k == CTVal::K::I) { v.i = ~v.i; return v; }
+                  throw std::runtime_error("eval(): '~' only on int");
+                }
+                // logical not
+                if (v.k == CTVal::K::B) { v.b = !v.b; return v; }
+                // truthiness for int/float treated as nonzero
+                if (v.k == CTVal::K::I) { CTVal r; r.k = CTVal::K::B; r.b = (v.i != 0); r.i = 0; return r; }
+                if (v.k == CTVal::K::F) { CTVal r; r.k = CTVal::K::B; r.b = (v.f != 0.0); return r; }
+                throw std::runtime_error("eval(): unsupported unary op");
+              }
+              case ast::NodeKind::BinaryExpr: {
+                const auto* b = static_cast<const ast::Binary*>(e);
+                CTVal L = evalCt(b->lhs.get());
+                CTVal R = evalCt(b->rhs.get());
+                auto toFloat = [](CTVal v)->CTVal{ if (v.k == CTVal::K::F) return v; if (v.k == CTVal::K::I) { CTVal r; r.k=CTVal::K::F; r.f = static_cast<double>(v.i); return r; } throw std::runtime_error("type"); };
+                auto bothInt = [](CTVal a, CTVal b2){ return a.k==CTVal::K::I && b2.k==CTVal::K::I; };
+                auto anyFloat = [](CTVal a, CTVal b2){ return a.k==CTVal::K::F || b2.k==CTVal::K::F; };
+                using BO=ast::BinaryOperator;
+                switch (b->op) {
+                  case BO::Add: {
+                    if (anyFloat(L,R)) { L = toFloat(L); R = toFloat(R); CTVal v; v.k=CTVal::K::F; v.f=L.f+R.f; return v; }
+                    if (bothInt(L,R)) { L.i += R.i; return L; }
+                    throw std::runtime_error("eval(): '+' only for int/float");
+                  }
+                  case BO::Sub: {
+                    if (anyFloat(L,R)) { L = toFloat(L); R = toFloat(R); CTVal v; v.k=CTVal::K::F; v.f=L.f-R.f; return v; }
+                    if (bothInt(L,R)) { L.i -= R.i; return L; }
+                    throw std::runtime_error("eval(): '-' only for int/float");
+                  }
+                  case BO::Mul: {
+                    if (anyFloat(L,R)) { L = toFloat(L); R = toFloat(R); CTVal v; v.k=CTVal::K::F; v.f=L.f*R.f; return v; }
+                    if (bothInt(L,R)) { L.i *= R.i; return L; }
+                    throw std::runtime_error("eval(): '*' only for int/float");
+                  }
+                  case BO::Div: {
+                    L = toFloat(L); R = toFloat(R); CTVal v; v.k=CTVal::K::F; v.f = L.f / R.f; return v;
+                  }
+                  case BO::FloorDiv: {
+                    if (!bothInt(L,R)) throw std::runtime_error("eval(): '//' only for int");
+                    CTVal v; v.k=CTVal::K::I; if (R.i==0) throw std::runtime_error("eval(): // by zero"); v.i = L.i / R.i; return v;
+                  }
+                  case BO::Mod: {
+                    if (!bothInt(L,R)) throw std::runtime_error("eval(): '%' only for int");
+                    CTVal v; v.k=CTVal::K::I; if (R.i==0) throw std::runtime_error("eval(): % by zero"); v.i = L.i % R.i; return v;
+                  }
+                  case BO::LShift: if (bothInt(L,R)) { L.i <<= R.i; return L; } throw std::runtime_error("eval(): '<<' only for int");
+                  case BO::RShift: if (bothInt(L,R)) { L.i >>= R.i; return L; } throw std::runtime_error("eval(): '>>' only for int");
+                  case BO::BitAnd: if (bothInt(L,R)) { L.i &= R.i; return L; } throw std::runtime_error("eval(): '&' only for int");
+                  case BO::BitOr: if (bothInt(L,R)) { L.i |= R.i; return L; } throw std::runtime_error("eval(): '|' only for int");
+                  case BO::BitXor: if (bothInt(L,R)) { L.i ^= R.i; return L; } throw std::runtime_error("eval(): '^' only for int");
+                  case BO::Eq: {
+                    CTVal v; v.k=CTVal::K::B;
+                    if (L.k==CTVal::K::I && R.k==CTVal::K::I) v.b = (L.i==R.i);
+                    else if (L.k==CTVal::K::F || R.k==CTVal::K::F) { L=toFloat(L); R=toFloat(R); v.b = (L.f==R.f); }
+                    else if (L.k==CTVal::K::B && R.k==CTVal::K::B) v.b = (L.b==R.b);
+                    else v.b=false; return v;
+                  }
+                  case BO::Ne: {
+                    CTVal v; v.k = CTVal::K::B;
+                    if (L.k==CTVal::K::I && R.k==CTVal::K::I) v.b = (L.i!=R.i);
+                    else if (L.k==CTVal::K::F || R.k==CTVal::K::F) { L=toFloat(L); R=toFloat(R); v.b = (L.f!=R.f); }
+                    else if (L.k==CTVal::K::B && R.k==CTVal::K::B) v.b = (L.b!=R.b);
+                    else v.b=true; return v;
+                  }
+                  case BO::Lt: case BO::Le: case BO::Gt: case BO::Ge: {
+                    CTVal v; v.k=CTVal::K::B;
+                    if (L.k==CTVal::K::I && R.k==CTVal::K::I) {
+                      if (b->op==BO::Lt) v.b = (L.i<R.i); else if (b->op==BO::Le) v.b = (L.i<=R.i); else if (b->op==BO::Gt) v.b = (L.i>R.i); else v.b = (L.i>=R.i);
+                    } else { L=toFloat(L); R=toFloat(R); if (b->op==BO::Lt) v.b=(L.f<R.f); else if (b->op==BO::Le) v.b=(L.f<=R.f); else if (b->op==BO::Gt) v.b=(L.f>R.f); else v.b=(L.f>=R.f); }
+                    return v;
+                  }
+                  default: throw std::runtime_error("eval(): unsupported operator");
+                }
+              }
+              // Disallow everything else: names, calls, attributes, subscripts, comprehensions, etc.
+              default: throw std::runtime_error("eval(): unsupported expression");
+            }
+          };
+          if (!exprAst) { out = Value{"null", ValKind::Ptr}; return; }
+          // Evaluate and box result
+          CTVal res = CTVal{};
+          try { res = evalCt(exprAst.get()); } catch (...) { out = Value{"null", ValKind::Ptr}; return; }
+          std::ostringstream w; w << "%t" << temp++;
+          if (res.k == CTVal::K::I) { ir << "  " << w.str() << " = call ptr @pycc_box_int(i64 " << res.i << ")\n"; out = Value{w.str(), ValKind::Ptr}; return; }
+          if (res.k == CTVal::K::F) { ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << res.f << ")\n"; out = Value{w.str(), ValKind::Ptr}; return; }
+          if (res.k == CTVal::K::B) { ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << (res.b?"1":"0") << ")\n"; out = Value{w.str(), ValKind::Ptr}; return; }
+          out = Value{"null", ValKind::Ptr}; return;
+        }
+        if (nmCall->id == "exec") {
+          if (call.args.size() != 1 || !call.args[0] || call.args[0]->kind != ast::NodeKind::StringLiteral) {
+            throw std::runtime_error("exec(): literal string required");
+          }
+          // No runtime effect in this subset
+          out = Value{"null", ValKind::Ptr};
+          return;
+        }
         // Builtin: len(arg) -> i32 constant for tuple/list literal lengths
         if (nmCall->id == "len") {
           if (call.args.size() != 1) { throw std::runtime_error("len() takes exactly one argument"); }
@@ -2162,6 +2317,21 @@ std::string Codegen::generateIR(const ast::Module& mod) {
     }
     irStream << "}\n\n";
   }
+
+  // Emit wrappers for spawn() builtins
+  for (const auto& fname : spawnWrappers) {
+    // Lookup return type for call signature
+    ast::TypeKind rt = ast::TypeKind::NoneType;
+    auto it = sigs.find(fname);
+    if (it != sigs.end()) rt = it->second.ret;
+    std::string callTy = (rt == ast::TypeKind::Int ? "i32" : (rt == ast::TypeKind::Float ? "double" : (rt == ast::TypeKind::Bool ? "i1" : "void")));
+    irStream << "define void @__pycc_start_" << fname << "(ptr %payload, i64 %len, ptr* %ret, i64* %ret_len) gc \"shadow-stack\" personality ptr @__gxx_personality_v0 {\n";
+    irStream << "entry:\n";
+    if (callTy == "void") { irStream << "  call void @" << fname << "()\n"; }
+    else { irStream << "  call " << callTy << " @" << fname << "()\n"; }
+    irStream << "  ret void\n";
+    irStream << "}\n\n";
+  }
   // Module initialization stub (placeholder for future globals/registrations)
   irStream << "define i32 @pycc_module_init() {\n  ret i32 0\n}\n\n";
   // Emit lightweight debug metadata at end of module
@@ -2192,7 +2362,6 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   }
   // NOLINTEND
   return irStream.str();
-}
 
 
 bool Codegen::runCmd(const std::string& cmd, std::string& outErr) { // NOLINT(concurrency-mt-unsafe)

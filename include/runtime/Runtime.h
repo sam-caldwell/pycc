@@ -20,6 +20,8 @@ enum class TypeTag : uint32_t {
   List = 5,
   Object = 6,
   Dict = 7
+  , Bytes = 8
+  , ByteArray = 9
 };
 
 struct RuntimeStats {
@@ -64,6 +66,20 @@ bool string_contains(void* haystack, void* needle);
 
 // Unicode / text encodings (helpers operate on raw buffers)
 bool utf8_is_valid(const char* data, std::size_t len);
+
+// Bytes (immutable) and ByteArray (mutable) buffers
+void* bytes_new(const void* data, std::size_t len);
+std::size_t bytes_len(void* obj);
+const unsigned char* bytes_data(void* obj);
+void* bytes_slice(void* obj, std::size_t start, std::size_t len);
+void* bytes_concat(void* a, void* b);
+
+void* bytearray_new(std::size_t len);
+void* bytearray_from_bytes(void* bytes);
+std::size_t bytearray_len(void* obj);
+int bytearray_get(void* obj, std::size_t index); // returns 0..255 or -1 if OOB
+void bytearray_set(void* obj, std::size_t index, int value);
+void bytearray_append(void* obj, int value);
 
 // Boxed primitives (opaque heap objects with value payloads)
 void* box_int(int64_t value);
@@ -129,5 +145,37 @@ void* io_read_file(const char* path); // returns String with file bytes
 bool io_write_file(const char* path, void* str);
 void* os_getenv(const char* name); // returns String or nullptr
 int64_t os_time_ms();
+// Filesystem helpers
+void* os_getcwd();        // returns String
+bool os_mkdir(const char* path, int mode /*octal*/);
+bool os_remove(const char* path);
+bool os_rename(const char* src, const char* dst);
+
+// Module lifecycle registry (simple)
+void rt_module_register(const char* name);
+bool rt_module_loaded(const char* name);
+void rt_module_unload(const char* name);
 
 } // namespace pycc::rt
+// Concurrency scaffolding (no-GIL model)
+using RtStart = void(*)(const void* payload, std::size_t len, void** ret, std::size_t* ret_len);
+struct RtThreadHandle; // opaque
+struct RtChannelHandle; // opaque
+struct RtAtomicIntHandle; // opaque
+
+// Threads
+RtThreadHandle* rt_spawn(RtStart fn, const void* payload, std::size_t len);
+bool rt_join(RtThreadHandle* h, void** ret, std::size_t* ret_len);
+void rt_thread_handle_destroy(RtThreadHandle* h);
+
+// Channels (ptr payload, blocking semantics)
+RtChannelHandle* chan_new(std::size_t capacity);
+void chan_close(RtChannelHandle* ch);
+void chan_send(RtChannelHandle* ch, void* value);
+void* chan_recv(RtChannelHandle* ch);
+
+// Atomics (64-bit)
+RtAtomicIntHandle* atomic_int_new(long long initial);
+long long atomic_int_load(RtAtomicIntHandle* a);
+void atomic_int_store(RtAtomicIntHandle* a, long long v);
+long long atomic_int_add_fetch(RtAtomicIntHandle* a, long long delta);

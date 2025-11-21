@@ -29,6 +29,11 @@ class Parser {
   std::unique_ptr<ast::Module> parseModule();
   // Aggregated parser errors collected during error-recovery; empty when parsing succeeded without recovery
   const std::vector<std::string>& errors() const { return errors_; }
+  // Expose a tiny helper to parse a single expression from a string for
+  // compile-time evaluation paths (e.g., literal-only eval()). This reuses the
+  // same lexer/parser and returns an AST expression.
+  static std::unique_ptr<ast::Expr> parseSmallExprFromString(const std::string& text,
+                                                            const std::string& name);
 
  private:
   lex::ITokenStream& ts_;

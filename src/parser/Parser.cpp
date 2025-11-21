@@ -1086,6 +1086,15 @@ std::unique_ptr<ast::Expr> Parser::parseExprFromString(const std::string& text,
   return P.parseExpr();
 }
 
+// Static public entrypoint used by compile-time evaluation paths
+std::unique_ptr<ast::Expr> Parser::parseSmallExprFromString(const std::string& text,
+                                                            const std::string& name) {
+  lex::Lexer L; L.pushString(text, name);
+  Parser P(L);
+  P.initBuffer();
+  return P.parseExpr();
+}
+
 std::unique_ptr<ast::Expr> Parser::parseListLiteral(const lex::Token& openTok) {
   if (peek().kind == TK::RBracket) {
     auto list = std::make_unique<ast::ListLiteral>();

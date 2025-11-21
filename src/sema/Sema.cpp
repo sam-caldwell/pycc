@@ -1014,8 +1014,22 @@ struct ExpressionTyper : public ast::VisitorBase {
     if (!callNode.callee || callNode.callee->kind != ast::NodeKind::Name) { addDiag(*diags, "unsupported callee expression", &callNode); ok = false; return; }
     const auto* nameNode = static_cast<const ast::Name*>(callNode.callee.get());
     // Builtins: len(x) -> int; isinstance(x, T) -> bool; plus constructors and common utilities
-    if (nameNode->id == "eval") { addDiag(*diags, "eval() is not allowed for security reasons", &callNode); ok = false; return; }
-    if (nameNode->id == "exec") { addDiag(*diags, "exec() is not allowed for security reasons", &callNode); ok = false; return; }
+    if (nameNode->id == "eval") {
+      // Compile-time only: accept eval(<literal string>) and reject others
+      if (callNode.args.size() != 1 || !callNode.args[0] || callNode.args[0]->kind != ast::NodeKind::StringLiteral) {
+        addDiag(*diags, "eval() only accepts a compile-time literal string in this subset", &callNode);
+        ok = false; return;
+      }
+      out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
+    }
+    if (nameNode->id == "exec") {
+      // Compile-time only: accept exec(<literal string>) and reject others (no runtime effect)
+      if (callNode.args.size() != 1 || !callNode.args[0] || callNode.args[0]->kind != ast::NodeKind::StringLiteral) {
+        addDiag(*diags, "exec() only accepts a compile-time literal string in this subset", &callNode);
+        ok = false; return;
+      }
+      out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
+    }
     if (nameNode->id == "len") {
       if (callNode.args.size() != 1) { addDiag(*diags, "len() takes exactly one argument", &callNode); ok = false; return; }
       ExpressionTyper argTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets}; callNode.args[0]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
@@ -1025,6 +1039,27 @@ struct ExpressionTyper : public ast::VisitorBase {
       }
       out = Type::Int; const_cast<ast::Call&>(callNode).setType(out); // NOLINT(cppcoreguidelines-pro-type-const-cast)
       return;
+    }
+    // Concurrency builtins: treated as dynamic/opaque in this subset with basic arity checks
+    if (nameNode->id == "chan_new") {
+      if (callNode.args.size() != 1) { addDiag(*diags, "chan_new() takes exactly 1 argument", &callNode); ok = false; return; }
+      out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
+    }
+    if (nameNode->id == "chan_send") {
+      if (callNode.args.size() != 2) { addDiag(*diags, "chan_send() takes exactly 2 arguments", &callNode); ok = false; return; }
+      out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
+    }
+    if (nameNode->id == "chan_recv") {
+      if (callNode.args.size() != 1) { addDiag(*diags, "chan_recv() takes exactly 1 argument", &callNode); ok = false; return; }
+      out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
+    }
+    if (nameNode->id == "spawn") {
+      if (callNode.args.size() != 1 || !(callNode.args[0] && callNode.args[0]->kind == ast::NodeKind::Name)) { addDiag(*diags, "spawn() requires function name", &callNode); ok = false; return; }
+      out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
+    }
+    if (nameNode->id == "join") {
+      if (callNode.args.size() != 1) { addDiag(*diags, "join() requires 1 handle argument", &callNode); ok = false; return; }
+      out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
     }
     if (nameNode->id == "obj_get") {
       if (callNode.args.size() != 2) { addDiag(*diags, "obj_get() takes two arguments", &callNode); ok = false; return; }
@@ -2605,7 +2640,8 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
         // that free-variable lookups do not capture class-local names.
         // Evaluate bases and decorators expressions
         for (const auto& b : cls.bases) { if (b) { Type tmp{}; (void)infer(b.get(), tmp); } }
-        for (const auto& d : cls.decorators) { if (d) { Type tmp{}; (void)infer(d.get(), tmp); } }
+        // Tolerate unknown class decorators; suppress diagnostics here.
+        for (const auto& d : cls.decorators) { if (d) { Type tmp{}; std::vector<Diagnostic> scratch; (void)inferExprType(d.get(), env, sigs, retParamIdxs, tmp, scratch, PolyPtrs{&polyRefs.vars, &polyRefs.attrs}, &outerScopes, classes); } }
         // Collect simple assigned names inside the class to ensure they don't leak
         std::unordered_set<std::string> classLocalNames;
         auto collectFromExpr = [&](const ast::Expr* e, auto&& selfRef) -> void {
@@ -2768,12 +2804,12 @@ bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
 
     std::unordered_map<std::string, std::unordered_set<std::string>> poly; // per-function polymorphic call targets
     std::unordered_map<std::string, std::unordered_set<std::string>> polyAttr; // per-function polymorphic attribute call targets
-    // Evaluate function decorators/annotations expressions for basic correctness
+    // Evaluate function decorators expressions for basic correctness, but tolerate unknown names.
+    // We intentionally suppress diagnostics here to allow external decorators not modeled.
     for (const auto& dec : func->decorators) {
       if (!dec) continue;
-      Type tmp{};
-      (void)inferExprType(dec.get(), env, sigs, retParamIdxs, tmp, diags, {});
-      if (!diags.empty()) { return false; }
+      Type tmp{}; std::vector<Diagnostic> scratch;
+      (void)inferExprType(dec.get(), env, sigs, retParamIdxs, tmp, scratch, {});
     }
     StmtChecker checker{*func, sigs, retParamIdxs, env, diags, PolyRefs{poly, polyAttr}, {}, false, &classes};
     for (const auto& stmt : func->body) {

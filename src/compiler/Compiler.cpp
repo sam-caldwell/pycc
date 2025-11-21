@@ -47,9 +47,20 @@
 
 namespace pycc {
 
-namespace {
+// File-local helpers (prefer static to anonymous namespace per LLVM guidelines)
+static std::filesystem::path dottedToPath(const std::string& dotted);
+static std::optional<std::filesystem::path> resolveImportPath(const std::filesystem::path& importerFile,
+                                                              const std::string& module,
+                                                              int level,
+                                                              const std::string* nameInFrom);
+static std::vector<std::filesystem::path>
+buildModuleGroup(const std::filesystem::path& moduleFile,
+                 std::unordered_set<std::string>& visitedCanonical);
+static std::vector<std::vector<std::filesystem::path>>
+discoverTopLevelImportGroups(const std::filesystem::path& file,
+                             std::unordered_set<std::string>& visitedCanonical);
 // Turn a dotted module name into a relative filesystem path candidate.
-std::filesystem::path dottedToPath(const std::string& dotted) {
+static std::filesystem::path dottedToPath(const std::string& dotted) {
   std::filesystem::path p;
   std::string seg;
   for (const char c : dotted) {
@@ -61,12 +72,12 @@ std::filesystem::path dottedToPath(const std::string& dotted) {
 }
 
 // Resolve a module or relative import to a file path. Returns first existing candidate if any.
-std::optional<std::filesystem::path> resolveImportPath(const std::filesystem::path& importerFile,
+static std::optional<std::filesystem::path> resolveImportPath(const std::filesystem::path& importerFile,
                                                               const std::string& module,
                                                               int level,
                                                               const std::string* nameInFrom = nullptr) {
   namespace fs = std::filesystem;
-  fs::path baseDir = importerFile.parent_path();
+  const fs::path baseDir = importerFile.parent_path();
   fs::path startDir = baseDir;
   // Apply relative level: go up 'level' directories if requested
   for (int i = 0; i < level; ++i) { startDir = startDir.parent_path(); }
@@ -91,7 +102,7 @@ std::optional<std::filesystem::path> resolveImportPath(const std::filesystem::pa
 }
 
 // Build a flat group for a single module: nested dependencies (depth-first) followed by the module itself.
-std::vector<std::filesystem::path>
+static std::vector<std::filesystem::path>
 buildModuleGroup(const std::filesystem::path& moduleFile,
                  std::unordered_set<std::string>& visitedCanonical) {
   namespace fs = std::filesystem;
@@ -190,7 +201,7 @@ buildModuleGroup(const std::filesystem::path& moduleFile,
 
 // Discover imports encountered at top-level in a file; returns groups in encounter order (each group is a flat
 // sequence of files: nested dependencies followed by the module itself).
-std::vector<std::vector<std::filesystem::path>>
+static std::vector<std::vector<std::filesystem::path>>
 discoverTopLevelImportGroups(const std::filesystem::path& file,
                              std::unordered_set<std::string>& visitedCanonical) {
   namespace fs = std::filesystem;
@@ -275,7 +286,7 @@ discoverTopLevelImportGroups(const std::filesystem::path& file,
   }
   return groups;
 }
-} // namespace
+// end file-local helpers
 
 // removed in favor of streaming lexer input
 

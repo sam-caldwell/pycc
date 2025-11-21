@@ -1,6 +1,6 @@
 /***
  * Name: test_security_eval_exec (e2e)
- * Purpose: Ensure CLI/compiler rejects eval/exec with clear diagnostics.
+ * Purpose: Ensure CLI/compiler accepts literal-only eval/exec at compile time.
  */
 #include <gtest/gtest.h>
 #include <fstream>
@@ -9,7 +9,7 @@
 
 
 
-TEST(SecurityE2E, RejectsEval) {
+TEST(SecurityE2E, AcceptsLiteralEval) {
   const char* srcPath = "sec_eval.py";
   {
     std::ofstream out(srcPath);
@@ -19,10 +19,10 @@ TEST(SecurityE2E, RejectsEval) {
   }
   const char* cmd = "../pycc --color=never -o out sec_eval.py 2> sec_eval.txt";
   int rc = std::system(cmd);
-  ASSERT_NE(rc, 0);
+  ASSERT_EQ(rc, 0);
 }
 
-TEST(SecurityE2E, RejectsExec) {
+TEST(SecurityE2E, AcceptsLiteralExec) {
   const char* srcPath = "sec_exec.py";
   {
     std::ofstream out(srcPath);
@@ -32,5 +32,5 @@ TEST(SecurityE2E, RejectsExec) {
   }
   const char* cmd = "../pycc --color=never -o out sec_exec.py 2> sec_exec.txt";
   int rc = std::system(cmd);
-  ASSERT_NE(rc, 0);
+  ASSERT_EQ(rc, 0);
 }

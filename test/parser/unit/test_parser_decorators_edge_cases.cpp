@@ -26,6 +26,17 @@ TEST(ParserDecoratorsEdges, DecoratorDottedAndCall) {
   ASSERT_EQ(fn.decorators.size(), 2u);
 }
 
+TEST(ParserDecoratorsEdges, NestedCallDecoratorAndDeepDotted) {
+  const char* src =
+      "@pkg.sub.deep.decor(outer(inner(1)))\n"
+      "def g(y: int) -> int:\n"
+      "  return y\n";
+  auto mod = parseSrc(src, "deco2.py");
+  ASSERT_EQ(mod->functions.size(), 1u);
+  const auto& fn = *mod->functions[0];
+  ASSERT_EQ(fn.decorators.size(), 1u);
+}
+
 TEST(ParserDecoratorsEdges, MalformedDecoratorRecoveryYieldsError) {
   const char* src =
       "@decor(\n"

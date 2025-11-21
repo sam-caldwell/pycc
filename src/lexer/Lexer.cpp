@@ -204,7 +204,7 @@ Token Lexer::scanOne(State& state) {
       if (endPos > line.size()) endPos = line.size();
       // CPython: raw strings cannot end with a single backslash before the closing quote
       if (hasR && endPos <= line.size() && endPos > (p+1)) {
-        size_t qpos = endPos - 1; // position of closing quote
+        const size_t qpos = endPos - 1; // position of closing quote
         if (qpos > 0 && line[qpos-1] == '\\') {
           // Treat as unterminated: consume to end of line to trigger recovery in parser
           endPos = line.size();
@@ -224,9 +224,13 @@ Token Lexer::scanOne(State& state) {
   if (chr == '"' || chr == '\'') { return scanStringLike(idx, /*hasB=*/false, /*hasR=*/false, /*hasF=*/false); }
   // prefixes: b/B, f/F, r/R, u/U and combos (fr, rf, rb, br). Disallow b+f together (treat as String token).
   if ((chr=='b'||chr=='B'||chr=='f'||chr=='F'||chr=='r'||chr=='R'||chr=='u'||chr=='U') && idx+1 < line.size()) {
-    size_t p = idx; bool hasB=false, hasR=false, hasF=false; int cnt=0;
+    size_t p = idx;
+    bool hasB = false;
+    bool hasR = false;
+    bool hasF = false;
+    int cnt = 0;
     while (cnt<2 && p<line.size()) {
-      char c = line[p];
+      const char c = line[p];
       if (c=='b'||c=='B') { hasB = true; }
       else if (c=='r'||c=='R') { hasR = true; }
       else if (c=='f'||c=='F') { hasF = true; }
@@ -309,7 +313,7 @@ Token Lexer::scanOne(State& state) {
   auto scanDigitsUnderscore = [&](size_t pos, auto isOk) {
     size_t i = pos; bool have = false; bool prevUnderscore=false;
     while (i < line.size()) {
-      char c = line[i];
+      const char c = line[i];
       if (isOk(c)) { have = true; prevUnderscore=false; ++i; continue; }
       if (c=='_' && have && !prevUnderscore) { prevUnderscore=true; ++i; continue; }
       break;
@@ -318,10 +322,10 @@ Token Lexer::scanOne(State& state) {
     return i;
   };
   if (std::isdigit(static_cast<unsigned char>(chr)) != 0) {
-    size_t i0 = idx;
+    const size_t i0 = idx;
     // Base prefixes 0b/0o/0x
     if (line[idx] == '0' && idx + 1 < line.size()) {
-      char p1 = line[idx+1];
+      const char p1 = line[idx+1];
       if (p1=='b'||p1=='B'||p1=='o'||p1=='O'||p1=='x'||p1=='X') {
         size_t p = idx + 2;
         if (p1=='b'||p1=='B') p = scanDigitsUnderscore(p, isBinDigit);
@@ -333,18 +337,18 @@ Token Lexer::scanOne(State& state) {
       }
     }
     // Decimal int or float
-    size_t p = scanDigitsUnderscore(idx, isDecDigit);
+    const size_t p = scanDigitsUnderscore(idx, isDecDigit);
     // Float with fractional part or dot-only fractional
     if (p < line.size() && line[p] == '.') {
-      size_t fracStart = p + 1;
-      size_t fracEnd = scanDigitsUnderscore(fracStart, isDecDigit);
-      size_t epos = scanExponent(fracEnd);
+      const size_t fracStart = p + 1;
+      const size_t fracEnd = scanDigitsUnderscore(fracStart, isDecDigit);
+      const size_t epos = scanExponent(fracEnd);
       size_t end = epos;
       if (end < line.size() && (line[end]=='j'||line[end]=='J')) { ++end; Token tok = makeTok(TokenKind::Imag, i0, end); idx = end; return tok; }
       Token tok = makeTok(TokenKind::Float, i0, epos); idx = epos; return tok;
     }
     // Float via exponent only
-    size_t epos = scanExponent(p);
+    const size_t epos = scanExponent(p);
     if (epos != p) {
       size_t end = epos;
       if (end < line.size() && (line[end]=='j'||line[end]=='J')) { ++end; Token tok = makeTok(TokenKind::Imag, i0, end); idx = end; return tok; }
