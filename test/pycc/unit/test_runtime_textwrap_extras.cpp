@@ -8,7 +8,7 @@
 
 using namespace pycc::rt;
 
-TEST(RuntimeTextwrapExtras, WrapAndDedent) {
+TEST(RuntimeTextwrapExtras, WrapDedentIndent) {
   gc_reset_for_tests();
   void* s = string_from_cstr("This is a test of wrap");
   void* lst = textwrap_wrap(s, 6);
@@ -27,5 +27,8 @@ TEST(RuntimeTextwrapExtras, WrapAndDedent) {
   void* d = textwrap_dedent(string_from_cstr("    line1\n      line2\n    line3"));
   std::string ds(string_data(d), string_len(d));
   EXPECT_EQ(ds, std::string("line1\n  line2\nline3"));
-}
 
+  void* ind = textwrap_indent(string_from_cstr("A\nB"), string_from_cstr("> "));
+  std::string is(string_data(ind), string_len(ind));
+  EXPECT_EQ(is, std::string("> A\n> B"));
+}

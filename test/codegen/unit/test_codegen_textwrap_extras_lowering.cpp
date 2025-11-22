@@ -21,12 +21,14 @@ TEST(CodegenTextwrapExtras, DeclaresAndCalls) {
 def main() -> int:
   a = textwrap.wrap("This is a test", 6)
   b = textwrap.dedent("  This\n    is")
+  c = textwrap.indent("A\nB", "> ")
   return 0
 )PY";
   auto ir = genIR_EX(src);
   ASSERT_NE(ir.find("declare ptr @pycc_textwrap_wrap(ptr, i32)"), std::string::npos);
   ASSERT_NE(ir.find("declare ptr @pycc_textwrap_dedent(ptr)"), std::string::npos);
+  ASSERT_NE(ir.find("declare ptr @pycc_textwrap_indent(ptr, ptr)"), std::string::npos);
   ASSERT_NE(ir.find("call ptr @pycc_textwrap_wrap(ptr"), std::string::npos);
   ASSERT_NE(ir.find("call ptr @pycc_textwrap_dedent(ptr"), std::string::npos);
+  ASSERT_NE(ir.find("call ptr @pycc_textwrap_indent(ptr"), std::string::npos);
 }
-

@@ -21,6 +21,7 @@ TEST(SemaTextwrapExtras, Accepts) {
 def main() -> int:
   a = textwrap.wrap("This is a test", 6)
   b = textwrap.dedent("  This\n    is")
+  c = textwrap.indent("A\nB", "> ")
   return 0
 )PY";
   EXPECT_TRUE(semaOK_EX(src));
@@ -39,5 +40,10 @@ def main() -> int:
   return 0
 )PY";
   EXPECT_FALSE(semaOK_EX(src2));
+  const char* src3 = R"PY(
+def main() -> int:
+  a = textwrap.indent("x", 1)
+  return 0
+)PY";
+  EXPECT_FALSE(semaOK_EX(src3));
 }
-
