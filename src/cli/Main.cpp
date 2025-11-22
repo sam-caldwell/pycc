@@ -1,3 +1,8 @@
+#include "compiler/Compiler.h"
+#include "cli/ParseArgs.h"
+#include "cli/Usage.h"
+#include <cstddef>
+#include <iostream>
 /***
  * Name: pycc::main
  * Purpose: CLI entry point for pycc compiler.
@@ -8,12 +13,6 @@
  * Theory of Operation:
  *   Parse args then invoke Compiler::run.
  */
-#include "compiler/Compiler.h"
-#include "cli/ParseArgs.h"
-#include "cli/Usage.h"
-#include <cstddef>
-#include <iostream>
-
 int main(const int argc, char** argv) {
   try {
     pycc::cli::Options opts;
