@@ -22,6 +22,7 @@
 #include <pthread.h>
 #include <thread>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 #include <cstdio>
 #include <cstdlib>
@@ -30,6 +31,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <filesystem>
+#include <system_error>
 
 namespace pycc::rt {
 
@@ -1655,6 +1658,149 @@ bool os_mkdir(const char* path, int mode) {
 bool os_remove(const char* path) { if (!path) return false; return ::remove(path) == 0; }
 bool os_rename(const char* src, const char* dst) { if (!src || !dst) return false; return ::rename(src, dst) == 0; }
 
+// ---- pathlib shims (std::filesystem based) ----
+namespace {
+static std::filesystem::path fs_from_rt(void* s) {
+  if (!s) return {};
+  const char* data = string_data(s);
+  const std::size_t len = string_len(s);
+  std::string sv(data ? data : "", data ? len : 0);
+  std::u8string u8(reinterpret_cast<const char8_t*>(sv.data()), reinterpret_cast<const char8_t*>(sv.data()) + sv.size());
+  return std::filesystem::path(u8);
+}
+static void* rt_from_fs(const std::filesystem::path& p) {
+  auto u8 = p.generic_u8string();
+  const char* bytes = reinterpret_cast<const char*>(u8.c_str());
+  return string_new(bytes, u8.size());
+}
+static void* rt_from_str(const std::string& s) { return string_new(s.data(), s.size()); }
+static bool fs_exists_nothrow(const std::filesystem::path& p) { std::error_code ec; return std::filesystem::exists(p, ec); }
+static bool fs_is_regular_nothrow(const std::filesystem::path& p) { std::error_code ec; return std::filesystem::is_regular_file(p, ec); }
+static bool fs_is_dir_nothrow(const std::filesystem::path& p) { std::error_code ec; return std::filesystem::is_directory(p, ec); }
+static std::filesystem::path fs_abs_nothrow(const std::filesystem::path& p) { std::error_code ec; auto r = std::filesystem::absolute(p, ec); return ec ? p : r; }
+static std::filesystem::path fs_resolve_nothrow(const std::filesystem::path& p) {
+  std::error_code ec;
+  auto r = std::filesystem::weakly_canonical(p, ec);
+  if (!ec && !r.empty()) return r;
+  // Fallback: absolute
+  return fs_abs_nothrow(p);
+}
+static std::string detect_home() {
+#if defined(_WIN32)
+  if (const char* p = std::getenv("USERPROFILE")) { return std::string(p); }
+  const char* drive = std::getenv("HOMEDRIVE");
+  const char* path = std::getenv("HOMEPATH");
+  if (drive && path) { return std::string(drive) + std::string(path); }
+#else
+  if (const char* p = std::getenv("HOME")) { return std::string(p); }
+#endif
+  // Fallback to cwd
+  std::error_code ec; auto cwd = std::filesystem::current_path(ec);
+  return ec ? std::string(".") : cwd.generic_string();
+}
+static bool wildcard_match(const std::string& name, const std::string& pattern) {
+  // Simple glob: '*' matches any sequence, '?' matches single char (no character classes)
+  size_t n = name.size(), m = pattern.size();
+  size_t i = 0, j = 0, star = std::string::npos, mark = 0;
+  while (i < n) {
+    if (j < m && (pattern[j] == '?' || pattern[j] == name[i])) { ++i; ++j; continue; }
+    if (j < m && pattern[j] == '*') { star = j++; mark = i; continue; }
+    if (star != std::string::npos) { j = star + 1; i = ++mark; continue; }
+    return false;
+  }
+  while (j < m && pattern[j] == '*') ++j;
+  return j == m;
+}
+} // namespace
+
+void* pathlib_cwd() {
+  std::error_code ec; auto p = std::filesystem::current_path(ec);
+  if (ec) return string_from_cstr("");
+  return rt_from_fs(p);
+}
+void* pathlib_home() {
+  return rt_from_str(detect_home());
+}
+void* pathlib_join2(void* a, void* b) {
+  auto pa = fs_from_rt(a); auto pb = fs_from_rt(b);
+  return rt_from_fs(pa / pb);
+}
+void* pathlib_parent(void* p) {
+  return rt_from_fs(fs_from_rt(p).parent_path());
+}
+void* pathlib_basename(void* p) {
+  return rt_from_fs(fs_from_rt(p).filename());
+}
+void* pathlib_suffix(void* p) { return rt_from_fs(fs_from_rt(p).extension()); }
+void* pathlib_stem(void* p) { return rt_from_fs(fs_from_rt(p).stem()); }
+void* pathlib_with_name(void* p, void* name) {
+  auto base = fs_from_rt(p); auto nm = fs_from_rt(name);
+  return rt_from_fs(base.parent_path() / nm);
+}
+void* pathlib_with_suffix(void* p, void* suffix) {
+  auto base = fs_from_rt(p); auto s = fs_from_rt(suffix);
+  std::filesystem::path out = base; out.replace_extension(s);
+  return rt_from_fs(out);
+}
+void* pathlib_as_posix(void* p) { return rt_from_fs(fs_from_rt(p)); }
+void* pathlib_as_uri(void* p) {
+  auto abs = fs_resolve_nothrow(fs_from_rt(p));
+  if (abs.empty() || !abs.is_absolute()) return string_from_cstr("");
+  auto gen = abs.generic_u8string();
+#if defined(_WIN32)
+  // file:///C:/path
+  std::string uri = std::string("file:///") + std::string(reinterpret_cast<const char*>(gen.c_str()), gen.size());
+#else
+  std::string uri = std::string("file://") + std::string(reinterpret_cast<const char*>(gen.c_str()), gen.size());
+#endif
+  return string_new(uri.data(), uri.size());
+}
+void* pathlib_resolve(void* p) { return rt_from_fs(fs_resolve_nothrow(fs_from_rt(p))); }
+void* pathlib_absolute(void* p) { return rt_from_fs(fs_abs_nothrow(fs_from_rt(p))); }
+void* pathlib_parts(void* p) {
+  auto path = fs_from_rt(p);
+  // Build list of parts in generic form
+  void* lst = list_new(4);
+  void** slot = &lst;
+  for (const auto& part : path) {
+    auto u8 = part.generic_u8string();
+    void* s = string_new(reinterpret_cast<const char*>(u8.c_str()), u8.size());
+    list_push_slot(slot, s);
+  }
+  return lst;
+}
+bool pathlib_match(void* p, void* pattern) {
+  auto name = fs_from_rt(p).filename().generic_u8string();
+  std::string nm(reinterpret_cast<const char*>(name.c_str()), name.size());
+  const char* pat = string_data(pattern); std::size_t len = string_len(pattern);
+  std::string patS(pat ? pat : "", pat ? len : 0);
+  return wildcard_match(nm, patS);
+}
+bool pathlib_exists(void* p) { return fs_exists_nothrow(fs_from_rt(p)); }
+bool pathlib_is_file(void* p) { return fs_is_regular_nothrow(fs_from_rt(p)); }
+bool pathlib_is_dir(void* p) { return fs_is_dir_nothrow(fs_from_rt(p)); }
+bool pathlib_mkdir(void* p, int mode, int parents, int exist_ok) {
+  (void)mode; // Permissions not modeled in this subset
+  auto path = fs_from_rt(p);
+  std::error_code ec;
+  if (parents) {
+    if (std::filesystem::create_directories(path, ec)) return true;
+  } else {
+    if (std::filesystem::create_directory(path, ec)) return true;
+  }
+  if (exist_ok && fs_is_dir_nothrow(path)) return true;
+  return false;
+}
+bool pathlib_rmdir(void* p) {
+  std::error_code ec; return std::filesystem::remove(fs_from_rt(p), ec);
+}
+bool pathlib_unlink(void* p) {
+  std::error_code ec; return std::filesystem::remove(fs_from_rt(p), ec);
+}
+bool pathlib_rename(void* src, void* dst) {
+  std::error_code ec; std::filesystem::rename(fs_from_rt(src), fs_from_rt(dst), ec); return !ec;
+}
+
 // No module registry: imports are handled AOT in Codegen and linked statically.
 
 // ---- Subprocess shims ----
@@ -1689,6 +1835,30 @@ int32_t subprocess_check_call(void* cmd) {
 extern "C" int32_t pycc_subprocess_run(void* cmd) { return ::pycc::rt::subprocess_run(cmd); }
 extern "C" int32_t pycc_subprocess_call(void* cmd) { return ::pycc::rt::subprocess_call(cmd); }
 extern "C" int32_t pycc_subprocess_check_call(void* cmd) { return ::pycc::rt::subprocess_check_call(cmd); }
+
+// C ABI wrappers for pathlib
+extern "C" void* pycc_pathlib_cwd() { return ::pycc::rt::pathlib_cwd(); }
+extern "C" void* pycc_pathlib_home() { return ::pycc::rt::pathlib_home(); }
+extern "C" void* pycc_pathlib_join2(void* a, void* b) { return ::pycc::rt::pathlib_join2(a,b); }
+extern "C" void* pycc_pathlib_parent(void* p) { return ::pycc::rt::pathlib_parent(p); }
+extern "C" void* pycc_pathlib_basename(void* p) { return ::pycc::rt::pathlib_basename(p); }
+extern "C" void* pycc_pathlib_suffix(void* p) { return ::pycc::rt::pathlib_suffix(p); }
+extern "C" void* pycc_pathlib_stem(void* p) { return ::pycc::rt::pathlib_stem(p); }
+extern "C" void* pycc_pathlib_with_name(void* p, void* n) { return ::pycc::rt::pathlib_with_name(p,n); }
+extern "C" void* pycc_pathlib_with_suffix(void* p, void* s) { return ::pycc::rt::pathlib_with_suffix(p,s); }
+extern "C" void* pycc_pathlib_as_posix(void* p) { return ::pycc::rt::pathlib_as_posix(p); }
+extern "C" void* pycc_pathlib_as_uri(void* p) { return ::pycc::rt::pathlib_as_uri(p); }
+extern "C" void* pycc_pathlib_resolve(void* p) { return ::pycc::rt::pathlib_resolve(p); }
+extern "C" void* pycc_pathlib_absolute(void* p) { return ::pycc::rt::pathlib_absolute(p); }
+extern "C" void* pycc_pathlib_parts(void* p) { return ::pycc::rt::pathlib_parts(p); }
+extern "C" bool  pycc_pathlib_match(void* p, void* pat) { return ::pycc::rt::pathlib_match(p,pat); }
+extern "C" bool  pycc_pathlib_exists(void* p) { return ::pycc::rt::pathlib_exists(p); }
+extern "C" bool  pycc_pathlib_is_file(void* p) { return ::pycc::rt::pathlib_is_file(p); }
+extern "C" bool  pycc_pathlib_is_dir(void* p) { return ::pycc::rt::pathlib_is_dir(p); }
+extern "C" bool  pycc_pathlib_mkdir(void* p, int m, int parents, int exist_ok) { return ::pycc::rt::pathlib_mkdir(p,m,parents,exist_ok); }
+extern "C" bool  pycc_pathlib_rmdir(void* p) { return ::pycc::rt::pathlib_rmdir(p); }
+extern "C" bool  pycc_pathlib_unlink(void* p) { return ::pycc::rt::pathlib_unlink(p); }
+extern "C" bool  pycc_pathlib_rename(void* a, void* b) { return ::pycc::rt::pathlib_rename(a,b); }
 
 // ===== Concurrency scaffolding =====
 namespace pycc::rt {
@@ -2050,6 +2220,7 @@ void* itertools_chain_from_iterable(void* list_of_lists) {
   void* out = list_new(0);
   if (list_of_lists == nullptr) return out;
   const std::size_t n = list_len(list_of_lists);
+  std::unordered_map<long long, void*> intCache;
   for (std::size_t i = 0; i < n; ++i) {
     void* sub = list_get(list_of_lists, i);
     if (sub == nullptr) continue;
@@ -2251,6 +2422,261 @@ extern "C" void* pycc_datetime_utcnow() { return ::pycc::rt::datetime_utcnow(); 
 extern "C" void* pycc_datetime_fromtimestamp(double ts) { return ::pycc::rt::datetime_fromtimestamp(ts); }
 extern "C" void* pycc_datetime_utcfromtimestamp(double ts) { return ::pycc::rt::datetime_utcfromtimestamp(ts); }
 
+// ---------------------------
+// re module (simplified, std::regex-based)
+// ---------------------------
+#include <regex>
+namespace pycc::rt {
+
+static inline std::string rt_to_stdstr(void* s) {
+  const char* d = string_data(s);
+  const std::size_t n = string_len(s);
+  return std::string(d ? d : "", n);
+}
+
+static std::string apply_flags_to_pattern(const std::string& pat, int flags) {
+  // Flags bits: 0x02 = IGNORECASE (handled in regex flags), 0x08 = MULTILINE, 0x20 = DOTALL
+  const bool multiline = (flags & 0x08) != 0;
+  const bool dotall = (flags & 0x20) != 0;
+  if (!multiline && !dotall) return pat;
+  std::string out;
+  out.reserve(pat.size() * 2);
+  bool inClass = false; bool esc = false;
+  for (size_t i = 0; i < pat.size(); ++i) {
+    char c = pat[i];
+    if (esc) { out.push_back(c); esc = false; continue; }
+    if (c == '\\') { out.push_back(c); esc = true; continue; }
+    if (c == '[') { inClass = true; out.push_back(c); continue; }
+    if (c == ']' && inClass) { inClass = false; out.push_back(c); continue; }
+    if (!inClass && dotall && c == '.') {
+      out += "[\\s\\S]"; // match any including newline
+      continue;
+    }
+    if (!inClass && multiline && (c == '^' || c == '$')) {
+      if (c == '^') {
+        out += "(?:^|\n)"; // approximate multiline start (consumes newline)
+      } else {
+        out += "(?:\n|$)"; // approximate multiline end (consumes newline)
+      }
+      continue;
+    }
+    out.push_back(c);
+  }
+  return out;
+}
+
+static std::regex make_regex(const std::string& pat, int flags) {
+  std::regex::flag_type f = std::regex::ECMAScript;
+  if (flags & 0x02 /* IGNORECASE */) { f |= std::regex::icase; }
+  // Translate flags for MULTILINE (0x08) and DOTALL (0x20) by editing the pattern.
+  std::string p2 = apply_flags_to_pattern(pat, flags);
+  return std::regex(p2, f);
+}
+
+void* re_compile(void* pattern, int flags) {
+  // Store pattern and flags in an object for demonstration (not used in codegen path)
+  void* obj = object_new(2);
+  object_set(obj, 0, pattern);
+  object_set(obj, 1, box_int(flags));
+  return obj;
+}
+
+static inline void* make_match_obj(int start, int end, const std::string& group0) {
+  void* m = object_new(3);
+  object_set(m, 0, box_int(start));
+  object_set(m, 1, box_int(end));
+  object_set(m, 2, string_new(group0.data(), group0.size()));
+  return m;
+}
+
+void* re_search(void* pattern, void* text, int flags) {
+  try {
+    std::string pat = rt_to_stdstr(pattern);
+    std::string s = rt_to_stdstr(text);
+    std::regex re = make_regex(pat, flags);
+    std::smatch m;
+    if (std::regex_search(s, m, re)) {
+      int start = static_cast<int>(m.position());
+      int end = start + static_cast<int>(m.length());
+      return make_match_obj(start, end, m.str());
+    }
+    return nullptr;
+  } catch (...) { return nullptr; }
+}
+
+void* re_match(void* pattern, void* text, int flags) {
+  try {
+    std::string pat = std::string("^") + rt_to_stdstr(pattern);
+    std::string s = rt_to_stdstr(text);
+    std::regex re = make_regex(pat, flags);
+    std::smatch m;
+    if (std::regex_search(s, m, re)) {
+      if (m.position() == 0) {
+        int start = 0; int end = static_cast<int>(m.length());
+        return make_match_obj(start, end, m.str());
+      }
+    }
+    return nullptr;
+  } catch (...) { return nullptr; }
+}
+
+void* re_fullmatch(void* pattern, void* text, int flags) {
+  try {
+    std::string pat = std::string("^") + rt_to_stdstr(pattern) + std::string("$");
+    std::string s = rt_to_stdstr(text);
+    std::regex re = make_regex(pat, flags);
+    std::smatch m;
+    if (std::regex_match(s, m, re)) {
+      return make_match_obj(0, static_cast<int>(s.size()), m.str());
+    }
+    return nullptr;
+  } catch (...) { return nullptr; }
+}
+
+void* re_findall(void* pattern, void* text, int flags) {
+  try {
+    std::string pat = rt_to_stdstr(pattern);
+    std::string s = rt_to_stdstr(text);
+    std::regex re = make_regex(pat, flags);
+    void* out = list_new(0);
+    for (auto it = std::sregex_iterator(s.begin(), s.end(), re); it != std::sregex_iterator(); ++it) {
+      const auto& m = *it;
+      void* ms = string_new(m.str().data(), m.str().size());
+      list_push_slot(&out, ms);
+    }
+    return out;
+  } catch (...) { return list_new(0); }
+}
+
+void* re_finditer(void* pattern, void* text, int flags) {
+  try {
+    std::string pat = rt_to_stdstr(pattern);
+    std::string s = rt_to_stdstr(text);
+    std::regex re = make_regex(pat, flags);
+    void* out = list_new(0);
+    for (auto it = std::sregex_iterator(s.begin(), s.end(), re); it != std::sregex_iterator(); ++it) {
+      const auto& m = *it;
+      int start = static_cast<int>(m.position());
+      int end = start + static_cast<int>(m.length());
+      void* mo = make_match_obj(start, end, m.str());
+      list_push_slot(&out, mo);
+    }
+    return out;
+  } catch (...) { return list_new(0); }
+}
+
+void* re_split(void* pattern, void* text, int maxsplit, int flags) {
+  try {
+    std::string pat = rt_to_stdstr(pattern);
+    std::string s = rt_to_stdstr(text);
+    std::regex re = make_regex(pat, flags);
+    void* out = list_new(0);
+    std::sregex_token_iterator end;
+    int splits = 0;
+    std::size_t last = 0;
+    for (auto it = std::sregex_iterator(s.begin(), s.end(), re); it != std::sregex_iterator(); ++it) {
+      std::size_t pos = static_cast<std::size_t>((*it).position());
+      std::size_t len = static_cast<std::size_t>((*it).length());
+      std::string chunk = s.substr(last, pos - last);
+      list_push_slot(&out, string_new(chunk.data(), chunk.size()));
+      last = pos + len;
+      ++splits;
+      if (maxsplit > 0 && splits >= maxsplit) break;
+    }
+    std::string tail = s.substr(last);
+    list_push_slot(&out, string_new(tail.data(), tail.size()));
+    return out;
+  } catch (...) { return list_new(0); }
+}
+
+static std::string translate_repl_backrefs(const std::string& repl) {
+  std::string out; out.reserve(repl.size());
+  for (std::size_t i = 0; i < repl.size(); ++i) {
+    char c = repl[i];
+    if (c == '\\' && i + 1 < repl.size() && std::isdigit(static_cast<unsigned char>(repl[i+1]))) {
+      out.push_back('$'); out.push_back(repl[i+1]); ++i; continue;
+    }
+    out.push_back(c);
+  }
+  return out;
+}
+
+void* re_sub(void* pattern, void* repl, void* text, int count, int flags) {
+  try {
+    std::string pat = rt_to_stdstr(pattern);
+    std::string rep = translate_repl_backrefs(rt_to_stdstr(repl));
+    std::string s = rt_to_stdstr(text);
+    std::regex re = make_regex(pat, flags);
+    if (count <= 0) {
+      std::string res = std::regex_replace(s, re, rep);
+      return string_new(res.data(), res.size());
+    }
+    // Limited count: manual loop
+    std::string out; out.reserve(s.size());
+    std::string::const_iterator searchStart(s.cbegin());
+    int replaced = 0;
+    std::smatch m;
+    while (replaced < count && std::regex_search(searchStart, s.cend(), m, re)) {
+      out.append(searchStart, m.prefix().second);
+      out.append(m.format(rep));
+      searchStart = m.suffix().first;
+      ++replaced;
+    }
+    out.append(searchStart, s.cend());
+    return string_new(out.data(), out.size());
+  } catch (...) { return nullptr; }
+}
+
+void* re_subn(void* pattern, void* repl, void* text, int count, int flags) {
+  try {
+    std::string pat = rt_to_stdstr(pattern);
+    std::string rep = translate_repl_backrefs(rt_to_stdstr(repl));
+    std::string s = rt_to_stdstr(text);
+    std::regex re = make_regex(pat, flags);
+    std::string out;
+    out.reserve(s.size());
+    std::string::const_iterator searchStart(s.cbegin());
+    int replaced = 0;
+    std::smatch m;
+    while ((count <= 0 || replaced < count) && std::regex_search(searchStart, s.cend(), m, re)) {
+      out.append(searchStart, m.prefix().second);
+      out.append(m.format(rep));
+      searchStart = m.suffix().first;
+      ++replaced;
+    }
+    out.append(searchStart, s.cend());
+    void* res = list_new(2);
+    list_push_slot(&res, string_new(out.data(), out.size()));
+    list_push_slot(&res, box_int(replaced));
+    return res;
+  } catch (...) { return list_new(2); }
+}
+
+void* re_escape(void* text) {
+  std::string s = rt_to_stdstr(text);
+  std::string out; out.reserve(s.size() * 2);
+  auto is_alnum = [](unsigned char c){ return std::isalnum(c); };
+  for (unsigned char c : s) {
+    if (is_alnum(c)) out.push_back(static_cast<char>(c));
+    else { out.push_back('\\'); out.push_back(static_cast<char>(c)); }
+  }
+  return string_new(out.data(), out.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI exports for re
+extern "C" void* pycc_re_compile(void* p, int f) { return ::pycc::rt::re_compile(p,f); }
+extern "C" void* pycc_re_search(void* p, void* t, int f) { return ::pycc::rt::re_search(p,t,f); }
+extern "C" void* pycc_re_match(void* p, void* t, int f) { return ::pycc::rt::re_match(p,t,f); }
+extern "C" void* pycc_re_fullmatch(void* p, void* t, int f) { return ::pycc::rt::re_fullmatch(p,t,f); }
+extern "C" void* pycc_re_findall(void* p, void* t, int f) { return ::pycc::rt::re_findall(p,t,f); }
+extern "C" void* pycc_re_split(void* p, void* t, int maxs, int f) { return ::pycc::rt::re_split(p,t,maxs,f); }
+extern "C" void* pycc_re_sub(void* p, void* r, void* t, int c, int f) { return ::pycc::rt::re_sub(p,r,t,c,f); }
+extern "C" void* pycc_re_subn(void* p, void* r, void* t, int c, int f) { return ::pycc::rt::re_subn(p,r,t,c,f); }
+extern "C" void* pycc_re_escape(void* s) { return ::pycc::rt::re_escape(s); }
+extern "C" void* pycc_re_finditer(void* p, void* t, int f) { return ::pycc::rt::re_finditer(p,t,f); }
+
 // C ABI exports for itertools
 extern "C" void* pycc_itertools_chain2(void* a, void* b) { return ::pycc::rt::itertools_chain2(a,b); }
 extern "C" void* pycc_itertools_chain_from_iterable(void* x) { return ::pycc::rt::itertools_chain_from_iterable(x); }
@@ -2265,3 +2691,118 @@ extern "C" void* pycc_itertools_repeat(void* obj, int times) { return ::pycc::rt
 extern "C" void* pycc_itertools_pairwise(void* a) { return ::pycc::rt::itertools_pairwise(a); }
 extern "C" void* pycc_itertools_batched(void* a, int n) { return ::pycc::rt::itertools_batched(a,n); }
 extern "C" void* pycc_itertools_compress(void* a, void* b) { return ::pycc::rt::itertools_compress(a,b); }
+
+// ===== collections module =====
+namespace pycc::rt {
+
+void* collections_counter(void* iterable_list) {
+  void* d = dict_new(8);
+  if (iterable_list == nullptr) return d;
+  const std::size_t n = list_len(iterable_list);
+  std::unordered_map<long long, void*> intCache;
+  for (std::size_t i = 0; i < n; ++i) {
+    void* k = list_get(iterable_list, i);
+    // Canonicalize key: use string as-is; for ints use decimal string
+    void* key = k;
+    if (k != nullptr) {
+      auto* hdr = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(k) - sizeof(ObjectHeader));
+      if (static_cast<TypeTag>(hdr->tag) == TypeTag::Int) {
+        long long v = box_int_value(k);
+        auto it = intCache.find(v);
+        if (it != intCache.end()) { key = it->second; }
+        else {
+          std::string s = std::to_string(v);
+          void* ks = string_new(s.data(), s.size());
+          intCache.emplace(v, ks);
+          key = ks;
+        }
+      }
+    }
+    void* cur = dict_get(d, key);
+    long long v = cur ? box_int_value(cur) : 0;
+    void* next = box_int(v + 1);
+    dict_set(&d, key, next);
+  }
+  return d;
+}
+
+void* collections_ordered_dict(void* list_of_pairs) {
+  void* d = dict_new(8);
+  if (list_of_pairs == nullptr) return d;
+  const std::size_t n = list_len(list_of_pairs);
+  for (std::size_t i = 0; i < n; ++i) {
+    void* pair = list_get(list_of_pairs, i);
+    if (pair == nullptr || list_len(pair) < 2) continue;
+    void* k = list_get(pair, 0);
+    void* v = list_get(pair, 1);
+    dict_set(&d, k, v);
+  }
+  return d;
+}
+
+void* collections_chainmap(void* list_of_dicts) {
+  // Merge left-to-right, first dict has precedence.
+  void* out = dict_new(8);
+  if (list_of_dicts == nullptr) return out;
+  const std::size_t n = list_len(list_of_dicts);
+  // Iterate from right to left so leftmost takes precedence.
+  for (std::size_t ri = 0; ri < n; ++ri) {
+    std::size_t i = (n - 1) - ri;
+    void* d = list_get(list_of_dicts, i);
+    // Iterate dict via iterator API
+    void* it = pycc_dict_iter_new(d);
+    while (true) {
+      void* k = pycc_dict_iter_next(it);
+      if (k == nullptr) break;
+      void* v = dict_get(d, k);
+      dict_set(&out, k, v);
+    }
+  }
+  return out;
+}
+
+void* collections_defaultdict_new(void* default_value) {
+  void* dd = object_new(2);
+  object_set(dd, 0, dict_new(8));
+  object_set(dd, 1, default_value);
+  return dd;
+}
+
+static inline void* dd_dict(void* dd) {
+  auto* meta = reinterpret_cast<std::size_t*>(dd);
+  auto** vals = reinterpret_cast<void**>(meta + 1);
+  return vals[0];
+}
+static inline void* dd_default(void* dd) {
+  auto* meta = reinterpret_cast<std::size_t*>(dd);
+  auto** vals = reinterpret_cast<void**>(meta + 1);
+  return vals[1];
+}
+
+void* collections_defaultdict_get(void* dd, void* key) {
+  if (dd == nullptr) return nullptr;
+  void* d = dd_dict(dd);
+  void* v = dict_get(d, key);
+  if (v != nullptr) return v;
+  void* defv = dd_default(dd);
+  dict_set(&d, key, defv);
+  // write back dictionary in case dict_set replaced it (it doesn't, but keep consistent)
+  object_set(dd, 0, d);
+  return defv;
+}
+
+void collections_defaultdict_set(void* dd, void* key, void* value) {
+  if (dd == nullptr) return;
+  void* d = dd_dict(dd);
+  dict_set(&d, key, value);
+  object_set(dd, 0, d);
+}
+
+} // namespace pycc::rt
+
+extern "C" void* pycc_collections_counter(void* lst) { return ::pycc::rt::collections_counter(lst); }
+extern "C" void* pycc_collections_ordered_dict(void* pairs) { return ::pycc::rt::collections_ordered_dict(pairs); }
+extern "C" void* pycc_collections_chainmap(void* dicts) { return ::pycc::rt::collections_chainmap(dicts); }
+extern "C" void* pycc_collections_defaultdict_new(void* defv) { return ::pycc::rt::collections_defaultdict_new(defv); }
+extern "C" void* pycc_collections_defaultdict_get(void* dd, void* key) { return ::pycc::rt::collections_defaultdict_get(dd,key); }
+extern "C" void  pycc_collections_defaultdict_set(void* dd, void* key, void* val) { ::pycc::rt::collections_defaultdict_set(dd,key,val); }

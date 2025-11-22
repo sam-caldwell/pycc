@@ -38,3 +38,19 @@ def main() -> int:
   ASSERT_NE(ir.find("declare void @pycc_time_sleep(double)"), std::string::npos);
 }
 
+TEST(CodegenTime, NsAndProcessCallsPresent) {
+  const char* src = R"PY(
+def main() -> int:
+  a = time.monotonic_ns()
+  b = time.perf_counter_ns()
+  c = time.process_time()
+  return 0
+)PY";
+  auto ir = genIR(src);
+  ASSERT_NE(ir.find("declare i64 @pycc_time_monotonic_ns()"), std::string::npos);
+  ASSERT_NE(ir.find("declare i64 @pycc_time_perf_counter_ns()"), std::string::npos);
+  ASSERT_NE(ir.find("declare double @pycc_time_process_time()"), std::string::npos);
+  ASSERT_NE(ir.find("call i64 @pycc_time_monotonic_ns()"), std::string::npos);
+  ASSERT_NE(ir.find("call i64 @pycc_time_perf_counter_ns()"), std::string::npos);
+  ASSERT_NE(ir.find("call double @pycc_time_process_time()"), std::string::npos);
+}

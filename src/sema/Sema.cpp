@@ -933,6 +933,43 @@ struct ExpressionTyper : public ast::VisitorBase {
             out = ast::TypeKind::Bool; const_cast<ast::Call&>(callNode).setType(out); return;
           }
         }
+        if (base0->id == "pathlib") {
+          const std::string fn = at0->attr;
+          auto ensureStr = [&](const ast::Expr* e){ ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; if(e){ e->accept(t); if(!t.ok) return false; if(t.out != Type::Str) { addDiag(*diags, std::string("pathlib.")+fn+": argument must be str", e); return false; } } return true; };
+          auto ensureInt = [&](const ast::Expr* e){ ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; if(e){ e->accept(t); if(!t.ok) return false; if(!(t.out==Type::Int || t.out==Type::Bool || t.out==Type::Float)) { addDiag(*diags, std::string("pathlib.")+fn+": numeric argument required", e); return false; } } return true; };
+          if (fn == "cwd" || fn == "home") { if (!callNode.args.empty()) { addDiag(*diags, std::string("pathlib.")+fn+"() takes 0 args", &callNode); ok=false; return; } out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return; }
+          if (fn == "join") { if (callNode.args.size()!=2) { addDiag(*diags, "pathlib.join() takes 2 args", &callNode); ok=false; return; } if (!ensureStr(callNode.args[0].get()) || !ensureStr(callNode.args[1].get())) { ok=false; return; } out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return; }
+          if (fn == "parent" || fn == "basename" || fn == "suffix" || fn == "stem" || fn == "as_posix" || fn == "as_uri" || fn == "resolve" || fn == "absolute") {
+            if (callNode.args.size()!=1) { addDiag(*diags, std::string("pathlib.")+fn+"() takes 1 arg", &callNode); ok=false; return; }
+            if (!ensureStr(callNode.args[0].get())) { ok=false; return; }
+            out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "with_name" || fn == "with_suffix") {
+            if (callNode.args.size()!=2) { addDiag(*diags, std::string("pathlib.")+fn+"() takes 2 args", &callNode); ok=false; return; }
+            if (!ensureStr(callNode.args[0].get()) || !ensureStr(callNode.args[1].get())) { ok=false; return; }
+            out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "parts") { if (callNode.args.size()!=1) { addDiag(*diags, "pathlib.parts() takes 1 arg", &callNode); ok=false; return; } if (!ensureStr(callNode.args[0].get())) { ok=false; return; } out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return; }
+          if (fn == "exists" || fn == "is_file" || fn == "is_dir" || fn == "match") { if (callNode.args.size()!=1 && fn!="match") { addDiag(*diags, std::string("pathlib.")+fn+"() takes 1 arg", &callNode); ok=false; return; } if (fn=="match" && callNode.args.size()!=2) { addDiag(*diags, "pathlib.match() takes 2 args", &callNode); ok=false; return; } if (!ensureStr(callNode.args[0].get())) { ok=false; return; } if (fn=="match" && !ensureStr(callNode.args[1].get())) { ok=false; return; } out = Type::Bool; const_cast<ast::Call&>(callNode).setType(out); return; }
+          if (fn == "mkdir") {
+            if (callNode.args.empty() || callNode.args.size() > 4) { addDiag(*diags, "pathlib.mkdir() takes 1 to 4 args", &callNode); ok=false; return; }
+            if (!ensureStr(callNode.args[0].get())) { ok=false; return; }
+            if (callNode.args.size()>=2 && !ensureInt(callNode.args[1].get())) { ok=false; return; }
+            if (callNode.args.size()>=3 && !ensureInt(callNode.args[2].get())) { ok=false; return; }
+            if (callNode.args.size()==4 && !ensureInt(callNode.args[3].get())) { ok=false; return; }
+            out = Type::Bool; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "rmdir" || fn == "unlink" || fn == "rename") {
+            if (fn=="rename") {
+              if (callNode.args.size()!=2) { addDiag(*diags, "pathlib.rename() takes 2 args", &callNode); ok=false; return; }
+              if (!ensureStr(callNode.args[0].get()) || !ensureStr(callNode.args[1].get())) { ok=false; return; }
+            } else {
+              if (callNode.args.size()!=1) { addDiag(*diags, std::string("pathlib.")+fn+"() takes 1 arg", &callNode); ok=false; return; }
+              if (!ensureStr(callNode.args[0].get())) { ok=false; return; }
+            }
+            out = Type::Bool; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+        }
         if (base0->id == "json") {
           const std::string fn = at0->attr;
           if (fn == "dumps") {
@@ -1204,6 +1241,214 @@ struct ExpressionTyper : public ast::VisitorBase {
           const uint32_t strM = TypeEnv::maskForKind(ast::TypeKind::Str);
           if ((m2 & ~strM) != 0U) { addDiag(*diags, std::string("subprocess.") + fn + ": argument must be str", callNode.args[0].get()); ok = false; return; }
           out = Type::Int; const_cast<ast::Call&>(callNode).setType(out); return;
+        }
+        if (base->id == "io") {
+          const std::string fn = at->attr;
+          auto ensureStr = [&](const ast::Expr* e){ ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; if(e){ e->accept(t); if(!t.ok) return false; if(t.out != Type::Str){ addDiag(*diags, std::string("io.")+fn+": argument must be str", e); return false; } } return true; };
+          if (fn == "write_stdout" || fn == "write_stderr") {
+            if (callNode.args.size()!=1 || !ensureStr(callNode.args[0].get())) { ok=false; return; }
+            out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "read_file") {
+            if (callNode.args.size()!=1 || !ensureStr(callNode.args[0].get())) { ok=false; return; }
+            out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "write_file") {
+            if (callNode.args.size()!=2 || !ensureStr(callNode.args[0].get()) || !ensureStr(callNode.args[1].get())) { ok=false; return; }
+            out = Type::Bool; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+        }
+        if (base->id == "sys") {
+          const std::string fn = at->attr;
+          if (fn == "platform" || fn == "version") {
+            if (callNode.args.size()!=0) { addDiag(*diags, std::string("sys.")+fn+"() takes 0 args", &callNode); ok=false; return; }
+            out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "maxsize") {
+            if (callNode.args.size()!=0) { addDiag(*diags, "sys.maxsize() takes 0 args", &callNode); ok=false; return; }
+            out = Type::Int; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "exit") {
+            if (callNode.args.size()!=1) { addDiag(*diags, "sys.exit() takes 1 arg", &callNode); ok=false; return; }
+            ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; callNode.args[0]->accept(t); if(!t.ok){ok=false;return;}
+            const uint32_t m = (t.outSet!=0U)?t.outSet:TypeEnv::maskForKind(t.out);
+            const uint32_t allow = TypeEnv::maskForKind(Type::Int) | TypeEnv::maskForKind(Type::Bool) | TypeEnv::maskForKind(Type::Float);
+            if ((m & ~allow) != 0U) { addDiag(*diags, "sys.exit: int required", callNode.args[0].get()); ok=false; return; }
+            out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+        }
+        if (base->id == "time") {
+          const std::string fn = at->attr;
+          auto zeroFloat = [&](Type ret){ if (callNode.args.size()!=0) { addDiag(*diags, std::string("time.")+fn+"() takes 0 args", &callNode); ok=false; return; } out = ret; const_cast<ast::Call&>(callNode).setType(out); };
+          if (fn == "time" || fn == "monotonic" || fn == "perf_counter" || fn == "process_time") { zeroFloat(Type::Float); return; }
+          if (fn == "time_ns" || fn == "monotonic_ns" || fn == "perf_counter_ns") { zeroFloat(Type::Int); return; }
+          if (fn == "sleep") {
+            if (callNode.args.size()!=1) { addDiag(*diags, "time.sleep() takes 1 arg", &callNode); ok=false; return; }
+            ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; callNode.args[0]->accept(t); if(!t.ok){ok=false;return;}
+            const uint32_t m = (t.outSet!=0U)?t.outSet:TypeEnv::maskForKind(t.out);
+            const uint32_t allow = TypeEnv::maskForKind(Type::Int) | TypeEnv::maskForKind(Type::Bool) | TypeEnv::maskForKind(Type::Float);
+            if ((m & ~allow)!=0U) { addDiag(*diags, "time.sleep: numeric required", callNode.args[0].get()); ok=false; return; }
+            out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+        }
+        if (base->id == "datetime") {
+          const std::string fn = at->attr;
+          if (fn == "now" || fn == "utcnow") {
+            if (callNode.args.size()!=0) { addDiag(*diags, std::string("datetime.")+fn+"() takes 0 args", &callNode); ok=false; return; }
+            out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "fromtimestamp" || fn == "utcfromtimestamp") {
+            if (callNode.args.size()!=1) { addDiag(*diags, std::string("datetime.")+fn+"() takes 1 arg", &callNode); ok=false; return; }
+            ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; callNode.args[0]->accept(t); if(!t.ok){ok=false;return;}
+            const uint32_t m = (t.outSet!=0U)?t.outSet:TypeEnv::maskForKind(t.out);
+            const uint32_t allow = TypeEnv::maskForKind(Type::Int) | TypeEnv::maskForKind(Type::Bool) | TypeEnv::maskForKind(Type::Float);
+            if ((m & ~allow)!=0U) { addDiag(*diags, std::string("datetime.")+fn+": numeric required", callNode.args[0].get()); ok=false; return; }
+            out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+        }
+        if (base->id == "re") {
+          const std::string fn = at->attr;
+          auto ensureStr = [&](const ast::Expr* e){ ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; if(e){ e->accept(t); if(!t.ok) return false; if(t.out != Type::Str) { addDiag(*diags, std::string("re.")+fn+": str argument required", e); return false; } } return true; };
+          auto ensureInt = [&](const ast::Expr* e){ ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; if(e){ e->accept(t); if(!t.ok) return false; if(!(t.out==Type::Int || t.out==Type::Bool)) { addDiag(*diags, std::string("re.")+fn+": int argument required", e); return false;} } return true; };
+          if (fn == "compile") {
+            if (callNode.args.empty() || callNode.args.size()>2) { addDiag(*diags, "re.compile() takes 1 or 2 args", &callNode); ok=false; return; }
+            if (!ensureStr(callNode.args[0].get())) { ok=false; return; }
+            if (callNode.args.size()==2 && !ensureInt(callNode.args[1].get())) { ok=false; return; }
+            out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return; // treat as opaque ptr/str
+          }
+          if (fn == "search" || fn=="match" || fn=="fullmatch") {
+            if (callNode.args.size()<2 || callNode.args.size()>3) { addDiag(*diags, std::string("re.")+fn+"() takes 2 or 3 args", &callNode); ok=false; return; }
+            if (!ensureStr(callNode.args[0].get()) || !ensureStr(callNode.args[1].get())) { ok=false; return; }
+            if (callNode.args.size()==3 && !ensureInt(callNode.args[2].get())) { ok=false; return; }
+            out = Type::Tuple; const_cast<ast::Call&>(callNode).setType(out); return; // opaque ptr
+          }
+          if (fn == "findall") {
+            if (callNode.args.size()<2 || callNode.args.size()>3) { addDiag(*diags, "re.findall() takes 2 or 3 args", &callNode); ok=false; return; }
+            if (!ensureStr(callNode.args[0].get()) || !ensureStr(callNode.args[1].get())) { ok=false; return; }
+            if (callNode.args.size()==3 && !ensureInt(callNode.args[2].get())) { ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "finditer") {
+            if (callNode.args.size()<2 || callNode.args.size()>3) { addDiag(*diags, "re.finditer() takes 2 or 3 args", &callNode); ok=false; return; }
+            if (!ensureStr(callNode.args[0].get()) || !ensureStr(callNode.args[1].get())) { ok=false; return; }
+            if (callNode.args.size()==3 && !ensureInt(callNode.args[2].get())) { ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "split") {
+            if (callNode.args.size()<2 || callNode.args.size()>4) { addDiag(*diags, "re.split() takes 2 to 4 args", &callNode); ok=false; return; }
+            if (!ensureStr(callNode.args[0].get()) || !ensureStr(callNode.args[1].get())) { ok=false; return; }
+            if (callNode.args.size()>=3 && !ensureInt(callNode.args[2].get())) { ok=false; return; }
+            if (callNode.args.size()==4 && !ensureInt(callNode.args[3].get())) { ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "sub" || fn == "subn") {
+            if (callNode.args.size()<3 || callNode.args.size()>5) { addDiag(*diags, std::string("re.")+fn+"() takes 3 to 5 args", &callNode); ok=false; return; }
+            if (!ensureStr(callNode.args[0].get()) || !ensureStr(callNode.args[1].get()) || !ensureStr(callNode.args[2].get())) { ok=false; return; }
+            if (callNode.args.size()>=4 && !ensureInt(callNode.args[3].get())) { ok=false; return; }
+            if (callNode.args.size()==5 && !ensureInt(callNode.args[4].get())) { ok=false; return; }
+            out = (fn=="sub") ? Type::Str : Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "escape") {
+            if (callNode.args.size()!=1 || !ensureStr(callNode.args[0].get())) { addDiag(*diags, "re.escape() takes 1 str arg", &callNode); ok=false; return; }
+            out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+        }
+        if (base->id == "collections") {
+          const std::string fn = at->attr;
+          auto ensureList = [&](const ast::Expr* e){ if(!e) return false; ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; e->accept(t); if(!t.ok) return false; if(t.out != Type::List) { addDiag(*diags, std::string("collections.")+fn+": list required", e); return false; } return true; };
+          auto ensurePtr = [&](const ast::Expr* e){ if(!e) return false; ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; e->accept(t); if(!t.ok) return false; if(!(t.out==Type::Str || t.out==Type::List || t.out==Type::Dict || t.out==Type::Tuple)) { addDiag(*diags, std::string("collections.")+fn+": ptr-like arg required", e); return false; } return true; };
+          if (fn == "Counter") {
+            if (callNode.args.size()!=1 || !ensureList(callNode.args[0].get())) { ok=false; return; }
+            out = Type::Dict; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "OrderedDict") {
+            if (callNode.args.size()!=1 || !ensureList(callNode.args[0].get())) { ok=false; return; }
+            out = Type::Dict; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "ChainMap") {
+            if (callNode.args.size()!=1 || !ensureList(callNode.args[0].get())) { ok=false; return; }
+            out = Type::Dict; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "defaultdict") {
+            if (callNode.args.size()!=1 || !ensurePtr(callNode.args[0].get())) { ok=false; return; }
+            out = Type::Dict; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "defaultdict_get") {
+            if (callNode.args.size()!=2 || !ensurePtr(callNode.args[0].get()) || !ensurePtr(callNode.args[1].get())) { ok=false; return; }
+            out = Type::Str; const_cast<ast::Call&>(callNode).setType(out); return; // ptr
+          }
+          if (fn == "defaultdict_set") {
+            if (callNode.args.size()!=3 || !ensurePtr(callNode.args[0].get()) || !ensurePtr(callNode.args[1].get()) || !ensurePtr(callNode.args[2].get())) { ok=false; return; }
+            out = Type::NoneType; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+        }
+        if (base->id == "itertools") {
+          const std::string fn = at->attr;
+          auto ensureList = [&](const ast::Expr* e){ ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; if(e){ e->accept(t); if(!t.ok) return false; if(t.out != Type::List) { addDiag(*diags, "itertools: list required", e); return false; } } return true; };
+          if (fn == "chain") {
+            if (callNode.args.size() != 2) { addDiag(*diags, "itertools.chain() takes 2 lists in this subset", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get()) || !ensureList(callNode.args[1].get())) { ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "chain_from_iterable") {
+            if (callNode.args.size() != 1) { addDiag(*diags, "itertools.chain_from_iterable() takes 1 arg (list of lists)", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get())) { ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "product") {
+            if (callNode.args.size() != 2) { addDiag(*diags, "itertools.product() supports 2 lists in this subset", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get()) || !ensureList(callNode.args[1].get())) { ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "permutations") {
+            if (callNode.args.empty() || callNode.args.size() > 2) { addDiag(*diags, "itertools.permutations() takes 1 or 2 args", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get())) { ok=false; return; }
+            if (callNode.args.size()==2) { ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; callNode.args[1]->accept(t); if(!t.ok){ok=false;return;} if(t.out!=Type::Int && t.out!=Type::Bool){ addDiag(*diags, "permutations r must be int", callNode.args[1].get()); ok=false; return; } }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "combinations" || fn == "combinations_with_replacement") {
+            if (callNode.args.size() != 2) { addDiag(*diags, std::string("itertools.")+fn+"() takes 2 args", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get())) { ok=false; return; }
+            ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; callNode.args[1]->accept(t); if(!t.ok){ok=false;return;} if(t.out!=Type::Int && t.out!=Type::Bool){ addDiag(*diags, std::string(fn)+": r must be int", callNode.args[1].get()); ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "zip_longest") {
+            if (callNode.args.size() < 2 || callNode.args.size() > 3) { addDiag(*diags, "itertools.zip_longest() takes 2 or 3 args", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get()) || !ensureList(callNode.args[1].get())) { ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "islice") {
+            if (callNode.args.size() < 3 || callNode.args.size() > 4) { addDiag(*diags, "itertools.islice() takes 3 or 4 args", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get())) { ok=false; return; }
+            for (size_t i = 1; i < callNode.args.size(); ++i) { ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; callNode.args[i]->accept(t); if(!t.ok){ok=false;return;} if(t.out!=Type::Int && t.out!=Type::Bool){ addDiag(*diags, "islice: indices must be int", callNode.args[i].get()); ok=false; return; } }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "accumulate") {
+            if (callNode.args.size() != 1) { addDiag(*diags, "itertools.accumulate() supports 1 list arg in this subset", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get())) { ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "repeat") {
+            if (callNode.args.size() != 2) { addDiag(*diags, "itertools.repeat() takes 2 args", &callNode); ok=false; return; }
+            ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; callNode.args[1]->accept(t); if(!t.ok){ok=false;return;} if(t.out!=Type::Int && t.out!=Type::Bool){ addDiag(*diags, "repeat: times must be int", callNode.args[1].get()); ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "pairwise") {
+            if (callNode.args.size() != 1) { addDiag(*diags, "itertools.pairwise() takes 1 list", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get())) { ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "batched") {
+            if (callNode.args.size() != 2) { addDiag(*diags, "itertools.batched() takes 2 args", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get())) { ok=false; return; }
+            ExpressionTyper t{*env,*sigs,*retParamIdxs,*diags,polyTargets}; callNode.args[1]->accept(t); if(!t.ok){ok=false;return;} if(t.out!=Type::Int && t.out!=Type::Bool){ addDiag(*diags, "batched: n must be int", callNode.args[1].get()); ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
+          if (fn == "compress") {
+            if (callNode.args.size() != 2) { addDiag(*diags, "itertools.compress() takes 2 args", &callNode); ok=false; return; }
+            if (!ensureList(callNode.args[0].get()) || !ensureList(callNode.args[1].get())) { ok=false; return; }
+            out = Type::List; const_cast<ast::Call&>(callNode).setType(out); return;
+          }
         }
       }
       addDiag(*diags, "unsupported callee expression", &callNode); ok = false; return;

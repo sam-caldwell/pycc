@@ -309,6 +309,30 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   irStream << "declare ptr @pycc_rt_exception_type(ptr)\n";
   irStream << "declare ptr @pycc_rt_exception_message(ptr)\n";
   irStream << "declare i1 @pycc_string_eq(ptr, ptr)\n\n";
+
+  // pathlib
+  irStream << "declare ptr @pycc_pathlib_cwd()\n";
+  irStream << "declare ptr @pycc_pathlib_home()\n";
+  irStream << "declare ptr @pycc_pathlib_join2(ptr, ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_parent(ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_basename(ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_suffix(ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_stem(ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_with_name(ptr, ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_with_suffix(ptr, ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_as_posix(ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_as_uri(ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_resolve(ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_absolute(ptr)\n";
+  irStream << "declare ptr @pycc_pathlib_parts(ptr)\n";
+  irStream << "declare i1 @pycc_pathlib_match(ptr, ptr)\n";
+  irStream << "declare i1 @pycc_pathlib_exists(ptr)\n";
+  irStream << "declare i1 @pycc_pathlib_is_file(ptr)\n";
+  irStream << "declare i1 @pycc_pathlib_is_dir(ptr)\n";
+  irStream << "declare i1 @pycc_pathlib_mkdir(ptr, i32, i32, i32)\n";
+  irStream << "declare i1 @pycc_pathlib_rmdir(ptr)\n";
+  irStream << "declare i1 @pycc_pathlib_unlink(ptr)\n";
+  irStream << "declare i1 @pycc_pathlib_rename(ptr, ptr)\n\n";
   // JSON shims
   irStream << "declare ptr @pycc_json_dumps(ptr)\n";
   irStream << "declare ptr @pycc_json_dumps_ex(ptr, i32)\n";
@@ -328,6 +352,24 @@ std::string Codegen::generateIR(const ast::Module& mod) {
   irStream << "declare ptr @pycc_itertools_pairwise(ptr)\n";
   irStream << "declare ptr @pycc_itertools_batched(ptr, i32)\n";
   irStream << "declare ptr @pycc_itertools_compress(ptr, ptr)\n\n";
+  // re module
+  irStream << "declare ptr @pycc_re_compile(ptr, i32)\n";
+  irStream << "declare ptr @pycc_re_search(ptr, ptr, i32)\n";
+  irStream << "declare ptr @pycc_re_match(ptr, ptr, i32)\n";
+  irStream << "declare ptr @pycc_re_fullmatch(ptr, ptr, i32)\n";
+  irStream << "declare ptr @pycc_re_findall(ptr, ptr, i32)\n";
+  irStream << "declare ptr @pycc_re_split(ptr, ptr, i32, i32)\n";
+  irStream << "declare ptr @pycc_re_sub(ptr, ptr, ptr, i32, i32)\n";
+  irStream << "declare ptr @pycc_re_subn(ptr, ptr, ptr, i32, i32)\n";
+  irStream << "declare ptr @pycc_re_escape(ptr)\n\n";
+  irStream << "declare ptr @pycc_re_finditer(ptr, ptr, i32)\n\n";
+  // collections module
+  irStream << "declare ptr @pycc_collections_counter(ptr)\n";
+  irStream << "declare ptr @pycc_collections_ordered_dict(ptr)\n";
+  irStream << "declare ptr @pycc_collections_chainmap(ptr)\n";
+  irStream << "declare ptr @pycc_collections_defaultdict_new(ptr)\n";
+  irStream << "declare ptr @pycc_collections_defaultdict_get(ptr, ptr)\n";
+  irStream << "declare void @pycc_collections_defaultdict_set(ptr, ptr, ptr)\n\n";
   // Dict iteration helpers
   irStream << "declare ptr @pycc_dict_iter_new(ptr)\n";
   irStream << "declare ptr @pycc_dict_iter_next(ptr)\n\n";
@@ -1265,6 +1307,89 @@ std::string Codegen::generateIR(const ast::Module& mod) {
               }
               emitNotImplemented(mod, fn, ValKind::Ptr); return;
             }
+            if (mod == "re") {
+              auto needStr = [&](const ast::Expr* e){ auto v = run(*e); if (v.k != ValKind::Ptr) throw std::runtime_error("re: str required"); return v; };
+              auto needI32 = [&](const ast::Expr* e){ auto v = run(*e); if (v.k==ValKind::I32) return v.s; if (v.k==ValKind::I1){ std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<v.s<<" to i32\n"; return z.str(); } throw std::runtime_error("re: int required"); };
+              if (fn == "compile") {
+                if (call.args.empty() || call.args.size() > 2) throw std::runtime_error("re.compile() takes 1 or 2 args");
+                auto p = needStr(call.args[0].get()); std::string fl = "0"; if (call.args.size()==2) fl = needI32(call.args[1].get());
+                std::ostringstream r; r<<"%t"<<temp++; ir<<"  "<<r.str()<<" = call ptr @pycc_re_compile(ptr "<<p.s<<", i32 "<<fl<<")\n"; out=Value{r.str(),ValKind::Ptr}; return;
+              }
+              if (fn == "search" || fn == "match" || fn == "fullmatch") {
+                if (call.args.size()<2 || call.args.size()>3) throw std::runtime_error(std::string("re.")+fn+"() takes 2 or 3 args");
+                auto p = needStr(call.args[0].get()); auto t = needStr(call.args[1].get()); std::string fl="0"; if (call.args.size()==3) fl=needI32(call.args[2].get());
+                const char* cname = (fn=="search")?"@pycc_re_search":(fn=="match")?"@pycc_re_match":"@pycc_re_fullmatch";
+                std::ostringstream r; r<<"%t"<<temp++; ir<<"  "<<r.str()<<" = call ptr "<<cname<<"(ptr "<<p.s<<", ptr "<<t.s<<", i32 "<<fl<<")\n"; out=Value{r.str(),ValKind::Ptr}; return;
+              }
+              if (fn == "findall") {
+                if (call.args.size()<2 || call.args.size()>3) throw std::runtime_error("re.findall() takes 2 or 3 args");
+                auto p = needStr(call.args[0].get()); auto t = needStr(call.args[1].get()); std::string fl="0"; if (call.args.size()==3) fl=needI32(call.args[2].get());
+                std::ostringstream r; r<<"%t"<<temp++; ir<<"  "<<r.str()<<" = call ptr @pycc_re_findall(ptr "<<p.s<<", ptr "<<t.s<<", i32 "<<fl<<")\n"; out=Value{r.str(),ValKind::Ptr}; return;
+              }
+              if (fn == "finditer") {
+                if (call.args.size()<2 || call.args.size()>3) throw std::runtime_error("re.finditer() takes 2 or 3 args");
+                auto p = needStr(call.args[0].get()); auto t = needStr(call.args[1].get()); std::string fl="0"; if (call.args.size()==3) fl=needI32(call.args[2].get());
+                std::ostringstream r; r<<"%t"<<temp++; ir<<"  "<<r.str()<<" = call ptr @pycc_re_finditer(ptr "<<p.s<<", ptr "<<t.s<<", i32 "<<fl<<")\n"; out=Value{r.str(),ValKind::Ptr}; return;
+              }
+              if (fn == "split") {
+                if (call.args.size()<2 || call.args.size()>4) throw std::runtime_error("re.split() takes 2 to 4 args");
+                auto p = needStr(call.args[0].get()); auto t=needStr(call.args[1].get()); std::string maxs="0"; std::string fl="0"; if (call.args.size()>=3) maxs=needI32(call.args[2].get()); if (call.args.size()==4) fl=needI32(call.args[3].get());
+                std::ostringstream r; r<<"%t"<<temp++; ir<<"  "<<r.str()<<" = call ptr @pycc_re_split(ptr "<<p.s<<", ptr "<<t.s<<", i32 "<<maxs<<", i32 "<<fl<<")\n"; out=Value{r.str(),ValKind::Ptr}; return;
+              }
+              if (fn == "sub" || fn == "subn") {
+                if (call.args.size()<3 || call.args.size()>5) throw std::runtime_error(std::string("re.")+fn+"() takes 3 to 5 args");
+                auto p = needStr(call.args[0].get()); auto rpl=needStr(call.args[1].get()); auto t=needStr(call.args[2].get()); std::string cnt="0"; std::string fl="0"; if (call.args.size()>=4) cnt=needI32(call.args[3].get()); if (call.args.size()==5) fl=needI32(call.args[4].get());
+                const char* cname = (fn=="sub")?"@pycc_re_sub":"@pycc_re_subn";
+                std::ostringstream r; r<<"%t"<<temp++; ir<<"  "<<r.str()<<" = call ptr "<<cname<<"(ptr "<<p.s<<", ptr "<<rpl.s<<", ptr "<<t.s<<", i32 "<<cnt<<", i32 "<<fl<<")\n"; out=Value{r.str(),ValKind::Ptr}; return;
+              }
+              if (fn == "escape") {
+                if (call.args.size()!=1) throw std::runtime_error("re.escape() takes 1 arg");
+                auto a = needStr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++; ir<<"  "<<r.str()<<" = call ptr @pycc_re_escape(ptr "<<a.s<<")\n"; out=Value{r.str(),ValKind::Ptr}; return;
+              }
+              emitNotImplemented(mod, fn, ValKind::Ptr); return;
+            }
+            if (mod == "collections") {
+              const std::string& fn = at->attr;
+              auto needPtr = [&](const ast::Expr* e){ auto v = run(*e); if (v.k != ValKind::Ptr) throw std::runtime_error("collections: ptr/list/dict required"); return v; };
+              if (fn == "Counter") {
+                if (call.args.size() != 1) throw std::runtime_error("collections.Counter() takes 1 iterable (list) in this subset");
+                auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                ir << "  " << r.str() << " = call ptr @pycc_collections_counter(ptr " << a.s << ")\n";
+                out = Value{r.str(), ValKind::Ptr}; return;
+              }
+              if (fn == "OrderedDict") {
+                if (call.args.size() != 1) throw std::runtime_error("collections.OrderedDict() takes 1 arg (list of pairs)");
+                auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                ir << "  " << r.str() << " = call ptr @pycc_collections_ordered_dict(ptr " << a.s << ")\n";
+                out = Value{r.str(), ValKind::Ptr}; return;
+              }
+              if (fn == "ChainMap") {
+                if (call.args.size() == 0) throw std::runtime_error("collections.ChainMap() requires at least one dict or a list of dicts");
+                // Accept a single list-of-dicts only in this subset
+                auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                ir << "  " << r.str() << " = call ptr @pycc_collections_chainmap(ptr " << a.s << ")\n";
+                out = Value{r.str(), ValKind::Ptr}; return;
+              }
+              if (fn == "defaultdict") {
+                if (call.args.size() != 1) throw std::runtime_error("collections.defaultdict() takes 1 default value in this subset");
+                auto v = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                ir << "  " << r.str() << " = call ptr @pycc_collections_defaultdict_new(ptr " << v.s << ")\n";
+                out = Value{r.str(), ValKind::Ptr}; return;
+              }
+              if (fn == "defaultdict_get") {
+                if (call.args.size() != 2) throw std::runtime_error("collections.defaultdict_get(dd, key)");
+                auto dd = needPtr(call.args[0].get()); auto k = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
+                ir << "  " << r.str() << " = call ptr @pycc_collections_defaultdict_get(ptr " << dd.s << ", ptr " << k.s << ")\n";
+                out = Value{r.str(), ValKind::Ptr}; return;
+              }
+              if (fn == "defaultdict_set") {
+                if (call.args.size() != 3) throw std::runtime_error("collections.defaultdict_set(dd, key, value)");
+                auto dd = needPtr(call.args[0].get()); auto k = needPtr(call.args[1].get()); auto v = needPtr(call.args[2].get());
+                ir << "  call void @pycc_collections_defaultdict_set(ptr " << dd.s << ", ptr " << k.s << ", ptr " << v.s << ")\n";
+                out = Value{"null", ValKind::Ptr}; return;
+              }
+              emitNotImplemented(mod, fn, ValKind::Ptr); return;
+            }
             if (mod == "itertools") {
               auto needList = [&](const ast::Expr* e){ auto v = run(*e); if (v.k != ValKind::Ptr) throw std::runtime_error("itertools: list/ptr required"); return v; };
               if (fn == "chain") {
@@ -1345,7 +1470,7 @@ std::string Codegen::generateIR(const ast::Module& mod) {
               emitNotImplemented(mod, fn, ValKind::Ptr); return;
             }
             // Recognized modules: emit stubbed dispatch for now
-            static const std::unordered_set<std::string> kStubMods = {"os","io","time","sys","pathlib","random","re","json","itertools","collections","functools","operator"};
+            static const std::unordered_set<std::string> kStubMods = {"os","io","time","sys","random","re","json","itertools","collections","functools","operator"};
             if (mod == "sys") {
               if (fn == "platform") {
                 std::ostringstream r; r<<"%t"<<temp++;
@@ -1373,6 +1498,78 @@ std::string Codegen::generateIR(const ast::Module& mod) {
                 else throw std::runtime_error("sys.exit: int required");
                 ir << "  call void @pycc_sys_exit(i32 " << i << ")\n";
                 out = Value{"null", ValKind::Ptr}; return;
+              }
+              emitNotImplemented(mod, fn, ValKind::Ptr); return;
+            }
+            if (mod == "pathlib") {
+              const std::string& fn = at->attr;
+              auto needStr = [&](const ast::Expr* e){ auto v = run(*e); if (v.k != ValKind::Ptr) throw std::runtime_error("pathlib: str required"); return v; };
+              if (fn == "cwd" || fn == "home") {
+                if (!call.args.empty()) throw std::runtime_error(std::string("pathlib.")+fn+"() takes 0 args");
+                std::ostringstream r; r<<"%t"<<temp++;
+                const char* nm = (fn=="cwd")?"@pycc_pathlib_cwd":"@pycc_pathlib_home";
+                ir << "  " << r.str() << " = call ptr " << nm << "()\n"; out = Value{r.str(), ValKind::Ptr}; return;
+              }
+              if (fn == "join") {
+                if (call.args.size() != 2) throw std::runtime_error("pathlib.join() takes 2 args");
+                auto a = needStr(call.args[0].get()); auto b = needStr(call.args[1].get());
+                std::ostringstream r; r<<"%t"<<temp++;
+                ir << "  " << r.str() << " = call ptr @pycc_pathlib_join2(ptr " << a.s << ", ptr " << b.s << ")\n";
+                out = Value{r.str(), ValKind::Ptr}; return;
+              }
+              if (fn == "parent" || fn == "basename" || fn == "suffix" || fn == "stem" || fn == "as_posix" || fn == "as_uri" || fn == "resolve" || fn == "absolute") {
+                if (call.args.size() != 1) throw std::runtime_error(std::string("pathlib.")+fn+"() takes 1 arg");
+                auto p = needStr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                const char* nm = nullptr;
+                if (fn=="parent") nm = "@pycc_pathlib_parent"; else if (fn=="basename") nm = "@pycc_pathlib_basename"; else if (fn=="suffix") nm="@pycc_pathlib_suffix"; else if (fn=="stem") nm="@pycc_pathlib_stem"; else if (fn=="as_posix") nm="@pycc_pathlib_as_posix"; else if (fn=="as_uri") nm="@pycc_pathlib_as_uri"; else if (fn=="resolve") nm="@pycc_pathlib_resolve"; else if (fn=="absolute") nm="@pycc_pathlib_absolute"; else nm = "";
+                ir << "  " << r.str() << " = call ptr " << nm << "(ptr " << p.s << ")\n"; out = Value{r.str(), ValKind::Ptr}; return;
+              }
+              if (fn == "with_name" || fn == "with_suffix") {
+                if (call.args.size() != 2) throw std::runtime_error(std::string("pathlib.")+fn+"() takes 2 args");
+                auto p = needStr(call.args[0].get()); auto a = needStr(call.args[1].get());
+                std::ostringstream r; r<<"%t"<<temp++;
+                const char* nm = (fn=="with_name")?"@pycc_pathlib_with_name":"@pycc_pathlib_with_suffix";
+                ir << "  " << r.str() << " = call ptr " << nm << "(ptr " << p.s << ", ptr " << a.s << ")\n";
+                out = Value{r.str(), ValKind::Ptr}; return;
+              }
+              if (fn == "parts") {
+                if (call.args.size() != 1) throw std::runtime_error("pathlib.parts() takes 1 arg");
+                auto p = needStr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                ir << "  " << r.str() << " = call ptr @pycc_pathlib_parts(ptr " << p.s << ")\n"; out = Value{r.str(), ValKind::Ptr}; return;
+              }
+              if (fn == "exists" || fn == "is_file" || fn == "is_dir") {
+                if (call.args.size() != 1) throw std::runtime_error(std::string("pathlib.")+fn+"() takes 1 arg");
+                auto p = needStr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                const char* nm = (fn=="exists")?"@pycc_pathlib_exists":(fn=="is_file")?"@pycc_pathlib_is_file":"@pycc_pathlib_is_dir";
+                ir << "  " << r.str() << " = call i1 " << nm << "(ptr " << p.s << ")\n"; out = Value{r.str(), ValKind::I1}; return;
+              }
+              if (fn == "mkdir") {
+                if (call.args.empty() || call.args.size() > 4) throw std::runtime_error("pathlib.mkdir() takes 1 to 4 args");
+                auto p = needStr(call.args[0].get());
+                std::string mode="511"; std::string parents="0"; std::string exist_ok="0";
+                auto needI32 = [&](const ast::Expr* e){ auto v = run(*e); if (v.k == ValKind::I32) return v.s; if (v.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<v.s<<" to i32\n"; return z.str(); } if (v.k==ValKind::F64){ std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<v.s<<" to i32\n"; return z.str(); } throw std::runtime_error("pathlib.mkdir: numeric"); };
+                if (call.args.size() >= 2) mode = needI32(call.args[1].get());
+                if (call.args.size() >= 3) parents = needI32(call.args[2].get());
+                if (call.args.size() == 4) exist_ok = needI32(call.args[3].get());
+                std::ostringstream r; r<<"%t"<<temp++;
+                ir << "  " << r.str() << " = call i1 @pycc_pathlib_mkdir(ptr "<<p.s<<", i32 "<<mode<<", i32 "<<parents<<", i32 "<<exist_ok<<")\n";
+                out = Value{r.str(), ValKind::I1}; return;
+              }
+              if (fn == "rmdir" || fn == "unlink") {
+                if (call.args.size()!=1) throw std::runtime_error(std::string("pathlib.")+fn+"() takes 1 arg");
+                auto p = needStr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                const char* nm = (fn=="rmdir")?"@pycc_pathlib_rmdir":"@pycc_pathlib_unlink";
+                ir << "  " << r.str() << " = call i1 " << nm << "(ptr " << p.s << ")\n"; out = Value{r.str(), ValKind::I1}; return;
+              }
+              if (fn == "rename") {
+                if (call.args.size()!=2) throw std::runtime_error("pathlib.rename() takes 2 args");
+                auto a = needStr(call.args[0].get()); auto b = needStr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
+                ir << "  " << r.str() << " = call i1 @pycc_pathlib_rename(ptr " << a.s << ", ptr " << b.s << ")\n"; out = Value{r.str(), ValKind::I1}; return;
+              }
+              if (fn == "match") {
+                if (call.args.size()!=2) throw std::runtime_error("pathlib.match() takes 2 args");
+                auto p = needStr(call.args[0].get()); auto pat = needStr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
+                ir << "  " << r.str() << " = call i1 @pycc_pathlib_match(ptr " << p.s << ", ptr " << pat.s << ")\n"; out = Value{r.str(), ValKind::I1}; return;
               }
               emitNotImplemented(mod, fn, ValKind::Ptr); return;
             }

@@ -32,5 +32,6 @@ def main() -> int:
   ASSERT_NE(ir.find("declare ptr @pycc_datetime_utcfromtimestamp(double)"), std::string::npos);
   ASSERT_NE(ir.find("call ptr @pycc_datetime_now()"), std::string::npos);
   ASSERT_NE(ir.find("call ptr @pycc_datetime_utcnow()"), std::string::npos);
+  ASSERT_NE(ir.find("call ptr @pycc_datetime_fromtimestamp(double"), std::string::npos);
+  ASSERT_NE(ir.find("call ptr @pycc_datetime_utcfromtimestamp(double"), std::string::npos);
 }
-

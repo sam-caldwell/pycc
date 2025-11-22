@@ -204,6 +204,54 @@ void* datetime_utcnow();
 void* datetime_fromtimestamp(double ts);
 void* datetime_utcfromtimestamp(double ts);
 
+// pathlib module shims (cross-platform via std::filesystem; paths are UTF-8 strings)
+// Constructors/utilities
+void* pathlib_cwd();                 // returns String
+void* pathlib_home();                // returns String (best-effort from HOME/USERPROFILE)
+void* pathlib_join2(void* a, void* b);           // join two path segments (String,String)
+void* pathlib_parent(void* p);                    // dirname
+void* pathlib_basename(void* p);                  // base name (aka name)
+void* pathlib_suffix(void* p);                    // extension including leading '.' or empty
+void* pathlib_stem(void* p);                      // base name without final suffix
+void* pathlib_with_name(void* p, void* name);     // replace final path component
+void* pathlib_with_suffix(void* p, void* suffix); // replace final suffix
+void* pathlib_as_posix(void* p);                  // forward slashes
+void* pathlib_as_uri(void* p);                    // file:// URI (absolute only)
+void* pathlib_resolve(void* p);                   // canonical absolute path (best-effort)
+void* pathlib_absolute(void* p);                  // absolute path without canonicalization
+void* pathlib_parts(void* p);                     // List of String parts
+bool   pathlib_match(void* p, void* pattern);     // simple glob ("*" and "?") against name
+
+// Filesystem effects
+bool pathlib_exists(void* p);
+bool pathlib_is_file(void* p);
+bool pathlib_is_dir(void* p);
+bool pathlib_mkdir(void* p, int mode, int parents, int exist_ok);
+bool pathlib_rmdir(void* p);
+bool pathlib_unlink(void* p);
+bool pathlib_rename(void* src, void* dst);
+
+// re module shims (simplified, materialized)
+void* re_compile(void* pattern, int flags);
+void* re_search(void* pattern, void* text, int flags);
+void* re_match(void* pattern, void* text, int flags);
+void* re_fullmatch(void* pattern, void* text, int flags);
+void* re_findall(void* pattern, void* text, int flags);
+void* re_split(void* pattern, void* text, int maxsplit, int flags);
+void* re_sub(void* pattern, void* repl, void* text, int count, int flags);
+void* re_subn(void* pattern, void* repl, void* text, int count, int flags);
+void* re_escape(void* text);
+void* re_finditer(void* pattern, void* text, int flags);
+
+// collections module shims (materialized helpers)
+void* collections_counter(void* iterable_list);
+void* collections_ordered_dict(void* list_of_pairs);
+void* collections_chainmap(void* list_of_dicts);
+// defaultdict emulation: object with [0]=dict, [1]=default_value
+void* collections_defaultdict_new(void* default_value);
+void* collections_defaultdict_get(void* dd, void* key);
+void  collections_defaultdict_set(void* dd, void* key, void* value);
+
 // Itertools (materialized list-based helpers for AOT subset)
 // chain: concatenates two or more lists; from_iterable flattens a list of lists.
 void* itertools_chain2(void* a, void* b);
