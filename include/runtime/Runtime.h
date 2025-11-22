@@ -231,6 +231,16 @@ bool pathlib_rmdir(void* p);
 bool pathlib_unlink(void* p);
 bool pathlib_rename(void* src, void* dst);
 
+// os.path module shims (subset; thin wrappers over pathlib)
+void* os_path_join2(void* a, void* b);     // returns String
+void* os_path_dirname(void* p);            // returns String
+void* os_path_basename(void* p);           // returns String
+void* os_path_splitext(void* p);           // returns List [root:str, ext:str]
+void* os_path_abspath(void* p);            // returns String
+bool  os_path_exists(void* p);
+bool  os_path_isfile(void* p);
+bool  os_path_isdir(void* p);
+
 // re module shims (simplified, materialized)
 void* re_compile(void* pattern, int flags);
 void* re_search(void* pattern, void* text, int flags);
@@ -308,12 +318,15 @@ void* tempfile_mkstemp();        // returns List [fd:int, path:str] (fd may be 0
 // statistics module shims (subset)
 double statistics_mean(void* list_of_numbers);
 double statistics_median(void* list_of_numbers);
+double statistics_stdev(void* list_of_numbers);      // sample standard deviation (n-1)
+double statistics_pvariance(void* list_of_numbers);  // population variance (n)
 
 // textwrap module shims (subset)
 void* textwrap_fill(void* s, int32_t width);
 void* textwrap_shorten(void* s, int32_t width);
 void* textwrap_wrap(void* s, int32_t width);   // returns List[str]
 void* textwrap_dedent(void* s);                 // returns Str
+void* textwrap_indent(void* s, void* prefix);   // returns Str
 
 // hashlib module shims (subset, non-cryptographic)
 void* hashlib_sha256(void* data_str_or_bytes); // returns hex String length 64
@@ -321,6 +334,16 @@ void* hashlib_md5(void* data_str_or_bytes);    // returns hex String length 32
 
 // pprint module shims (subset)
 void* pprint_pformat(void* obj);
+
+// reprlib module shims (subset)
+void* reprlib_repr(void* obj);
+
+// types module shims (subset)
+void* types_simple_namespace(void* list_of_pairs_opt);
+
+// colorsys module shims (subset)
+void* colorsys_rgb_to_hsv(double r, double g, double b); // returns List[float,float,float]
+void* colorsys_hsv_to_rgb(double h, double s, double v); // returns List[float,float,float]
 
 // linecache module shims (subset)
 void* linecache_getline(void* path, int32_t lineno);
@@ -373,6 +396,35 @@ void* collections_chainmap(void* list_of_dicts);
 void* collections_defaultdict_new(void* default_value);
 void* collections_defaultdict_get(void* dd, void* key);
 void  collections_defaultdict_set(void* dd, void* key, void* value);
+
+// array module shims (minimal subset)
+// array.array(typecode: str, initializer: list|None) -> array-obj (opaque object)
+void* array_array(void* typecode_str, void* initializer_list_or_null);
+// Mutating operations
+void  array_append(void* arr, void* value);
+void* array_pop(void* arr);
+// Conversion
+void* array_tolist(void* arr);
+
+// unicodedata module shims (subset)
+void* unicodedata_normalize(void* form_str, void* s_str);
+
+// struct module shims (subset)
+// struct.pack(fmt: str, values: list) -> Bytes
+void* struct_pack(void* fmt_str, void* values_list);
+// struct.unpack(fmt: str, data: bytes) -> List
+void* struct_unpack(void* fmt_str, void* data_bytes);
+// struct.calcsize(fmt: str) -> int
+int32_t struct_calcsize(void* fmt_str);
+
+// argparse module shims (subset)
+// Creates a new parser handle
+void* argparse_argument_parser();
+// Add an option: name like "--verbose" or "-v" (aliases may be passed as "-v|--verbose").
+// action: "store_true", "store", or "store_int".
+void  argparse_add_argument(void* parser, void* name_str, void* action_str);
+// Parse a list of strings; returns dict of parsed options (bool/int/str values).
+void* argparse_parse_args(void* parser, void* args_list);
 
 // _abc module shims (minimal accelerator for abc)
 int64_t abc_get_cache_token();        // monotonically increasing token

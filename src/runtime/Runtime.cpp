@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <system_error>
 #include <cmath>
+#include <random>
 
 namespace pycc::rt {
 
@@ -3465,12 +3466,48 @@ namespace pycc::rt {
 
 static inline int32_t errno_val_or(int v, int dflt) { return static_cast<int32_t>(v ? v : dflt); }
 
-int32_t errno_EPERM() { #ifdef EPERM return EPERM; #else return 1; #endif }
-int32_t errno_ENOENT() { #ifdef ENOENT return ENOENT; #else return 2; #endif }
-int32_t errno_EEXIST() { #ifdef EEXIST return EEXIST; #else return 17; #endif }
-int32_t errno_EISDIR() { #ifdef EISDIR return EISDIR; #else return 21; #endif }
-int32_t errno_ENOTDIR() { #ifdef ENOTDIR return ENOTDIR; #else return 20; #endif }
-int32_t errno_EACCES() { #ifdef EACCES return EACCES; #else return 13; #endif }
+int32_t errno_EPERM() {
+#ifdef EPERM
+  return EPERM;
+#else
+  return 1;
+#endif
+}
+int32_t errno_ENOENT() {
+#ifdef ENOENT
+  return ENOENT;
+#else
+  return 2;
+#endif
+}
+int32_t errno_EEXIST() {
+#ifdef EEXIST
+  return EEXIST;
+#else
+  return 17;
+#endif
+}
+int32_t errno_EISDIR() {
+#ifdef EISDIR
+  return EISDIR;
+#else
+  return 21;
+#endif
+}
+int32_t errno_ENOTDIR() {
+#ifdef ENOTDIR
+  return ENOTDIR;
+#else
+  return 20;
+#endif
+}
+int32_t errno_EACCES() {
+#ifdef EACCES
+  return EACCES;
+#else
+  return 13;
+#endif
+}
 
 } // namespace pycc::rt
 
@@ -4455,7 +4492,7 @@ static inline std::string_view kw_to_sv(void* s) {
 }
 
 bool keyword_iskeyword(void* s) {
-  static const std::array<std::string_view, 35> kws = {
+  static const std::array<std::string_view, 37> kws = {
       std::string_view{"False"}, std::string_view{"None"}, std::string_view{"True"},
       std::string_view{"and"}, std::string_view{"as"}, std::string_view{"assert"},
       std::string_view{"async"}, std::string_view{"await"}, std::string_view{"break"},
@@ -4476,7 +4513,7 @@ bool keyword_iskeyword(void* s) {
 }
 
 void* keyword_kwlist() {
-  static const std::array<const char*, 35> kws = {
+  static const std::array<const char*, 37> kws = {
       "False","None","True","and","as","assert","async","await","break","case","class","continue","def","del","elif","else","except","finally","for","from","global","if","import","in","is","lambda","match","nonlocal","not","or","pass","raise","return","try","while","with","yield"
   };
   void* lst = list_new(kws.size());

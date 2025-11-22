@@ -7,6 +7,7 @@
 #include <memory>
 #include "ast/Acceptable.h"
 #include "ast/Expr.h"
+#include "ast/Stmt.h"
 
 namespace pycc::ast {
     struct ReturnStmt final : Stmt, Acceptable<ReturnStmt, NodeKind::ReturnStmt> {
