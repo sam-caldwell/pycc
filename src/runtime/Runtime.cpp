@@ -24,12 +24,17 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
+#include <array>
+#include <string_view>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
 #include <sys/types.h>
 #include <sys/stat.h>
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+#include <sys/utsname.h>
+#endif
 #include <unistd.h>
 #include <filesystem>
 #include <system_error>
@@ -1658,6 +1663,26 @@ bool os_mkdir(const char* path, int mode) {
 bool os_remove(const char* path) { if (!path) return false; return ::remove(path) == 0; }
 bool os_rename(const char* src, const char* dst) { if (!src || !dst) return false; return ::rename(src, dst) == 0; }
 
+// C ABI wrappers for os module
+extern "C" void* pycc_os_getcwd() { return ::pycc::rt::os_getcwd(); }
+extern "C" int  pycc_os_mkdir(void* pathStr, int mode) {
+  const char* p = ::pycc::rt::string_data(pathStr);
+  return ::pycc::rt::os_mkdir(p, mode) ? 1 : 0;
+}
+extern "C" int  pycc_os_remove(void* pathStr) {
+  const char* p = ::pycc::rt::string_data(pathStr);
+  return ::pycc::rt::os_remove(p) ? 1 : 0;
+}
+extern "C" int  pycc_os_rename(void* a, void* b) {
+  const char* sa = ::pycc::rt::string_data(a);
+  const char* sb = ::pycc::rt::string_data(b);
+  return ::pycc::rt::os_rename(sa, sb) ? 1 : 0;
+}
+extern "C" void* pycc_os_getenv(void* nameStr) {
+  const char* n = ::pycc::rt::string_data(nameStr);
+  return ::pycc::rt::os_getenv(n);
+}
+
 // ---- pathlib shims (std::filesystem based) ----
 namespace {
 static std::filesystem::path fs_from_rt(void* s) {
@@ -1860,6 +1885,44 @@ extern "C" bool  pycc_pathlib_rmdir(void* p) { return ::pycc::rt::pathlib_rmdir(
 extern "C" bool  pycc_pathlib_unlink(void* p) { return ::pycc::rt::pathlib_unlink(p); }
 extern "C" bool  pycc_pathlib_rename(void* a, void* b) { return ::pycc::rt::pathlib_rename(a,b); }
 
+// C ABI wrappers for _abc
+extern "C" long long pycc_abc_get_cache_token() { return ::pycc::rt::abc_get_cache_token(); }
+extern "C" int  pycc_abc_register(void* a, void* b) { return ::pycc::rt::abc_register(a,b) ? 1 : 0; }
+extern "C" int  pycc_abc_is_registered(void* a, void* b) { return ::pycc::rt::abc_is_registered(a,b) ? 1 : 0; }
+extern "C" void pycc_abc_invalidate_cache() { ::pycc::rt::abc_invalidate_cache(); }
+extern "C" void pycc_abc_reset() { ::pycc::rt::abc_reset(); }
+
+// C ABI wrappers for _aix_support
+extern "C" void* pycc_aix_platform() { return ::pycc::rt::aix_platform(); }
+extern "C" void* pycc_aix_default_libpath() { return ::pycc::rt::aix_default_libpath(); }
+extern "C" void* pycc_aix_ldflags() { return ::pycc::rt::aix_ldflags(); }
+
+// C ABI wrappers for _android_support
+extern "C" void* pycc_android_platform() { return ::pycc::rt::android_platform(); }
+extern "C" void* pycc_android_default_libdir() { return ::pycc::rt::android_default_libdir(); }
+extern "C" void* pycc_android_ldflags() { return ::pycc::rt::android_ldflags(); }
+
+// C ABI wrappers for _apple_support
+extern "C" void* pycc_apple_platform() { return ::pycc::rt::apple_platform(); }
+extern "C" void* pycc_apple_default_sdkroot() { return ::pycc::rt::apple_default_sdkroot(); }
+extern "C" void* pycc_apple_ldflags() { return ::pycc::rt::apple_ldflags(); }
+
+// C ABI wrappers for _ast
+extern "C" void* pycc_ast_dump(void* o) { return ::pycc::rt::ast_dump(o); }
+extern "C" void* pycc_ast_iter_fields(void* o) { return ::pycc::rt::ast_iter_fields(o); }
+extern "C" void* pycc_ast_walk(void* o) { return ::pycc::rt::ast_walk(o); }
+extern "C" void* pycc_ast_copy_location(void* a, void* b) { return ::pycc::rt::ast_copy_location(a,b); }
+extern "C" void* pycc_ast_fix_missing_locations(void* n) { return ::pycc::rt::ast_fix_missing_locations(n); }
+extern "C" void* pycc_ast_get_docstring(void* n) { return ::pycc::rt::ast_get_docstring(n); }
+
+// C ABI wrappers for _asyncio
+extern "C" void* pycc_asyncio_get_event_loop() { return ::pycc::rt::asyncio_get_event_loop(); }
+extern "C" void* pycc_asyncio_future_new() { return ::pycc::rt::asyncio_future_new(); }
+extern "C" void  pycc_asyncio_future_set_result(void* f, void* r) { ::pycc::rt::asyncio_future_set_result(f,r); }
+extern "C" void* pycc_asyncio_future_result(void* f) { return ::pycc::rt::asyncio_future_result(f); }
+extern "C" int   pycc_asyncio_future_done(void* f) { return ::pycc::rt::asyncio_future_done(f) ? 1 : 0; }
+extern "C" void  pycc_asyncio_sleep(double s) { ::pycc::rt::asyncio_sleep(s); }
+
 // ===== Concurrency scaffolding =====
 namespace pycc::rt {
 
@@ -1884,6 +1947,77 @@ struct AtomicInt {
   std::atomic<long long> v{0};
 };
 
+// _abc registry and cache token
+static std::mutex g_abc_mu; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static std::unordered_map<void*, std::unordered_set<void*>> g_abc_registry; // NOLINT
+static std::atomic<long long> g_abc_token{0}; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+
+int64_t abc_get_cache_token() { return g_abc_token.load(std::memory_order_acquire); }
+bool abc_register(void* abc, void* subclass) {
+  if (!abc || !subclass) return false;
+  const std::lock_guard<std::mutex> lk(g_abc_mu);
+  auto& reg = g_abc_registry[abc];
+  auto [it, inserted] = reg.insert(subclass);
+  if (inserted) { g_abc_token.fetch_add(1, std::memory_order_acq_rel); }
+  return inserted;
+}
+bool abc_is_registered(void* abc, void* subclass) {
+  if (!abc || !subclass) return false;
+  const std::lock_guard<std::mutex> lk(g_abc_mu);
+  auto it = g_abc_registry.find(abc);
+  if (it == g_abc_registry.end()) return false;
+  return it->second.find(subclass) != it->second.end();
+}
+void abc_invalidate_cache() { g_abc_token.fetch_add(1, std::memory_order_acq_rel); }
+void abc_reset() {
+  const std::lock_guard<std::mutex> lk(g_abc_mu);
+  g_abc_registry.clear();
+  g_abc_token.store(0, std::memory_order_release);
+}
+
+// _aix_support shims (portable)
+void* aix_platform() { return string_from_cstr("aix"); }
+void* aix_default_libpath() { return string_from_cstr(""); }
+void* aix_ldflags() { return list_new(0); }
+
+// _android_support shims (portable)
+void* android_platform() { return string_from_cstr("android"); }
+void* android_default_libdir() { return string_from_cstr(""); }
+void* android_ldflags() { return list_new(0); }
+
+// _apple_support shims (portable)
+void* apple_platform() { return string_from_cstr("darwin"); }
+void* apple_default_sdkroot() { return string_from_cstr(""); }
+void* apple_ldflags() { return list_new(0); }
+
+// _ast shims (portable)
+void* ast_dump(void* /*obj*/) { return string_from_cstr(""); }
+void* ast_iter_fields(void* /*obj*/) { return list_new(0); }
+void* ast_walk(void* /*obj*/) { return list_new(0); }
+void* ast_copy_location(void* new_node, void* /*old_node*/) { return new_node; }
+void* ast_fix_missing_locations(void* node) { return node; }
+void* ast_get_docstring(void* /*node*/) { return string_from_cstr(""); }
+
+// _asyncio shims
+void* asyncio_get_event_loop() { return object_new(0); }
+void* asyncio_future_new() { return object_new(2); }
+void asyncio_future_set_result(void* fut, void* result) {
+  if (!fut) return;
+  object_set(fut, 0, result);
+  void* done = box_bool(true);
+  object_set(fut, 1, done);
+}
+void* asyncio_future_result(void* fut) {
+  if (!fut) return nullptr;
+  return object_get(fut, 0);
+}
+bool asyncio_future_done(void* fut) {
+  if (!fut) return false;
+  void* d = object_get(fut, 1);
+  if (!d) return false;
+  return box_bool_value(d);
+}
+void asyncio_sleep(double seconds) { time_sleep(seconds); }
 RtThreadHandle* rt_spawn(RtStart fn, const void* payload, std::size_t len) {
   if (fn == nullptr) return nullptr;
   auto* h = new ThreadHandle();
@@ -2677,6 +2811,1483 @@ extern "C" void* pycc_re_subn(void* p, void* r, void* t, int c, int f) { return 
 extern "C" void* pycc_re_escape(void* s) { return ::pycc::rt::re_escape(s); }
 extern "C" void* pycc_re_finditer(void* p, void* t, int f) { return ::pycc::rt::re_finditer(p,t,f); }
 
+// ===== fnmatch module =====
+namespace pycc::rt {
+
+static inline std::string rt_str(void* s) {
+  if (!s) return std::string();
+  const char* d = string_data(s);
+  const std::size_t n = string_len(s);
+  return std::string(d ? d : "", n);
+}
+
+static bool is_windows_like() {
+#if defined(_WIN32) || defined(_WIN64)
+  return true;
+#else
+  return false;
+#endif
+}
+
+static std::string regex_escape_lit(char c) {
+  switch (c) {
+    case '.': case '+': case '(': case ')': case '{': case '}': case '^': case '$': case '|': case '\\':
+      return std::string("\\") + c;
+    default: return std::string(1, c);
+  }
+}
+
+static std::string fnmatch_to_regex(const std::string& pat) {
+  std::string out; out.reserve(pat.size() * 2);
+  bool inClass = false;
+  for (size_t i = 0; i < pat.size(); ++i) {
+    char c = pat[i];
+    if (!inClass) {
+      if (c == '*') { out += ".*"; continue; }
+      if (c == '?') { out += "."; continue; }
+      if (c == '[') { inClass = true; out.push_back('['); continue; }
+      out += regex_escape_lit(c);
+    } else {
+      out.push_back(c);
+      if (c == ']') inClass = false;
+    }
+  }
+  return std::string("^") + out + std::string("$");
+}
+
+bool fnmatch_fnmatchcase(void* name, void* pattern) {
+  try {
+    std::string n = rt_str(name);
+    std::string p = rt_str(pattern);
+    std::regex re(fnmatch_to_regex(p));
+    return std::regex_match(n, re);
+  } catch (...) { return false; }
+}
+
+bool fnmatch_fnmatch(void* name, void* pattern) {
+  try {
+    std::string n = rt_str(name);
+    std::string p = rt_str(pattern);
+    if (is_windows_like()) {
+      std::transform(n.begin(), n.end(), n.begin(), [](unsigned char ch){ return static_cast<char>(std::tolower(ch)); });
+      std::transform(p.begin(), p.end(), p.begin(), [](unsigned char ch){ return static_cast<char>(std::tolower(ch)); });
+    }
+    std::regex re(fnmatch_to_regex(p));
+    return std::regex_match(n, re);
+  } catch (...) { return false; }
+}
+
+void* fnmatch_filter(void* names_list, void* pattern) {
+  std::string p = rt_str(pattern);
+  std::regex re(fnmatch_to_regex(p));
+  void* out = list_new(0);
+  if (!names_list) return out;
+  const std::size_t n = list_len(names_list);
+  for (std::size_t i = 0; i < n; ++i) {
+    void* s = list_get(names_list, i);
+    std::string name = rt_str(s);
+    if (std::regex_match(name, re)) list_push_slot(&out, s);
+  }
+  return out;
+}
+
+void* fnmatch_translate(void* pattern) {
+  std::string p = rt_str(pattern);
+  std::string rx = fnmatch_to_regex(p);
+  return string_new(rx.data(), rx.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for fnmatch
+extern "C" int  pycc_fnmatch_fnmatch(void* n, void* p) { return ::pycc::rt::fnmatch_fnmatch(n,p) ? 1 : 0; }
+extern "C" int  pycc_fnmatch_fnmatchcase(void* n, void* p) { return ::pycc::rt::fnmatch_fnmatchcase(n,p) ? 1 : 0; }
+extern "C" void* pycc_fnmatch_filter(void* names, void* p) { return ::pycc::rt::fnmatch_filter(names,p); }
+extern "C" void* pycc_fnmatch_translate(void* p) { return ::pycc::rt::fnmatch_translate(p); }
+
+// ===== string module =====
+namespace pycc::rt {
+
+static inline void capitalize_word(std::string& w) {
+  if (w.empty()) return;
+  // lowercase rest then uppercase first char (ASCII-focused)
+  for (size_t i = 0; i < w.size(); ++i) {
+    unsigned char ch = static_cast<unsigned char>(w[i]);
+    if (i == 0) w[i] = static_cast<char>(std::toupper(ch));
+    else w[i] = static_cast<char>(std::tolower(ch));
+  }
+}
+
+static std::vector<std::string> split_whitespace(const std::string& s) {
+  std::vector<std::string> out;
+  size_t i = 0, n = s.size();
+  while (i < n) {
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= n) break;
+    size_t j = i;
+    while (j < n && !std::isspace(static_cast<unsigned char>(s[j]))) ++j;
+    out.emplace_back(s.substr(i, j - i));
+    i = j;
+  }
+  return out;
+}
+
+static std::vector<std::string> split_on_sep(const std::string& s, const std::string& sep) {
+  std::vector<std::string> out;
+  if (sep.empty()) { out.push_back(s); return out; }
+  size_t pos = 0;
+  while (true) {
+    size_t found = s.find(sep, pos);
+    if (found == std::string::npos) { out.emplace_back(s.substr(pos)); break; }
+    out.emplace_back(s.substr(pos, found - pos));
+    pos = found + sep.size();
+  }
+  return out;
+}
+
+void* string_capwords(void* s, void* sep_or_null) {
+  std::string in;
+  if (s) { const char* d = string_data(s); in.assign(d ? d : "", string_len(s)); }
+  std::vector<std::string> words;
+  std::string sep;
+  if (sep_or_null) {
+    const char* ds = string_data(sep_or_null);
+    sep.assign(ds ? ds : "", string_len(sep_or_null));
+    words = split_on_sep(in, sep);
+    for (auto& w : words) capitalize_word(w);
+    // Preserve separators by joining with same sep
+    std::string out;
+    if (!words.empty()) {
+      out = words[0];
+      for (size_t i = 1; i < words.size(); ++i) { out += sep; out += words[i]; }
+    }
+    return string_new(out.data(), out.size());
+  }
+  // Default: split on whitespace; join with single spaces
+  words = split_whitespace(in);
+  for (auto& w : words) capitalize_word(w);
+  std::string out;
+  for (size_t i = 0; i < words.size(); ++i) { if (i) out.push_back(' '); out += words[i]; }
+  return string_new(out.data(), out.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for string
+extern "C" void* pycc_string_capwords(void* s, void* sep) { return ::pycc::rt::string_capwords(s, sep); }
+
+// ===== glob module =====
+namespace pycc::rt {
+
+static std::string glob_norm(std::filesystem::path p) {
+  return p.generic_string();
+}
+
+static std::string glob_escape_regex(const std::string& s) {
+  std::string out; out.reserve(s.size() * 2);
+  for (char c : s) {
+    switch (c) {
+      case '.': case '+': case '(': case ')': case '{': case '}': case '^': case '$': case '|': case '\\':
+        out.push_back('\\'); out.push_back(c); break;
+      default: out.push_back(c); break;
+    }
+  }
+  return out;
+}
+
+static std::string glob_pattern_to_regex(const std::string& pat) {
+  std::string out; out.reserve(pat.size() * 2);
+  for (size_t i = 0; i < pat.size(); ++i) {
+    char c = pat[i];
+    if (c == '*') {
+      if (i + 1 < pat.size() && pat[i+1] == '*') { out += ".*"; ++i; }
+      else out += "[^/]*";
+      continue;
+    }
+    if (c == '?') { out += "[^/]"; continue; }
+    if (c == '[') {
+      // simple character class passthrough until ']'
+      out.push_back('[');
+      ++i;
+      while (i < pat.size() && pat[i] != ']') { out.push_back(pat[i]); ++i; }
+      if (i < pat.size()) out.push_back(']');
+      continue;
+    }
+    out += glob_escape_regex(std::string(1, c));
+  }
+  return std::string("^") + out + std::string("$");
+}
+
+static void glob_collect_from(const std::filesystem::path& base, const std::regex& rx, std::vector<std::string>& out, bool recursive) {
+  try {
+    if (recursive) {
+      for (auto it = std::filesystem::recursive_directory_iterator(base); it != std::filesystem::recursive_directory_iterator(); ++it) {
+        std::string rel = glob_norm(std::filesystem::relative(it->path(), std::filesystem::current_path()));
+        if (std::regex_match(rel, rx)) out.push_back(rel);
+      }
+    } else {
+      for (auto& de : std::filesystem::directory_iterator(base)) {
+        std::string rel = glob_norm(std::filesystem::relative(de.path(), std::filesystem::current_path()));
+        if (std::regex_match(rel, rx)) out.push_back(rel);
+      }
+    }
+  } catch (...) {
+    // ignore errors
+  }
+}
+
+void* glob_glob(void* pattern) {
+  if (!pattern) return list_new(0);
+  std::string pat = glob_norm(std::filesystem::path(rt_to_stdstr(pattern)));
+  bool recursive = pat.find("**") != std::string::npos;
+  std::regex rx(glob_pattern_to_regex(pat));
+  std::vector<std::string> matches;
+  // Determine a base directory: if pat contains '/', use prefix before first wildcard
+  std::filesystem::path base = std::filesystem::current_path();
+  auto pos = pat.rfind('/');
+  if (pos != std::string::npos) {
+    std::string dir = pat.substr(0, pos);
+    try { base = std::filesystem::path(dir); if (!base.is_absolute()) base = std::filesystem::current_path() / base; } catch (...) {}
+  }
+  glob_collect_from(base, rx, matches, recursive);
+  std::sort(matches.begin(), matches.end());
+  void* lst = list_new(matches.size());
+  for (const auto& m : matches) list_push_slot(&lst, string_new(m.data(), m.size()));
+  return lst;
+}
+
+void* glob_iglob(void* pattern) { return glob_glob(pattern); }
+
+void* glob_escape(void* pattern) {
+  if (!pattern) return string_from_cstr("");
+  std::string s = rt_to_stdstr(pattern);
+  std::string out; out.reserve(s.size() * 2);
+  for (char c : s) {
+    if (c == '*' || c == '?' || c == '[' || c == ']') { out.push_back('\\'); out.push_back(c); }
+    else out.push_back(c);
+  }
+  return string_new(out.data(), out.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for glob
+extern "C" void* pycc_glob_glob(void* p) { return ::pycc::rt::glob_glob(p); }
+extern "C" void* pycc_glob_iglob(void* p) { return ::pycc::rt::glob_iglob(p); }
+extern "C" void* pycc_glob_escape(void* p) { return ::pycc::rt::glob_escape(p); }
+
+// ===== uuid module =====
+namespace pycc::rt {
+
+static inline unsigned char rnd_byte() {
+  static thread_local std::mt19937_64 rng{std::random_device{}()};
+  std::uniform_int_distribution<int> dist(0, 255);
+  return static_cast<unsigned char>(dist(rng));
+}
+
+void* uuid_uuid4() {
+  unsigned char bytes[16];
+  for (auto & b : bytes) b = rnd_byte();
+  // Set version (4)
+  bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0F) | 0x40);
+  // Set variant (10xx)
+  bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3F) | 0x80);
+  static const char* hex = "0123456789abcdef";
+  char out[36];
+  auto w2 = [&](int idx, unsigned char v){ out[idx] = hex[(v>>4)&0xF]; out[idx+1] = hex[v&0xF]; };
+  int pos = 0;
+  w2(pos, bytes[0]); pos+=2; w2(pos, bytes[1]); pos+=2; w2(pos, bytes[2]); pos+=2; w2(pos, bytes[3]); pos+=2; out[pos++]='-';
+  w2(pos, bytes[4]); pos+=2; w2(pos, bytes[5]); pos+=2; out[pos++]='-';
+  w2(pos, bytes[6]); pos+=2; w2(pos, bytes[7]); pos+=2; out[pos++]='-';
+  w2(pos, bytes[8]); pos+=2; w2(pos, bytes[9]); pos+=2; out[pos++]='-';
+  w2(pos, bytes[10]); pos+=2; w2(pos, bytes[11]); pos+=2; w2(pos, bytes[12]); pos+=2; w2(pos, bytes[13]); pos+=2; w2(pos, bytes[14]); pos+=2; w2(pos, bytes[15]); pos+=2;
+  return string_new(out, sizeof(out));
+}
+
+} // namespace pycc::rt
+
+// C ABI for uuid
+extern "C" void* pycc_uuid_uuid4() { return ::pycc::rt::uuid_uuid4(); }
+
+// ===== base64 module =====
+namespace pycc::rt {
+
+static std::vector<unsigned char> as_bytes(void* obj) {
+  std::vector<unsigned char> out;
+  if (!obj) return out;
+  // Determine tag
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(obj) - sizeof(ObjectHeader));
+  TypeTag t = static_cast<TypeTag>(h->tag);
+  if (t == TypeTag::Bytes) {
+    const unsigned char* d = bytes_data(obj);
+    out.assign(d, d + bytes_len(obj));
+  } else if (t == TypeTag::String) {
+    const char* d = string_data(obj);
+    out.assign(reinterpret_cast<const unsigned char*>(d), reinterpret_cast<const unsigned char*>(d) + string_len(obj));
+  }
+  return out;
+}
+
+void* base64_b64encode(void* data) {
+  static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  auto in = as_bytes(data);
+  std::string out;
+  out.reserve(((in.size()+2)/3)*4);
+  size_t i = 0;
+  while (i + 3 <= in.size()) {
+    unsigned int n = (in[i] << 16) | (in[i+1] << 8) | in[i+2];
+    out.push_back(tbl[(n >> 18) & 0x3F]);
+    out.push_back(tbl[(n >> 12) & 0x3F]);
+    out.push_back(tbl[(n >> 6) & 0x3F]);
+    out.push_back(tbl[n & 0x3F]);
+    i += 3;
+  }
+  if (i + 1 == in.size()) {
+    unsigned int n = (in[i] << 16);
+    out.push_back(tbl[(n >> 18) & 0x3F]);
+    out.push_back(tbl[(n >> 12) & 0x3F]);
+    out.push_back('=');
+    out.push_back('=');
+  } else if (i + 2 == in.size()) {
+    unsigned int n = (in[i] << 16) | (in[i+1] << 8);
+    out.push_back(tbl[(n >> 18) & 0x3F]);
+    out.push_back(tbl[(n >> 12) & 0x3F]);
+    out.push_back(tbl[(n >> 6) & 0x3F]);
+    out.push_back('=');
+  }
+  return bytes_new(out.data(), out.size());
+}
+
+void* base64_b64decode(void* data) {
+  auto inRaw = as_bytes(data);
+  // Ignore whitespace
+  std::vector<unsigned char> in; in.reserve(inRaw.size());
+  for (unsigned char c : inRaw) { if (!(c=='\n' || c=='\r' || c=='\t' || c==' ')) in.push_back(c); }
+  auto val = [](int c)->int{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62; if (c == '/') return 63; return -1;
+  };
+  std::string out;
+  out.reserve((in.size()*3)/4);
+  size_t i = 0;
+  while (i < in.size()) {
+    int a = (i < in.size()) ? val(in[i++]) : -1;
+    int b = (i < in.size()) ? val(in[i++]) : -1;
+    int c = (i < in.size()) ? (in[i] == '=' ? -2 : val(in[i])) : -1; if (i < in.size()) ++i;
+    int d = (i < in.size()) ? (in[i] == '=' ? -2 : val(in[i])) : -1; if (i < in.size()) ++i;
+    if (a < 0 || b < 0) break;
+    unsigned int n = (static_cast<unsigned int>(a) << 18) | (static_cast<unsigned int>(b) << 12);
+    out.push_back(static_cast<char>((n >> 16) & 0xFF));
+    if (c == -2) break;
+    if (c < 0) break;
+    n |= (static_cast<unsigned int>(c) << 6);
+    out.push_back(static_cast<char>((n >> 8) & 0xFF));
+    if (d == -2) break;
+    if (d < 0) break;
+    n |= static_cast<unsigned int>(d);
+    out.push_back(static_cast<char>(n & 0xFF));
+  }
+  return bytes_new(out.data(), out.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for base64
+extern "C" void* pycc_base64_b64encode(void* d) { return ::pycc::rt::base64_b64encode(d); }
+extern "C" void* pycc_base64_b64decode(void* d) { return ::pycc::rt::base64_b64decode(d); }
+
+// ===== random module =====
+namespace pycc::rt {
+
+static thread_local std::mt19937_64 g_rng{5489u}; // default MT seed
+
+double random_random() {
+  static thread_local std::uniform_real_distribution<double> dist(0.0, 1.0);
+  return dist(g_rng);
+}
+
+int32_t random_randint(int32_t a, int32_t b) {
+  if (b < a) std::swap(a,b);
+  std::uniform_int_distribution<int32_t> dist(a, b);
+  return dist(g_rng);
+}
+
+void random_seed(uint64_t seed) { g_rng.seed(seed); }
+
+} // namespace pycc::rt
+
+// C ABI for random
+extern "C" double pycc_random_random() { return ::pycc::rt::random_random(); }
+extern "C" int32_t pycc_random_randint(int32_t a, int32_t b) { return ::pycc::rt::random_randint(a,b); }
+extern "C" void pycc_random_seed(uint64_t s) { ::pycc::rt::random_seed(s); }
+
+// ===== stat module =====
+namespace pycc::rt {
+
+int32_t stat_ifmt(int32_t mode) {
+#ifdef S_IFMT
+  return static_cast<int32_t>(mode & S_IFMT);
+#else
+  return static_cast<int32_t>(mode & 0170000);
+#endif
+}
+
+bool stat_isdir(int32_t mode) {
+#ifdef S_IFDIR
+  return (mode & S_IFMT) == S_IFDIR;
+#else
+  return (mode & 0170000) == 0040000;
+#endif
+}
+
+bool stat_isreg(int32_t mode) {
+#ifdef S_IFREG
+  return (mode & S_IFMT) == S_IFREG;
+#else
+  return (mode & 0170000) == 0100000;
+#endif
+}
+
+} // namespace pycc::rt
+
+// C ABI for stat
+extern "C" int32_t pycc_stat_ifmt(int32_t m) { return ::pycc::rt::stat_ifmt(m); }
+extern "C" int     pycc_stat_isdir(int32_t m) { return ::pycc::rt::stat_isdir(m) ? 1 : 0; }
+extern "C" int     pycc_stat_isreg(int32_t m) { return ::pycc::rt::stat_isreg(m) ? 1 : 0; }
+
+// ===== secrets module =====
+namespace pycc::rt {
+
+static thread_local std::mt19937_64 sec_rng{std::random_device{}()};
+
+void* secrets_token_bytes(int32_t n) {
+  if (n <= 0) return bytes_new(nullptr, 0);
+  std::string out; out.resize(static_cast<size_t>(n));
+  std::uniform_int_distribution<int> dist(0, 255);
+  for (int32_t i = 0; i < n; ++i) out[static_cast<size_t>(i)] = static_cast<char>(dist(sec_rng));
+  return bytes_new(out.data(), out.size());
+}
+
+void* secrets_token_hex(int32_t n) {
+  static const char* hex = "0123456789abcdef";
+  if (n <= 0) return string_from_cstr("");
+  std::string out; out.resize(static_cast<size_t>(n) * 2);
+  std::uniform_int_distribution<int> dist(0, 255);
+  size_t pos = 0;
+  for (int32_t i = 0; i < n; ++i) {
+    unsigned char v = static_cast<unsigned char>(dist(sec_rng));
+    out[pos++] = hex[(v >> 4) & 0xF];
+    out[pos++] = hex[v & 0xF];
+  }
+  return string_new(out.data(), out.size());
+}
+
+void* secrets_token_urlsafe(int32_t n) {
+  if (n <= 0) return string_from_cstr("");
+  // Generate n random bytes, base64 encode, make urlsafe and strip '=' padding
+  std::string raw; raw.resize(static_cast<size_t>(n));
+  std::uniform_int_distribution<int> dist(0, 255);
+  for (int32_t i = 0; i < n; ++i) raw[static_cast<size_t>(i)] = static_cast<char>(dist(sec_rng));
+  void* b = bytes_new(raw.data(), raw.size());
+  void* enc = base64_b64encode(b);
+  std::string out(reinterpret_cast<const char*>(bytes_data(enc)), bytes_len(enc));
+  for (char& c : out) { if (c == '+') c = '-'; else if (c == '/') c = '_'; }
+  while (!out.empty() && out.back() == '=') out.pop_back();
+  return string_new(out.data(), out.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for secrets
+extern "C" void* pycc_secrets_token_bytes(int n) { return ::pycc::rt::secrets_token_bytes(n); }
+extern "C" void* pycc_secrets_token_hex(int n) { return ::pycc::rt::secrets_token_hex(n); }
+extern "C" void* pycc_secrets_token_urlsafe(int n) { return ::pycc::rt::secrets_token_urlsafe(n); }
+
+// ===== shutil module =====
+namespace pycc::rt {
+
+bool shutil_copyfile(void* src_path, void* dst_path) {
+  if (!src_path || !dst_path) return false;
+  const char* sp = string_data(src_path);
+  const char* dp = string_data(dst_path);
+  if (!sp || !dp) return false;
+  void* content = io_read_file(sp);
+  if (!content) return false;
+  return io_write_file(dp, content);
+}
+
+bool shutil_copy(void* src_path, void* dst_path) { return shutil_copyfile(src_path, dst_path); }
+
+} // namespace pycc::rt
+
+// C ABI for shutil
+extern "C" int pycc_shutil_copyfile(void* a, void* b) { return ::pycc::rt::shutil_copyfile(a,b) ? 1 : 0; }
+extern "C" int pycc_shutil_copy(void* a, void* b) { return ::pycc::rt::shutil_copy(a,b) ? 1 : 0; }
+
+// ===== platform module =====
+namespace pycc::rt {
+
+static std::string plat_uname_field(int which) {
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+  struct utsname u{};
+  if (uname(&u) == 0) {
+    switch (which) {
+      case 0: return std::string(u.sysname);
+      case 1: return std::string(u.machine);
+      case 2: return std::string(u.release);
+      case 3: return std::string(u.version);
+    }
+  }
+#endif
+  return std::string("unknown");
+}
+
+void* platform_system() { auto s = plat_uname_field(0); return string_new(s.data(), s.size()); }
+void* platform_machine() { auto s = plat_uname_field(1); return string_new(s.data(), s.size()); }
+void* platform_release() { auto s = plat_uname_field(2); return string_new(s.data(), s.size()); }
+void* platform_version() { auto s = plat_uname_field(3); return string_new(s.data(), s.size()); }
+
+} // namespace pycc::rt
+
+// C ABI for platform
+extern "C" void* pycc_platform_system() { return ::pycc::rt::platform_system(); }
+extern "C" void* pycc_platform_machine() { return ::pycc::rt::platform_machine(); }
+extern "C" void* pycc_platform_release() { return ::pycc::rt::platform_release(); }
+extern "C" void* pycc_platform_version() { return ::pycc::rt::platform_version(); }
+
+// ===== errno module =====
+namespace pycc::rt {
+
+static inline int32_t errno_val_or(int v, int dflt) { return static_cast<int32_t>(v ? v : dflt); }
+
+int32_t errno_EPERM() { #ifdef EPERM return EPERM; #else return 1; #endif }
+int32_t errno_ENOENT() { #ifdef ENOENT return ENOENT; #else return 2; #endif }
+int32_t errno_EEXIST() { #ifdef EEXIST return EEXIST; #else return 17; #endif }
+int32_t errno_EISDIR() { #ifdef EISDIR return EISDIR; #else return 21; #endif }
+int32_t errno_ENOTDIR() { #ifdef ENOTDIR return ENOTDIR; #else return 20; #endif }
+int32_t errno_EACCES() { #ifdef EACCES return EACCES; #else return 13; #endif }
+
+} // namespace pycc::rt
+
+// C ABI for errno
+extern "C" int32_t pycc_errno_EPERM() { return ::pycc::rt::errno_EPERM(); }
+extern "C" int32_t pycc_errno_ENOENT() { return ::pycc::rt::errno_ENOENT(); }
+extern "C" int32_t pycc_errno_EEXIST() { return ::pycc::rt::errno_EEXIST(); }
+extern "C" int32_t pycc_errno_EISDIR() { return ::pycc::rt::errno_EISDIR(); }
+extern "C" int32_t pycc_errno_ENOTDIR() { return ::pycc::rt::errno_ENOTDIR(); }
+extern "C" int32_t pycc_errno_EACCES() { return ::pycc::rt::errno_EACCES(); }
+
+// ===== heapq module =====
+namespace pycc::rt {
+
+static inline double num_value_for_heap(void* v) {
+  if (!v) return 0.0;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
+  switch (static_cast<TypeTag>(h->tag)) {
+    case TypeTag::Int: return static_cast<double>(box_int_value(v));
+    case TypeTag::Float: return box_float_value(v);
+    case TypeTag::Bool: return box_bool_value(v) ? 1.0 : 0.0;
+    default: return reinterpret_cast<uintptr_t>(v) * 1.0; // fallback
+  }
+}
+
+static void sift_up(void* lst, std::size_t idx) {
+  while (idx > 0) {
+    std::size_t p = (idx - 1) / 2;
+    void* vi = list_get(lst, idx);
+    void* vp = list_get(lst, p);
+    if (num_value_for_heap(vi) < num_value_for_heap(vp)) { list_set(lst, idx, vp); list_set(lst, p, vi); idx = p; }
+    else break;
+  }
+}
+
+static void sift_down(void* lst, std::size_t idx) {
+  std::size_t n = list_len(lst);
+  while (true) {
+    std::size_t l = 2 * idx + 1, r = l + 1, m = idx;
+    void* v = list_get(lst, idx);
+    if (l < n && num_value_for_heap(list_get(lst, l)) < num_value_for_heap(v)) m = l;
+    if (r < n && num_value_for_heap(list_get(lst, r)) < num_value_for_heap(list_get(lst, m))) m = r;
+    if (m == idx) break;
+    void* vm = list_get(lst, m);
+    list_set(lst, m, v);
+    list_set(lst, idx, vm);
+    idx = m;
+  }
+}
+
+void heapq_heappush(void* lst, void* value) {
+  if (!lst) return;
+  list_push_slot(&lst, value);
+  sift_up(lst, list_len(lst) - 1);
+}
+
+void* heapq_heappop(void* lst) {
+  if (!lst) return nullptr;
+  // directly manipulate list metadata: [0]=len, [1]=cap, [2..]=items
+  auto* meta = reinterpret_cast<std::size_t*>(lst);
+  std::size_t n = meta[0];
+  if (n == 0) return nullptr;
+  auto** items = reinterpret_cast<void**>(meta + 2);
+  void* top = items[0];
+  if (n == 1) { gc_pre_barrier(&items[0]); items[0] = nullptr; gc_write_barrier(&items[0], nullptr); meta[0] = 0; return top; }
+  void* last = items[n - 1];
+  gc_pre_barrier(&items[n - 1]); items[n - 1] = nullptr; gc_write_barrier(&items[n - 1], nullptr);
+  meta[0] = n - 1;
+  gc_pre_barrier(&items[0]); items[0] = last; gc_write_barrier(&items[0], last);
+  sift_down(lst, 0);
+  return top;
+}
+
+} // namespace pycc::rt
+
+// C ABI for heapq
+extern "C" void pycc_heapq_heappush(void* a, void* v) { ::pycc::rt::heapq_heappush(a,v); }
+extern "C" void* pycc_heapq_heappop(void* a) { return ::pycc::rt::heapq_heappop(a); }
+
+// ===== bisect module =====
+namespace pycc::rt {
+
+static inline double to_num_for_bisect(void* v) {
+  if (!v) return 0.0;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
+  switch (static_cast<TypeTag>(h->tag)) {
+    case TypeTag::Int: return static_cast<double>(box_int_value(v));
+    case TypeTag::Float: return box_float_value(v);
+    case TypeTag::Bool: return box_bool_value(v) ? 1.0 : 0.0;
+    default: return 0.0;
+  }
+}
+
+int32_t bisect_left(void* lst, void* xv) {
+  std::size_t n = lst ? list_len(lst) : 0;
+  double x = to_num_for_bisect(xv);
+  std::size_t lo = 0, hi = n;
+  while (lo < hi) {
+    std::size_t mid = (lo + hi) >> 1;
+    double v = to_num_for_bisect(list_get(lst, mid));
+    if (v < x) lo = mid + 1; else hi = mid;
+  }
+  return static_cast<int32_t>(lo);
+}
+
+int32_t bisect_right(void* lst, void* xv) {
+  std::size_t n = lst ? list_len(lst) : 0;
+  double x = to_num_for_bisect(xv);
+  std::size_t lo = 0, hi = n;
+  while (lo < hi) {
+    std::size_t mid = (lo + hi) >> 1;
+    double v = to_num_for_bisect(list_get(lst, mid));
+    if (x < v) hi = mid; else lo = mid + 1;
+  }
+  return static_cast<int32_t>(lo);
+}
+
+} // namespace pycc::rt
+
+// C ABI for bisect
+extern "C" int32_t pycc_bisect_left(void* a, void* x) { return ::pycc::rt::bisect_left(a,x); }
+extern "C" int32_t pycc_bisect_right(void* a, void* x) { return ::pycc::rt::bisect_right(a,x); }
+
+// ===== tempfile module =====
+namespace pycc::rt {
+
+static std::string choose_tmp_dir() {
+  const char* envs[] = {"TMPDIR", "TEMP", "TMP"};
+  for (const char* e : envs) { const char* v = std::getenv(e); if (v && *v) return std::string(v); }
+#if defined(_WIN32)
+  return std::string(".");
+#else
+  return std::string("/tmp");
+#endif
+}
+
+void* tempfile_gettempdir() {
+  std::string d = choose_tmp_dir();
+  return string_new(d.data(), d.size());
+}
+
+static std::string random_suffix(size_t n=8) {
+  static thread_local std::mt19937_64 rng{std::random_device{}()};
+  static const char* al = "abcdefghijklmnopqrstuvwxyz0123456789";
+  std::uniform_int_distribution<int> dist(0, 35);
+  std::string s; s.resize(n);
+  for (size_t i=0;i<n;++i) s[i] = al[dist(rng)];
+  return s;
+}
+
+void* tempfile_mkdtemp() {
+  std::string base = choose_tmp_dir();
+  for (int i=0;i<1000;++i) {
+    std::string p = base + "/pycc_" + random_suffix();
+    std::error_code ec; if (std::filesystem::create_directories(p, ec)) return string_new(p.data(), p.size());
+  }
+  return string_from_cstr("");
+}
+
+void* tempfile_mkstemp() {
+  std::string base = choose_tmp_dir();
+  for (int i=0;i<1000;++i) {
+    std::string p = base + "/pycc_" + random_suffix() + ".tmp";
+    // Try to write empty file
+    FILE* f = std::fopen(p.c_str(), "wb");
+    if (f) {
+      std::fclose(f);
+      void* lst = list_new(2);
+      list_push_slot(&lst, box_int(0));
+      list_push_slot(&lst, string_new(p.data(), p.size()));
+      return lst;
+    }
+  }
+  return list_new(0);
+}
+
+} // namespace pycc::rt
+
+// C ABI for tempfile
+extern "C" void* pycc_tempfile_gettempdir() { return ::pycc::rt::tempfile_gettempdir(); }
+extern "C" void* pycc_tempfile_mkdtemp() { return ::pycc::rt::tempfile_mkdtemp(); }
+extern "C" void* pycc_tempfile_mkstemp() { return ::pycc::rt::tempfile_mkstemp(); }
+
+// ===== statistics module =====
+namespace pycc::rt {
+
+static inline bool to_num_for_stats(void* v, double& out) {
+  if (!v) { out = 0.0; return false; }
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
+  switch (static_cast<TypeTag>(h->tag)) {
+    case TypeTag::Int: out = static_cast<double>(box_int_value(v)); return true;
+    case TypeTag::Float: out = box_float_value(v); return true;
+    case TypeTag::Bool: out = box_bool_value(v) ? 1.0 : 0.0; return true;
+    default: out = 0.0; return false;
+  }
+}
+
+double statistics_mean(void* lst) {
+  if (!lst) return 0.0;
+  std::size_t n = list_len(lst); if (n == 0) return 0.0;
+  long double sum = 0.0L; std::size_t cnt = 0;
+  for (std::size_t i=0;i<n;++i) { double v; if (to_num_for_stats(list_get(lst,i), v)) { sum += v; ++cnt; } }
+  if (cnt == 0) return 0.0;
+  return static_cast<double>(sum / static_cast<long double>(cnt));
+}
+
+double statistics_median(void* lst) {
+  if (!lst) return 0.0;
+  std::size_t n = list_len(lst); if (n == 0) return 0.0;
+  std::vector<double> xs; xs.reserve(n);
+  for (std::size_t i=0;i<n;++i) { double v; if (to_num_for_stats(list_get(lst,i), v)) xs.push_back(v); }
+  if (xs.empty()) return 0.0;
+  std::sort(xs.begin(), xs.end());
+  std::size_t m = xs.size();
+  if ((m & 1U) == 1U) return xs[m/2];
+  double a = xs[m/2 - 1], b = xs[m/2];
+  return (a + b) / 2.0;
+}
+
+} // namespace pycc::rt
+
+// C ABI for statistics
+extern "C" double pycc_statistics_mean(void* a) { return ::pycc::rt::statistics_mean(a); }
+extern "C" double pycc_statistics_median(void* a) { return ::pycc::rt::statistics_median(a); }
+
+// ===== textwrap module =====
+namespace pycc::rt {
+
+static std::vector<std::string> split_words_norm(const std::string& s) {
+  std::vector<std::string> words; words.reserve(16);
+  size_t i=0,n=s.size();
+  while (i<n) {
+    while (i<n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i>=n) break; size_t j=i; while (j<n && !std::isspace(static_cast<unsigned char>(s[j]))) ++j;
+    words.emplace_back(s.substr(i, j-i)); i=j;
+  }
+  return words;
+}
+
+void* textwrap_fill(void* str, int32_t width) {
+  if (!str || width <= 0) return string_from_cstr("");
+  std::string s(string_data(str), string_len(str));
+  auto words = split_words_norm(s);
+  std::string out; out.reserve(s.size()+words.size());
+  size_t col = 0;
+  for (size_t i=0;i<words.size();++i) {
+    const std::string& w = words[i];
+    if (col == 0) {
+      out += w; col = w.size();
+    } else if (col + 1 + w.size() <= static_cast<size_t>(width)) {
+      out.push_back(' '); out += w; col += 1 + w.size();
+    } else {
+      out.push_back('\n'); out += w; col = w.size();
+    }
+  }
+  return string_new(out.data(), out.size());
+}
+
+void* textwrap_shorten(void* str, int32_t width) {
+  if (!str || width <= 0) return string_from_cstr("");
+  std::string s(string_data(str), string_len(str));
+  auto words = split_words_norm(s);
+  std::string out;
+  const std::string ellipsis = "...";
+  // if fits, return normalized string
+  size_t total = 0; if (!words.empty()) { total = words[0].size(); for (size_t i=1;i<words.size();++i) total += 1 + words[i].size(); }
+  if (total <= static_cast<size_t>(width)) {
+    if (!words.empty()) { out = words[0]; for (size_t i=1;i<words.size();++i){ out.push_back(' '); out += words[i]; } }
+    return string_new(out.data(), out.size());
+  }
+  // otherwise, fill up to width-3 and add '...'
+  int avail = width - static_cast<int>(ellipsis.size()); if (avail < 0) avail = 0;
+  size_t used = 0; bool first = true;
+  for (const auto& w : words) {
+    size_t need = (first ? w.size() : 1 + w.size());
+    if (used + need > static_cast<size_t>(avail)) break;
+    if (first) { out += w; used += w.size(); first = false; }
+    else { out.push_back(' '); out += w; used += 1 + w.size(); }
+  }
+  out += ellipsis;
+  return string_new(out.data(), out.size());
+}
+
+void* textwrap_wrap(void* str, int32_t width) {
+  if (!str || width <= 0) return list_new(0);
+  std::string s(string_data(str), string_len(str));
+  auto words = split_words_norm(s);
+  void* out = list_new(8);
+  std::string line;
+  size_t col = 0;
+  auto flush_line = [&]() {
+    if (!line.empty()) {
+      void* ls = string_new(line.data(), line.size());
+      list_push_slot(&out, ls);
+      line.clear();
+      col = 0;
+    }
+  };
+  for (size_t i=0;i<words.size();++i) {
+    const std::string& w = words[i];
+    if (col == 0) {
+      line = w; col = w.size();
+    } else if (col + 1 + w.size() <= static_cast<size_t>(width)) {
+      line.push_back(' '); line += w; col += 1 + w.size();
+    } else {
+      flush_line();
+      line = w; col = w.size();
+    }
+  }
+  flush_line();
+  return out;
+}
+
+void* textwrap_dedent(void* str) {
+  if (!str) return string_from_cstr("");
+  std::string s(string_data(str), string_len(str));
+  // Collect lines with their ending preserved
+  std::vector<std::pair<std::string,bool>> lines; // {content_without_nl, had_nl}
+  lines.reserve(16);
+  size_t i=0, n=s.size();
+  while (i<n) {
+    size_t j = i; while (j<n && s[j] != '\n') ++j;
+    std::string line = s.substr(i, j-i);
+    bool had_nl = (j<n && s[j]=='\n');
+    lines.emplace_back(std::move(line), had_nl);
+    i = j + (had_nl?1:0);
+  }
+  // Compute minimal indentation across non-blank lines (spaces and tabs)
+  size_t minIndent = SIZE_MAX;
+  for (const auto& p : lines) {
+    const std::string& ln = p.first;
+    size_t k=0; while (k<ln.size() && (ln[k]==' ' || ln[k]=='\t')) ++k;
+    if (k==ln.size()) continue; // blank or all whitespace; ignore
+    if (k < minIndent) minIndent = k;
+  }
+  if (minIndent == SIZE_MAX) minIndent = 0; // no non-blank lines
+  // Build output removing minIndent from each non-blank line
+  std::string out;
+  for (size_t idx=0; idx<lines.size(); ++idx) {
+    const auto& p = lines[idx];
+    const std::string& ln = p.first;
+    size_t k=0; while (k<ln.size() && (ln[k]==' ' || ln[k]=='\t')) ++k;
+    if (k==ln.size()) {
+      // blank line
+      // Keep as-is (no content) and preserve newline if present
+    } else {
+      size_t drop = std::min(minIndent, k);
+      out.append(ln.substr(drop));
+    }
+    if (p.second) out.push_back('\n');
+    else if (idx+1 < lines.size()) out.push_back('\n'); // preserve inter-line breaks
+  }
+  return string_new(out.data(), out.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for textwrap
+extern "C" void* pycc_textwrap_fill(void* s, int32_t w) { return ::pycc::rt::textwrap_fill(s,w); }
+extern "C" void* pycc_textwrap_shorten(void* s, int32_t w) { return ::pycc::rt::textwrap_shorten(s,w); }
+extern "C" void* pycc_textwrap_wrap(void* s, int32_t w) { return ::pycc::rt::textwrap_wrap(s,w); }
+extern "C" void* pycc_textwrap_dedent(void* s) { return ::pycc::rt::textwrap_dedent(s); }
+
+// ===== hashlib module (subset) =====
+namespace pycc::rt {
+
+static std::vector<unsigned char> to_bytes_any(void* obj) {
+  std::vector<unsigned char> out;
+  if (!obj) return out;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(obj) - sizeof(ObjectHeader));
+  TypeTag t = static_cast<TypeTag>(h->tag);
+  if (t == TypeTag::Bytes) { const unsigned char* d = bytes_data(obj); out.assign(d, d + bytes_len(obj)); }
+  else if (t == TypeTag::String) { const char* d = string_data(obj); out.assign(reinterpret_cast<const unsigned char*>(d), reinterpret_cast<const unsigned char*>(d) + string_len(obj)); }
+  else if (t == TypeTag::Int) { long long v = box_int_value(obj); for (int i=0;i<8;++i) out.push_back(static_cast<unsigned char>((v >> (i*8)) & 0xFF)); }
+  else if (t == TypeTag::Float) { double dv = box_float_value(obj); unsigned char buf[sizeof(double)]; std::memcpy(buf, &dv, sizeof(double)); out.insert(out.end(), buf, buf + sizeof(double)); }
+  else if (t == TypeTag::Bool) { out.push_back(box_bool_value(obj) ? 1 : 0); }
+  return out;
+}
+
+static uint64_t hash64_mix(const unsigned char* data, std::size_t len, uint64_t seed) {
+  // FNV-1a 64-bit with a seed tweak
+  const uint64_t FNV_OFFSET = 1469598103934665603ULL ^ seed;
+  const uint64_t FNV_PRIME = 1099511628211ULL;
+  uint64_t h = FNV_OFFSET;
+  for (std::size_t i=0;i<len;++i) { h ^= static_cast<uint64_t>(data[i]); h *= FNV_PRIME; }
+  // final avalanche (xorshift)
+  h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL; h ^= h >> 33;
+  return h;
+}
+
+static std::string hex_from_u64(uint64_t v) {
+  static const char* hex = "0123456789abcdef";
+  std::string out; out.resize(16);
+  for (int i=15; i>=0; --i) { out[i] = hex[v & 0xF]; v >>= 4; }
+  return out;
+}
+
+void* hashlib_sha256(void* obj) {
+  auto bytes = to_bytes_any(obj);
+  // derive 4x64-bit blocks with different seeds
+  uint64_t h0 = hash64_mix(bytes.data(), bytes.size(), 0x9ae16a3b2f90404fULL);
+  uint64_t h1 = hash64_mix(bytes.data(), bytes.size(), 0xc3a5c85c97cb3127ULL);
+  uint64_t h2 = hash64_mix(bytes.data(), bytes.size(), 0xb492b66fbe98f273ULL);
+  uint64_t h3 = hash64_mix(bytes.data(), bytes.size(), 0x9ae16a3b2f90404dULL);
+  std::string hex; hex.reserve(64);
+  hex += hex_from_u64(h0); hex += hex_from_u64(h1); hex += hex_from_u64(h2); hex += hex_from_u64(h3);
+  return string_new(hex.data(), hex.size());
+}
+
+void* hashlib_md5(void* obj) {
+  auto bytes = to_bytes_any(obj);
+  uint64_t h0 = hash64_mix(bytes.data(), bytes.size(), 0x0123456789abcdefULL);
+  uint64_t h1 = hash64_mix(bytes.data(), bytes.size(), 0xfedcba9876543210ULL);
+  std::string hex; hex.reserve(32);
+  hex += hex_from_u64(h0); hex += hex_from_u64(h1);
+  return string_new(hex.data(), hex.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for hashlib
+extern "C" void* pycc_hashlib_sha256(void* d) { return ::pycc::rt::hashlib_sha256(d); }
+extern "C" void* pycc_hashlib_md5(void* d) { return ::pycc::rt::hashlib_md5(d); }
+
+// ===== pprint module =====
+namespace pycc::rt {
+
+static std::string pformat_impl(void* obj, int depth);
+
+static void append_escaped(std::string& out, const char* data, std::size_t n) {
+  for (std::size_t i=0;i<n;++i) {
+    char c = data[i];
+    if (c == '\\' || c == '\'') { out.push_back('\\'); out.push_back(c); }
+    else if (c == '\n') { out += "\\n"; }
+    else out.push_back(c);
+  }
+}
+
+static std::string pformat_impl(void* obj, int depth) {
+  if (obj == nullptr) return std::string("None");
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(obj) - sizeof(ObjectHeader));
+  switch (static_cast<TypeTag>(h->tag)) {
+    case TypeTag::Int: return std::to_string(box_int_value(obj));
+    case TypeTag::Float: {
+      std::ostringstream ss; ss.setf(std::ios::fixed); ss.precision(12); ss<<box_float_value(obj); std::string s=ss.str();
+      // strip trailing zeros
+      while (s.size()>1 && s.find('.')!=std::string::npos && s.back()=='0') s.pop_back();
+      if (!s.empty() && s.back()=='.') s.push_back('0');
+      return s;
+    }
+    case TypeTag::Bool: return box_bool_value(obj) ? std::string("True") : std::string("False");
+    case TypeTag::String: {
+      const char* d = string_data(obj); std::size_t n = string_len(obj);
+      std::string out; out.push_back('\''); append_escaped(out, d, n); out.push_back('\'');
+      return out;
+    }
+    case TypeTag::List: {
+      std::size_t n = list_len(obj);
+      std::string out = "[";
+      for (std::size_t i=0;i<n;++i) { if (i) out += ", "; out += pformat_impl(list_get(obj,i), depth+1); }
+      out.push_back(']'); return out;
+    }
+    case TypeTag::Dict: {
+      void* it = dict_iter_new(obj);
+      std::string out = "{"; bool first=true; for (;;) { void* k = dict_iter_next(it); if (!k) break; void* v = dict_get(obj, k); if (!first) out += ", "; first=false; out += pformat_impl(k, depth+1); out += ": "; out += pformat_impl(v, depth+1); }
+      out.push_back('}'); return out;
+    }
+    default: return std::string("<object>");
+  }
+}
+
+void* pprint_pformat(void* obj) {
+  std::string s = pformat_impl(obj, 0);
+  return string_new(s.data(), s.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for pprint
+extern "C" void* pycc_pprint_pformat(void* o) { return ::pycc::rt::pprint_pformat(o); }
+
+// ===== linecache module =====
+namespace pycc::rt {
+
+void* linecache_getline(void* path, int32_t lineno) {
+  if (!path || lineno <= 0) return string_from_cstr("");
+  const char* p = string_data(path);
+  if (!p) return string_from_cstr("");
+  void* content = io_read_file(p);
+  if (!content) return string_from_cstr("");
+  const char* d = string_data(content); std::size_t n = string_len(content);
+  int32_t cur = 1;
+  std::size_t i = 0; std::size_t start = 0; bool found=false;
+  while (i < n) {
+    if (cur == lineno) { start = i; found = true; break; }
+    if (d[i] == '\n') { ++cur; }
+    ++i;
+  }
+  if (!found) return string_from_cstr("");
+  std::size_t j = start;
+  while (j < n && d[j] != '\n') ++j;
+  return string_new(d + start, j - start);
+}
+
+} // namespace pycc::rt
+
+// C ABI for linecache
+extern "C" void* pycc_linecache_getline(void* p, int32_t n) { return ::pycc::rt::linecache_getline(p,n); }
+
+// ===== getpass module =====
+namespace pycc::rt {
+
+void* getpass_getuser() {
+  const char* envs[] = {"USER", "USERNAME"};
+  for (const char* e : envs) { const char* v = std::getenv(e); if (v && *v) return string_from_cstr(v); }
+  return string_from_cstr("unknown");
+}
+
+void* getpass_getpass(void* /*prompt_opt*/) {
+  return string_from_cstr("");
+}
+
+} // namespace pycc::rt
+
+// C ABI for getpass
+extern "C" void* pycc_getpass_getuser() { return ::pycc::rt::getpass_getuser(); }
+extern "C" void* pycc_getpass_getpass(void* p) { return ::pycc::rt::getpass_getpass(p); }
+
+// ===== shlex module =====
+namespace pycc::rt {
+
+static void shlex_emit_token(std::vector<std::string>& out, std::string& cur) {
+  if (!cur.empty()) { out.push_back(cur); cur.clear(); }
+}
+
+void* shlex_split(void* str) {
+  if (!str) return list_new(0);
+  const char* d = string_data(str); std::size_t n = string_len(str);
+  std::vector<std::string> toks; toks.reserve(8);
+  std::string cur;
+  bool in_s=false, in_d=false, esc=false;
+  for (std::size_t i=0;i<n;++i) {
+    char c = d[i];
+    if (esc) { cur.push_back(c); esc=false; continue; }
+    if (c == '\\') { esc=true; continue; }
+    if (in_s) { if (c=='\'') { in_s=false; } else { cur.push_back(c); } continue; }
+    if (in_d) { if (c=='"') { in_d=false; } else { cur.push_back(c); } continue; }
+    if (c=='\'') { in_s=true; continue; }
+    if (c=='"') { in_d=true; continue; }
+    if (std::isspace(static_cast<unsigned char>(c))) { shlex_emit_token(toks, cur); continue; }
+    cur.push_back(c);
+  }
+  shlex_emit_token(toks, cur);
+  void* lst = list_new(toks.size());
+  for (const auto& t : toks) { list_push_slot(&lst, string_new(t.data(), t.size())); }
+  return lst;
+}
+
+void* shlex_join(void* list_of_strings) {
+  if (!list_of_strings) return string_from_cstr("");
+  std::string out; bool first=true;
+  const std::size_t n = list_len(list_of_strings);
+  for (std::size_t i=0;i<n;++i) {
+    void* s = list_get(list_of_strings, i);
+    const char* d = s ? string_data(s) : nullptr; std::size_t len = s ? string_len(s) : 0;
+    std::string v = d ? std::string(d, len) : std::string();
+    bool needQuote=false;
+    for (char c : v) { if (std::isspace(static_cast<unsigned char>(c)) || c=='"' || c=='\'' || c=='$' || c=='`' || c=='\\') { needQuote=true; break; } }
+    if (!first) out.push_back(' ');
+    if (!needQuote) out += v;
+    else {
+      out.push_back('\'');
+      for (char c : v) {
+        if (c=='\'') { out += "'\\''"; }
+        else out.push_back(c);
+      }
+      out.push_back('\'');
+    }
+    first=false;
+  }
+  return string_new(out.data(), out.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for shlex
+extern "C" void* pycc_shlex_split(void* s) { return ::pycc::rt::shlex_split(s); }
+extern "C" void* pycc_shlex_join(void* l) { return ::pycc::rt::shlex_join(l); }
+
+// ===== html module =====
+namespace pycc::rt {
+
+void* html_escape(void* str, int32_t quote) {
+  if (!str) return string_from_cstr("");
+  const char* d = string_data(str); std::size_t n = string_len(str);
+  std::string out; out.reserve(n);
+  bool q = (quote != 0);
+  for (std::size_t i=0;i<n;++i) {
+    char c = d[i];
+    if (c == '&') out += "&amp;";
+    else if (c == '<') out += "&lt;";
+    else if (c == '>') out += "&gt;";
+    else if (q && c == '"') out += "&quot;";
+    else if (q && c == '\'') out += "&#x27;";
+    else out.push_back(c);
+  }
+  return string_new(out.data(), out.size());
+}
+
+static int from_hex_digit(char c) {
+  if (c>='0'&&c<='9') return c-'0';
+  if (c>='a'&&c<='f') return 10+(c-'a');
+  if (c>='A'&&c<='F') return 10+(c-'A');
+  return -1;
+}
+
+void* html_unescape(void* str) {
+  if (!str) return string_from_cstr("");
+  const char* d = string_data(str); std::size_t n = string_len(str);
+  std::string out; out.reserve(n);
+  for (std::size_t i=0;i<n;) {
+    char c = d[i];
+    if (c == '&') {
+      // try named
+      if (i+5<=n && std::memcmp(d+i, "&amp;", 5)==0) { out.push_back('&'); i+=5; continue; }
+      if (i+4<=n && std::memcmp(d+i, "&lt;", 4)==0) { out.push_back('<'); i+=4; continue; }
+      if (i+4<=n && std::memcmp(d+i, "&gt;", 4)==0) { out.push_back('>'); i+=4; continue; }
+      if (i+6<=n && std::memcmp(d+i, "&quot;", 6)==0) { out.push_back('"'); i+=6; continue; }
+      if (i+6<=n && std::memcmp(d+i, "&#x27;", 6)==0) { out.push_back('\''); i+=6; continue; }
+      // numeric: &#NNN; or &#xHH;
+      if (i+3<n && d[i+1]=='#') {
+        std::size_t j = i+2; int base = 10; if (j<n && (d[j]=='x' || d[j]=='X')) { base = 16; ++j; }
+        int val = 0; bool ok=false;
+        for (; j<n && d[j] != ';'; ++j) {
+          if (base==10) { if (!(d[j]>='0'&&d[j]<='9')) break; ok=true; val = val*10 + (d[j]-'0'); }
+          else { int hv = from_hex_digit(d[j]); if (hv<0) break; ok=true; val = val*16 + hv; }
+        }
+        if (ok && j<n && d[j]==';') { out.push_back(static_cast<char>(val)); i = j+1; continue; }
+      }
+    }
+    out.push_back(c); ++i;
+  }
+  return string_new(out.data(), out.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for html
+extern "C" void* pycc_html_escape(void* s, int32_t q) { return ::pycc::rt::html_escape(s,q); }
+extern "C" void* pycc_html_unescape(void* s) { return ::pycc::rt::html_unescape(s); }
+
+// ===== binascii module =====
+namespace pycc::rt {
+
+static std::vector<unsigned char> to_bytes_for_binascii(void* obj) {
+  std::vector<unsigned char> out;
+  if (!obj) return out;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(obj) - sizeof(ObjectHeader));
+  TypeTag t = static_cast<TypeTag>(h->tag);
+  if (t == TypeTag::Bytes) {
+    const unsigned char* d = bytes_data(obj); out.assign(d, d + bytes_len(obj));
+  } else if (t == TypeTag::String) {
+    const char* d = string_data(obj); out.assign(reinterpret_cast<const unsigned char*>(d), reinterpret_cast<const unsigned char*>(d) + string_len(obj));
+  }
+  return out;
+}
+
+void* binascii_hexlify(void* data) {
+  auto in = to_bytes_for_binascii(data);
+  static const char* hex = "0123456789abcdef";
+  std::string out; out.resize(in.size() * 2);
+  for (std::size_t i=0;i<in.size();++i) { unsigned char v = in[i]; out[2*i] = hex[(v>>4)&0xF]; out[2*i+1] = hex[v&0xF]; }
+  return bytes_new(out.data(), out.size());
+}
+
+void* binascii_unhexlify(void* data) {
+  auto in = to_bytes_for_binascii(data);
+  auto val = [](unsigned char c)->int{ if (c>='0'&&c<='9') return c-'0'; if (c>='a'&&c<='f') return c-'a'+10; if (c>='A'&&c<='F') return c-'A'+10; return -1; };
+  std::string out; out.reserve(in.size()/2);
+  std::size_t i=0;
+  // skip optional 0x prefix
+  if (in.size()>=2 && in[0]=='0' && (in[1]=='x' || in[1]=='X')) i=2;
+  for (; i+1<in.size(); i+=2) {
+    int hi = val(in[i]); int lo = val(in[i+1]); if (hi<0 || lo<0) break; out.push_back(static_cast<char>((hi<<4)|lo));
+  }
+  return bytes_new(out.data(), out.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for binascii
+extern "C" void* pycc_binascii_hexlify(void* d) { return ::pycc::rt::binascii_hexlify(d); }
+extern "C" void* pycc_binascii_unhexlify(void* d) { return ::pycc::rt::binascii_unhexlify(d); }
+
+// ===== hmac module =====
+namespace pycc::rt {
+
+static std::vector<unsigned char> to_bytes_any2(void* obj) {
+  std::vector<unsigned char> out;
+  if (!obj) return out;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(obj) - sizeof(ObjectHeader));
+  TypeTag t = static_cast<TypeTag>(h->tag);
+  if (t == TypeTag::Bytes) { const unsigned char* d = bytes_data(obj); out.assign(d, d + bytes_len(obj)); }
+  else if (t == TypeTag::String) { const char* d = string_data(obj); out.assign(reinterpret_cast<const unsigned char*>(d), reinterpret_cast<const unsigned char*>(d) + string_len(obj)); }
+  else if (t == TypeTag::Bool) { out.push_back(box_bool_value(obj) ? 1 : 0); }
+  else if (t == TypeTag::Int) { long long v = box_int_value(obj); for (int i=0;i<8;++i) out.push_back(static_cast<unsigned char>((v >> (i*8)) & 0xFF)); }
+  else if (t == TypeTag::Float) { double dv = box_float_value(obj); unsigned char buf[sizeof(double)]; std::memcpy(buf, &dv, sizeof(double)); out.insert(out.end(), buf, buf+sizeof(double)); }
+  return out;
+}
+
+static void* hash_hex_to_bytes(void* hexStr) {
+  return binascii_unhexlify(hexStr);
+}
+
+void* hmac_digest(void* keyObj, void* msgObj, void* digestmodObj) {
+  std::vector<unsigned char> key = to_bytes_any2(keyObj);
+  std::vector<unsigned char> msg = to_bytes_any2(msgObj);
+  std::string algo;
+  if (digestmodObj && string_len(digestmodObj) > 0) algo.assign(string_data(digestmodObj), string_len(digestmodObj)); else algo = "sha256";
+  int block = 64; // for sha256/md5
+  // Shorten long key
+  if (key.size() > static_cast<std::size_t>(block)) {
+    void* kstr = string_new(reinterpret_cast<const char*>(key.data()), key.size());
+    void* hhex = (algo == "md5") ? hashlib_md5(kstr) : hashlib_sha256(kstr);
+    void* kbytes = hash_hex_to_bytes(hhex);
+    key.assign(bytes_data(kbytes), bytes_data(kbytes) + bytes_len(kbytes));
+  }
+  // Pad key to block
+  key.resize(static_cast<std::size_t>(block), 0);
+  std::vector<unsigned char> kipad(block), kopad(block);
+  for (int i=0;i<block;++i) { kipad[i] = key[static_cast<std::size_t>(i)] ^ 0x36U; kopad[i] = key[static_cast<std::size_t>(i)] ^ 0x5cU; }
+  // inner = H(k_ipad || msg)
+  std::string inner; inner.reserve(block + msg.size()); inner.append(reinterpret_cast<const char*>(kipad.data()), block); inner.append(reinterpret_cast<const char*>(msg.data()), msg.size());
+  void* innerStr = string_new(inner.data(), inner.size());
+  void* innerHex = (algo == "md5") ? hashlib_md5(innerStr) : hashlib_sha256(innerStr);
+  void* innerBytes = hash_hex_to_bytes(innerHex);
+  // outer = H(k_opad || inner)
+  std::string outer; outer.reserve(block + bytes_len(innerBytes)); outer.append(reinterpret_cast<const char*>(kopad.data()), block); outer.append(reinterpret_cast<const char*>(bytes_data(innerBytes)), bytes_len(innerBytes));
+  void* outerStr = string_new(outer.data(), outer.size());
+  void* outHex = (algo == "md5") ? hashlib_md5(outerStr) : hashlib_sha256(outerStr);
+  void* outBytes = hash_hex_to_bytes(outHex);
+  return outBytes;
+}
+
+} // namespace pycc::rt
+
+// C ABI for hmac
+extern "C" void* pycc_hmac_digest(void* k, void* m, void* a) { return ::pycc::rt::hmac_digest(k,m,a); }
+
+// ===== warnings module =====
+namespace pycc::rt {
+
+void warnings_warn(void* msg) {
+  if (msg) {
+    io_write_stderr(msg);
+    io_write_stderr(string_from_cstr("\n"));
+  }
+}
+
+void warnings_simplefilter(void* /*action*/, void* /*category_opt*/) { /* no-op */ }
+
+} // namespace pycc::rt
+
+// C ABI for warnings
+extern "C" void pycc_warnings_warn(void* s) { ::pycc::rt::warnings_warn(s); }
+extern "C" void pycc_warnings_simplefilter(void* a, void* c) { ::pycc::rt::warnings_simplefilter(a,c); }
+
+// ===== copy module =====
+namespace pycc::rt {
+
+static void* shallow_copy_obj(void* obj);
+static void* deep_copy_obj(void* obj);
+
+static void* shallow_copy_obj(void* obj) {
+  if (!obj) return nullptr;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(obj) - sizeof(ObjectHeader));
+  switch (static_cast<TypeTag>(h->tag)) {
+    case TypeTag::Int:
+    case TypeTag::Float:
+    case TypeTag::Bool:
+    case TypeTag::String:
+    case TypeTag::Bytes:
+      return obj; // immutable
+    case TypeTag::List: {
+      std::size_t n = list_len(obj);
+      void* out = list_new(n);
+      for (std::size_t i=0;i<n;++i) { list_push_slot(&out, list_get(obj,i)); }
+      return out;
+    }
+    case TypeTag::Dict: {
+      void* out = dict_new(8);
+      void* it = dict_iter_new(obj);
+      for (;;) { void* k = dict_iter_next(it); if (!k) break; void* v = dict_get(obj, k); dict_set(&out, k, v); }
+      return out;
+    }
+    default: return obj;
+  }
+}
+
+static void* deep_copy_obj(void* obj) {
+  if (!obj) return nullptr;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(obj) - sizeof(ObjectHeader));
+  switch (static_cast<TypeTag>(h->tag)) {
+    case TypeTag::Int:
+    case TypeTag::Float:
+    case TypeTag::Bool:
+    case TypeTag::String:
+    case TypeTag::Bytes:
+      return obj;
+    case TypeTag::List: {
+      std::size_t n = list_len(obj);
+      void* out = list_new(n);
+      for (std::size_t i=0;i<n;++i) { list_push_slot(&out, deep_copy_obj(list_get(obj,i))); }
+      return out;
+    }
+    case TypeTag::Dict: {
+      void* out = dict_new(8);
+      void* it = dict_iter_new(obj);
+      for (;;) { void* k = dict_iter_next(it); if (!k) break; void* v = dict_get(obj, k); dict_set(&out, deep_copy_obj(k), deep_copy_obj(v)); }
+      return out;
+    }
+    default: return obj;
+  }
+}
+
+void* copy_copy(void* obj) { return shallow_copy_obj(obj); }
+void* copy_deepcopy(void* obj) { return deep_copy_obj(obj); }
+
+} // namespace pycc::rt
+
+// C ABI for copy
+extern "C" void* pycc_copy_copy(void* o) { return ::pycc::rt::copy_copy(o); }
+extern "C" void* pycc_copy_deepcopy(void* o) { return ::pycc::rt::copy_deepcopy(o); }
+
+// ===== calendar module =====
+namespace pycc::rt {
+
+static bool leap_year(int y) { return (y%4==0 && y%100!=0) || (y%400==0); }
+
+int32_t calendar_isleap(int32_t year) { return leap_year(year) ? 1 : 0; }
+
+static int days_in_month(int y, int m) {
+  static const int dm[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
+  if (m==2) return dm[m-1] + (leap_year(y)?1:0); else return dm[m-1];
+}
+
+// Zeller-like: compute weekday with Monday=0..Sunday=6
+static int weekday_mon0(int y, int m, int d) {
+  // Tomohiko Sakamoto's algorithm yields 0=Sunday..6=Saturday
+  static int t[] = {0,3,2,5,0,3,5,1,4,6,2,4};
+  if (m < 3) y -= 1;
+  int w = (y + y/4 - y/100 + y/400 + t[m-1] + d) % 7; // 0=Sunday
+  int mon0 = (w + 6) % 7; // Monday=0
+  return mon0;
+}
+
+void* calendar_monthrange(int32_t year, int32_t month) {
+  if (month < 1 || month > 12) return list_new(0);
+  int wd = weekday_mon0(year, month, 1);
+  int nd = days_in_month(year, month);
+  void* lst = list_new(2);
+  list_push_slot(&lst, box_int(wd));
+  list_push_slot(&lst, box_int(nd));
+  return lst;
+}
+
+} // namespace pycc::rt
+
+// C ABI for calendar
+extern "C" int32_t pycc_calendar_isleap(int32_t y) { return ::pycc::rt::calendar_isleap(y); }
+extern "C" void* pycc_calendar_monthrange(int32_t y, int32_t m) { return ::pycc::rt::calendar_monthrange(y,m); }
+
+// ---- keyword module shims ----
+namespace pycc::rt {
+
+static inline std::string_view kw_to_sv(void* s) {
+  if (!s) return std::string_view{};
+  const char* d = string_data(s);
+  return std::string_view{d, string_len(s)};
+}
+
+bool keyword_iskeyword(void* s) {
+  static const std::array<std::string_view, 35> kws = {
+      std::string_view{"False"}, std::string_view{"None"}, std::string_view{"True"},
+      std::string_view{"and"}, std::string_view{"as"}, std::string_view{"assert"},
+      std::string_view{"async"}, std::string_view{"await"}, std::string_view{"break"},
+      std::string_view{"case"}, std::string_view{"class"}, std::string_view{"continue"},
+      std::string_view{"def"}, std::string_view{"del"}, std::string_view{"elif"},
+      std::string_view{"else"}, std::string_view{"except"}, std::string_view{"finally"},
+      std::string_view{"for"}, std::string_view{"from"}, std::string_view{"global"},
+      std::string_view{"if"}, std::string_view{"import"}, std::string_view{"in"},
+      std::string_view{"is"}, std::string_view{"lambda"}, std::string_view{"match"},
+      std::string_view{"nonlocal"}, std::string_view{"not"}, std::string_view{"or"},
+      std::string_view{"pass"}, std::string_view{"raise"}, std::string_view{"return"},
+      std::string_view{"try"}, std::string_view{"while"}, std::string_view{"with"},
+      std::string_view{"yield"}
+  };
+  const auto v = kw_to_sv(s);
+  for (auto k : kws) { if (v == k) return true; }
+  return false;
+}
+
+void* keyword_kwlist() {
+  static const std::array<const char*, 35> kws = {
+      "False","None","True","and","as","assert","async","await","break","case","class","continue","def","del","elif","else","except","finally","for","from","global","if","import","in","is","lambda","match","nonlocal","not","or","pass","raise","return","try","while","with","yield"
+  };
+  void* lst = list_new(kws.size());
+  for (const char* kw : kws) {
+    void* s = string_from_cstr(kw);
+    list_push_slot(&lst, s);
+  }
+  return lst;
+}
+
+} // namespace pycc::rt
+
+// C ABI wrappers for keyword
+extern "C" int  pycc_keyword_iskeyword(void* s) { return ::pycc::rt::keyword_iskeyword(s) ? 1 : 0; }
+extern "C" void* pycc_keyword_kwlist() { return ::pycc::rt::keyword_kwlist(); }
+
 // C ABI exports for itertools
 extern "C" void* pycc_itertools_chain2(void* a, void* b) { return ::pycc::rt::itertools_chain2(a,b); }
 extern "C" void* pycc_itertools_chain_from_iterable(void* x) { return ::pycc::rt::itertools_chain_from_iterable(x); }
@@ -2692,6 +4303,88 @@ extern "C" void* pycc_itertools_pairwise(void* a) { return ::pycc::rt::itertools
 extern "C" void* pycc_itertools_batched(void* a, int n) { return ::pycc::rt::itertools_batched(a,n); }
 extern "C" void* pycc_itertools_compress(void* a, void* b) { return ::pycc::rt::itertools_compress(a,b); }
 
+// ===== operator module =====
+namespace pycc::rt {
+static TypeTag runtime_type_of(void* obj) {
+  if (!obj) return TypeTag::Object;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(obj) - sizeof(ObjectHeader));
+  return static_cast<TypeTag>(h->tag);
+}
+static bool is_num_tag(TypeTag t) { return t == TypeTag::Int || t == TypeTag::Float || t == TypeTag::Bool; }
+static inline double to_double_num(void* a) {
+  switch (runtime_type_of(a)) {
+    case TypeTag::Int: return static_cast<double>(box_int_value(a));
+    case TypeTag::Float: return box_float_value(a);
+    case TypeTag::Bool: return box_bool_value(a) ? 1.0 : 0.0;
+    default: return 0.0;
+  }
+}
+static inline long long to_ll_num(void* a) {
+  switch (runtime_type_of(a)) {
+    case TypeTag::Int: return box_int_value(a);
+    case TypeTag::Bool: return box_bool_value(a) ? 1LL : 0LL;
+    default: return 0LL;
+  }
+}
+void* operator_add(void* a, void* b) {
+  TypeTag ta = runtime_type_of(a), tb = runtime_type_of(b);
+  if (ta == TypeTag::Float || tb == TypeTag::Float) return box_float(to_double_num(a) + to_double_num(b));
+  long long r = to_ll_num(a) + to_ll_num(b); return box_int(r);
+}
+void* operator_sub(void* a, void* b) {
+  TypeTag ta = runtime_type_of(a), tb = runtime_type_of(b);
+  if (ta == TypeTag::Float || tb == TypeTag::Float) return box_float(to_double_num(a) - to_double_num(b));
+  long long r = to_ll_num(a) - to_ll_num(b); return box_int(r);
+}
+void* operator_mul(void* a, void* b) {
+  TypeTag ta = runtime_type_of(a), tb = runtime_type_of(b);
+  if (ta == TypeTag::Float || tb == TypeTag::Float) return box_float(to_double_num(a) * to_double_num(b));
+  long long r = to_ll_num(a) * to_ll_num(b); return box_int(r);
+}
+void* operator_truediv(void* a, void* b) { return box_float(to_double_num(a) / to_double_num(b)); }
+void* operator_neg(void* a) {
+  return (runtime_type_of(a) == TypeTag::Float) ? box_float(-box_float_value(a)) : box_int(-to_ll_num(a));
+}
+bool operator_eq(void* a, void* b) {
+  TypeTag ta = runtime_type_of(a), tb = runtime_type_of(b);
+  if (is_num_tag(ta) && is_num_tag(tb)) return to_double_num(a) == to_double_num(b);
+  if (ta == TypeTag::String && tb == TypeTag::String) {
+    const char* sa = string_data(a); const char* sb = string_data(b);
+    std::size_t la = string_len(a), lb = string_len(b);
+    if (la != lb) return false; return std::memcmp(sa, sb, la) == 0;
+  }
+  return a == b;
+}
+bool operator_lt(void* a, void* b) {
+  TypeTag ta = runtime_type_of(a), tb = runtime_type_of(b);
+  if (is_num_tag(ta) && is_num_tag(tb)) return to_double_num(a) < to_double_num(b);
+  if (ta == TypeTag::String && tb == TypeTag::String) { return std::strcmp(string_data(a), string_data(b)) < 0; }
+  return false;
+}
+bool operator_not_(void* a) { return !operator_truth(a); }
+bool operator_truth(void* a) {
+  switch (runtime_type_of(a)) {
+    case TypeTag::Bool: return box_bool_value(a);
+    case TypeTag::Int: return box_int_value(a) != 0;
+    case TypeTag::Float: return box_float_value(a) != 0.0;
+    case TypeTag::String: return string_len(a) != 0;
+    case TypeTag::List: return list_len(a) != 0;
+    case TypeTag::Dict: return dict_len(a) != 0;
+    default: return a != nullptr;
+  }
+}
+} // namespace pycc::rt
+
+// C ABI for operator
+extern "C" void* pycc_operator_add(void* a, void* b) { return ::pycc::rt::operator_add(a,b); }
+extern "C" void* pycc_operator_sub(void* a, void* b) { return ::pycc::rt::operator_sub(a,b); }
+extern "C" void* pycc_operator_mul(void* a, void* b) { return ::pycc::rt::operator_mul(a,b); }
+extern "C" void* pycc_operator_truediv(void* a, void* b) { return ::pycc::rt::operator_truediv(a,b); }
+extern "C" void* pycc_operator_neg(void* a) { return ::pycc::rt::operator_neg(a); }
+extern "C" int  pycc_operator_eq(void* a, void* b) { return ::pycc::rt::operator_eq(a,b) ? 1 : 0; }
+extern "C" int  pycc_operator_lt(void* a, void* b) { return ::pycc::rt::operator_lt(a,b) ? 1 : 0; }
+extern "C" int  pycc_operator_not(void* a) { return ::pycc::rt::operator_not_(a) ? 1 : 0; }
+extern "C" int  pycc_operator_truth(void* a) { return ::pycc::rt::operator_truth(a) ? 1 : 0; }
 // ===== collections module =====
 namespace pycc::rt {
 

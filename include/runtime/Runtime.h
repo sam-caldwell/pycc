@@ -243,6 +243,128 @@ void* re_subn(void* pattern, void* repl, void* text, int count, int flags);
 void* re_escape(void* text);
 void* re_finditer(void* pattern, void* text, int flags);
 
+// fnmatch module shims
+bool  fnmatch_fnmatch(void* name, void* pattern);
+bool  fnmatch_fnmatchcase(void* name, void* pattern);
+void* fnmatch_filter(void* names_list, void* pattern);
+void* fnmatch_translate(void* pattern);
+
+// string module shims (subset)
+void* string_capwords(void* s, void* sep_or_null);
+
+// glob module shims (subset)
+void* glob_glob(void* pattern);
+void* glob_iglob(void* pattern); // materialized as list in this AOT subset
+void* glob_escape(void* pattern);
+
+// uuid module shims (subset)
+void* uuid_uuid4(); // returns String in canonical form xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+
+// base64 module shims (subset)
+void* base64_b64encode(void* data_str_or_bytes); // returns Bytes
+void* base64_b64decode(void* b64_str_or_bytes);  // returns Bytes
+
+// random module shims (subset)
+double random_random();
+int32_t random_randint(int32_t a, int32_t b); // inclusive
+void random_seed(uint64_t seed);
+
+// secrets module shims (subset)
+void* secrets_token_bytes(int32_t n);      // returns Bytes of length n
+void* secrets_token_hex(int32_t n);        // returns hex String of length 2*n
+void* secrets_token_urlsafe(int32_t n);    // returns urlsafe base64 String (no padding)
+
+// shutil module shims (subset)
+bool shutil_copyfile(void* src_path, void* dst_path);
+bool shutil_copy(void* src_path, void* dst_path);
+
+// platform module shims (subset)
+void* platform_system();
+void* platform_machine();
+void* platform_release();
+void* platform_version();
+
+// errno module shims (subset as functions)
+int32_t errno_EPERM();
+int32_t errno_ENOENT();
+int32_t errno_EEXIST();
+int32_t errno_EISDIR();
+int32_t errno_ENOTDIR();
+int32_t errno_EACCES();
+
+// heapq module shims (subset)
+void  heapq_heappush(void* list, void* value);
+void* heapq_heappop(void* list);
+
+// bisect module shims (subset)
+int32_t bisect_left(void* sorted_list, void* x);
+int32_t bisect_right(void* sorted_list, void* x);
+
+// tempfile module shims (subset)
+void* tempfile_gettempdir();     // returns String
+void* tempfile_mkdtemp();        // returns created dir path
+void* tempfile_mkstemp();        // returns List [fd:int, path:str] (fd may be 0)
+
+// statistics module shims (subset)
+double statistics_mean(void* list_of_numbers);
+double statistics_median(void* list_of_numbers);
+
+// textwrap module shims (subset)
+void* textwrap_fill(void* s, int32_t width);
+void* textwrap_shorten(void* s, int32_t width);
+void* textwrap_wrap(void* s, int32_t width);   // returns List[str]
+void* textwrap_dedent(void* s);                 // returns Str
+
+// hashlib module shims (subset, non-cryptographic)
+void* hashlib_sha256(void* data_str_or_bytes); // returns hex String length 64
+void* hashlib_md5(void* data_str_or_bytes);    // returns hex String length 32
+
+// pprint module shims (subset)
+void* pprint_pformat(void* obj);
+
+// linecache module shims (subset)
+void* linecache_getline(void* path, int32_t lineno);
+
+// getpass module shims (subset)
+void* getpass_getuser();
+void* getpass_getpass(void* prompt_opt); // returns empty string in this subset
+
+// shlex module shims (subset)
+void* shlex_split(void* s);
+void* shlex_join(void* list_of_strings);
+
+// html module shims (subset)
+void* html_escape(void* s, int32_t quote);
+void* html_unescape(void* s);
+
+// binascii module shims (subset)
+void* binascii_hexlify(void* data_str_or_bytes);   // returns Bytes
+void* binascii_unhexlify(void* hex_str_or_bytes);  // returns Bytes
+
+// hmac module shims (subset)
+void* hmac_digest(void* key_str_or_bytes, void* msg_str_or_bytes, void* digestmod_str); // returns Bytes
+
+// warnings module shims (subset)
+void  warnings_warn(void* msg_str);
+void  warnings_simplefilter(void* action_str, void* category_opt);
+
+// copy module shims (subset)
+void* copy_copy(void* obj);
+void* copy_deepcopy(void* obj);
+
+// calendar module shims (subset)
+int32_t calendar_isleap(int32_t year);
+void*  calendar_monthrange(int32_t year, int32_t month); // returns [weekday(0=Mon), ndays]
+
+// stat module shims (subset)
+int32_t stat_ifmt(int32_t mode);
+bool    stat_isdir(int32_t mode);
+bool    stat_isreg(int32_t mode);
+
+// keyword module shims
+bool  keyword_iskeyword(void* s);
+void* keyword_kwlist();
+
 // collections module shims (materialized helpers)
 void* collections_counter(void* iterable_list);
 void* collections_ordered_dict(void* list_of_pairs);
@@ -251,6 +373,44 @@ void* collections_chainmap(void* list_of_dicts);
 void* collections_defaultdict_new(void* default_value);
 void* collections_defaultdict_get(void* dd, void* key);
 void  collections_defaultdict_set(void* dd, void* key, void* value);
+
+// _abc module shims (minimal accelerator for abc)
+int64_t abc_get_cache_token();        // monotonically increasing token
+bool    abc_register(void* abc, void* subclass);   // returns true if newly registered
+bool    abc_is_registered(void* abc, void* subclass);
+void    abc_invalidate_cache();       // increments token
+void    abc_reset();                  // test helper: clear registry, reset token
+
+// _aix_support module shims (minimal portable placeholders)
+void* aix_platform();            // returns String (e.g., "aix")
+void* aix_default_libpath();     // returns String (empty in this subset)
+void* aix_ldflags();             // returns List of Strings (empty)
+
+// _android_support module shims (minimal portable placeholders)
+void* android_platform();        // returns String ("android")
+void* android_default_libdir();  // returns String (empty)
+void* android_ldflags();         // returns List of Strings (empty)
+
+// _apple_support module shims (minimal portable placeholders)
+void* apple_platform();          // returns String ("darwin")
+void* apple_default_sdkroot();   // returns String (empty)
+void* apple_ldflags();           // returns List of Strings (empty)
+
+// _ast module shims (minimal helpers for compatibility)
+void* ast_dump(void* obj);                     // returns String (placeholder dump)
+void* ast_iter_fields(void* obj);              // returns empty List
+void* ast_walk(void* obj);                     // returns empty List
+void* ast_copy_location(void* new_node, void* old_node); // returns new_node
+void* ast_fix_missing_locations(void* node);   // returns node
+void* ast_get_docstring(void* node);           // returns empty String
+
+// _asyncio module shims (minimal helpers)
+void* asyncio_get_event_loop();                 // returns opaque object
+void* asyncio_future_new();                     // returns opaque object
+void  asyncio_future_set_result(void* fut, void* result);
+void* asyncio_future_result(void* fut);         // returns stored result (ptr or nullptr)
+bool  asyncio_future_done(void* fut);           // true if result set
+void  asyncio_sleep(double seconds);            // delegates to time_sleep
 
 // Itertools (materialized list-based helpers for AOT subset)
 // chain: concatenates two or more lists; from_iterable flattens a list of lists.
@@ -276,6 +436,17 @@ void* itertools_pairwise(void* a);
 void* itertools_batched(void* a, int n);
 // compress(data, selectors) -> elements where selector truthy
 void* itertools_compress(void* data, void* selectors);
+
+// operator module shims (numeric + boolean subset)
+void* operator_add(void* a, void* b);   // returns boxed int/float
+void* operator_sub(void* a, void* b);   // returns boxed int/float
+void* operator_mul(void* a, void* b);   // returns boxed int/float
+void* operator_truediv(void* a, void* b); // returns boxed float
+void* operator_neg(void* a);            // returns boxed int/float
+bool  operator_eq(void* a, void* b);
+bool  operator_lt(void* a, void* b);
+bool  operator_not_(void* a);
+bool  operator_truth(void* a);
 
 // Concurrency scaffolding
 using RtStart = void(*)(const void* payload, std::size_t len, void** ret, std::size_t* ret_len);
