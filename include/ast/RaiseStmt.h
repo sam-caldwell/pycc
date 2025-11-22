@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST raise statement declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -14,4 +18,3 @@ struct RaiseStmt final : Stmt, Acceptable<RaiseStmt, NodeKind::RaiseStmt> {
 };
 
 } // namespace pycc::ast
-

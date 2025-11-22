@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST literal type declarations.
+ */
 #pragma once
 
 #include "ast/Literal.h"

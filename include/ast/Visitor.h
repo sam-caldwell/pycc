@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Central AST visitor dispatcher declarations.
+ */
 #pragma once
 
 #include "ast/Nodes.h"

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST utility declarations (HasBody mixin).
+ */
 #pragma once
 
 #include <memory>

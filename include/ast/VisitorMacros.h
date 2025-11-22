@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Helper macros for AST visitor wiring.
+ */
 #pragma once
 
 // Simple visitor helper macros to reduce boilerplate

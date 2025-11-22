@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST subscript node declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -16,4 +20,3 @@ struct Subscript final : Expr, Acceptable<Subscript, NodeKind::Subscript> {
 };
 
 } // namespace pycc::ast
-

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST literal base template declarations.
+ */
 #pragma once
 
 #include "ast/Expr.h"

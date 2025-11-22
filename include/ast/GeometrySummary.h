@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST geometry summary declarations.
+ */
 #pragma once
 
 #include <cstdint>
@@ -11,6 +15,6 @@ namespace pycc::ast {
         uint64_t maxDepth{0};
     };
 
-    GeometrySummary ComputeGeometry(const Module& m);
+    GeometrySummary ComputeGeometry(const Module& module);
 
 } // namespace pycc::ast

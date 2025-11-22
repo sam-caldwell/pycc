@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 namespace pycc::ast {
@@ -9,4 +13,3 @@ enum class ExprContext {
 };
 
 } // namespace pycc::ast
-

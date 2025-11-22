@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST tuple literal declarations.
+ */
 /***
  * Name: pycc::ast::TupleLiteral
  * Purpose: Represent an immutable tuple literal of expressions.

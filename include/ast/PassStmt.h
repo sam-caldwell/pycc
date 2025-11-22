@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST pass statement declarations.
+ */
 #pragma once
 
 #include "Stmt.h"
@@ -8,4 +12,3 @@ namespace pycc::ast {
         PassStmt() : Stmt(NodeKind::PassStmt) {}
     };
 }
-

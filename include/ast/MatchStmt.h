@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST pattern-matching declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -23,4 +27,3 @@ struct MatchStmt final : Stmt, Acceptable<MatchStmt, NodeKind::MatchStmt> {
 };
 
 } // namespace pycc::ast
-

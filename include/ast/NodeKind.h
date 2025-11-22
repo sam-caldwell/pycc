@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST node kind enumeration.
+ */
 #pragma once
 
 namespace pycc::ast {

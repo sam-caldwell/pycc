@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <vector>
@@ -12,4 +16,3 @@ namespace pycc::ast {
         Import() : Stmt(NodeKind::Import) {}
     };
 }
-

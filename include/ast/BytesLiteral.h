@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <string>
@@ -9,4 +13,3 @@ namespace pycc::ast {
 using BytesLiteral = Literal<std::string, NodeKind::BytesLiteral>;
 
 } // namespace pycc::ast
-

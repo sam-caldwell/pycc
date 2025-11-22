@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Semantic type kind enumeration used in AST annotations.
+ */
 #pragma once
 
 namespace pycc::ast {

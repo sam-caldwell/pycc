@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -15,4 +19,3 @@ struct LambdaExpr final : Expr, Acceptable<LambdaExpr, NodeKind::LambdaExpr> {
 };
 
 } // namespace pycc::ast
-

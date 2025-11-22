@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST base Node default accept implementation.
+ */
 /***
  * Name: pycc::ast::Node::accept
  * Purpose: Default dynamic dispatch via central switch for non-override nodes.

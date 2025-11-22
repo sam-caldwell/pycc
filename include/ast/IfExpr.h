@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -15,4 +19,3 @@ struct IfExpr final : Expr, Acceptable<IfExpr, NodeKind::IfExpr> {
 };
 
 } // namespace pycc::ast
-

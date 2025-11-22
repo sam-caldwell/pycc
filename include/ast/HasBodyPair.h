@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST utility declarations (HasBodyPair mixin).
+ */
 /***
  * Name: pycc::ast::HasBodyPair
  * Purpose: Mixin for nodes that contain then/else statement lists.

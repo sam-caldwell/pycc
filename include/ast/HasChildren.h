@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST utility declarations (HasChildren mixin).
+ */
 #pragma once
 
 #include <memory>
@@ -11,4 +15,3 @@ struct HasChildren {
 };
 
 }
-

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -20,4 +24,3 @@ struct FStringLiteral final : Expr, Acceptable<FStringLiteral, NodeKind::FString
 };
 
 } // namespace pycc::ast
-

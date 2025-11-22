@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST Acceptable CRTP mixin declarations.
+ */
 #pragma once
 
 #include "ast/VisitorBase.h"

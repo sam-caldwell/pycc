@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 /***
  * Name: pycc::ast::ExprStmt
  * Purpose: Represent a standalone expression as a statement.

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -18,4 +22,3 @@ struct AugAssignStmt final : Stmt, Acceptable<AugAssignStmt, NodeKind::AugAssign
 };
 
 } // namespace pycc::ast
-

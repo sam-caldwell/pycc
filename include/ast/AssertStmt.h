@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -14,4 +18,3 @@ struct AssertStmt final : Stmt, Acceptable<AssertStmt, NodeKind::AssertStmt> {
 };
 
 } // namespace pycc::ast
-

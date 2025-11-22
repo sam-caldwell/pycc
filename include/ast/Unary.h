@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST unary expression declarations.
+ */
 #pragma once
 #include <memory>
 

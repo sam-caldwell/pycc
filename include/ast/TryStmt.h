@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST try/except declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -15,4 +19,3 @@ namespace pycc::ast {
         TryStmt() : Stmt(NodeKind::TryStmt) {}
     };
 }
-

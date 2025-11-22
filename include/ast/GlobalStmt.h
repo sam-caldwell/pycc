@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <string>
@@ -13,4 +17,3 @@ struct GlobalStmt final : Stmt, Acceptable<GlobalStmt, NodeKind::GlobalStmt> {
 };
 
 } // namespace pycc::ast
-

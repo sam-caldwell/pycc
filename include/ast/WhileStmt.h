@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST while statement declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -12,4 +16,3 @@ namespace pycc::ast {
         explicit WhileStmt(std::unique_ptr<Expr> c) : Stmt(NodeKind::WhileStmt), cond(std::move(c)) {}
     };
 }
-

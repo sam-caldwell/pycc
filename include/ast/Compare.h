@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -16,4 +20,3 @@ struct Compare final : Expr, Acceptable<Compare, NodeKind::Compare> {
 };
 
 } // namespace pycc::ast
-

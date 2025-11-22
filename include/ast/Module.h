@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST module node declarations.
+ */
 #pragma once
 
 #include <memory>

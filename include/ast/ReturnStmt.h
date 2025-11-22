@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST return statement declarations.
+ */
 #pragma once
 
 #include <memory>

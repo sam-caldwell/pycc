@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST with-item declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -12,4 +16,3 @@ namespace pycc::ast {
         WithItem() : Node(NodeKind::WithItem) {}
     };
 }
-

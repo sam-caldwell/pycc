@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -15,4 +19,3 @@ struct DefStmt final : Stmt, Acceptable<DefStmt, NodeKind::DefStmt> {
 };
 
 } // namespace pycc::ast
-

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -17,4 +21,3 @@ struct Attribute final : Expr, Acceptable<Attribute, NodeKind::Attribute> {
 };
 
 } // namespace pycc::ast
-

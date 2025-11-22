@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST parameter declarations.
+ */
 #pragma once
 
 #include <string>

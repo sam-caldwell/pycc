@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <string>
@@ -11,4 +15,3 @@ namespace pycc::ast {
         Alias(std::string n, std::string a) : Node(NodeKind::Alias), name(std::move(n)), asname(std::move(a)) {}
     };
 }
-

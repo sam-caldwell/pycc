@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST polymorphic visitor base interface.
+ */
 #pragma once
 
 #include <string>

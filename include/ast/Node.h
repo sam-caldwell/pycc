@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST base node declarations.
+ */
 #pragma once
 
 #include "NodeKind.h"

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -12,4 +16,3 @@ namespace pycc::ast {
         DelStmt() : Stmt(NodeKind::DelStmt) {}
     };
 }
-

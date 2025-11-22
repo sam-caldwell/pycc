@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST unary operator enumeration.
+ */
 #pragma once
 
 namespace pycc::ast {

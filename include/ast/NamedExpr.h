@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST named expression declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -15,4 +19,3 @@ struct NamedExpr final : Expr, Acceptable<NamedExpr, NodeKind::NamedExpr> {
 };
 
 } // namespace pycc::ast
-

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST utility declarations (HasName mixin).
+ */
 #pragma once
 
 #include <string>
@@ -9,4 +13,3 @@ struct HasName {
 };
 
 }
-

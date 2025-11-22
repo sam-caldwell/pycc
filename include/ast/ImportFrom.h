@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <string>
@@ -14,4 +18,3 @@ namespace pycc::ast {
         ImportFrom() : Stmt(NodeKind::ImportFrom) {}
     };
 }
-

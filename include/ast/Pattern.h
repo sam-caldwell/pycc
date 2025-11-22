@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST structural pattern declarations.
+ */
 #pragma once
 
 #include <memory>

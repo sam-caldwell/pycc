@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST with statement declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -13,4 +17,3 @@ namespace pycc::ast {
         WithStmt() : Stmt(NodeKind::WithStmt) {}
     };
 }
-

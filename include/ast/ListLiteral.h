@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST list literal declarations.
+ */
 /***
  * Name: pycc::ast::ListLiteral
  * Purpose: Represent a list literal (read-only ops in M2).

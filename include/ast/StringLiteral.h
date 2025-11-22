@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST string literal declarations.
+ */
 /***
  * Name: pycc::ast::StringLiteral
  * Purpose: String literal node.
@@ -10,4 +14,3 @@
 namespace pycc::ast {
     using StringLiteral = Literal<std::string, NodeKind::StringLiteral>;
 }
-

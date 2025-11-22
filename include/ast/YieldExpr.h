@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST yield/await expression declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -13,4 +17,3 @@ struct YieldExpr final : Expr, Acceptable<YieldExpr, NodeKind::YieldExpr> {
 };
 
 } // namespace pycc::ast
-

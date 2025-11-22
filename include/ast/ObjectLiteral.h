@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST object literal declarations.
+ */
 /***
  * Name: pycc::ast::ObjectLiteral
  * Purpose: Represent a simple fixed-field object literal.
@@ -17,4 +21,3 @@ struct ObjectLiteral final : Expr, Acceptable<ObjectLiteral, NodeKind::ObjectLit
 };
 
 } // namespace pycc::ast
-

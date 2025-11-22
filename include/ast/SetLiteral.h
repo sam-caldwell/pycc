@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST set literal declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -14,4 +18,3 @@ struct SetLiteral final : Expr, Acceptable<SetLiteral, NodeKind::SetLiteral> {
 };
 
 } // namespace pycc::ast
-

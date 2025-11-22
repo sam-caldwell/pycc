@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST name node declarations.
+ */
 #pragma once
 #include "Expr.h"
 #include "ast/ExprContext.h"

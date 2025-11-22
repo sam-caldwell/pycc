@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST utility declarations (HasParams mixin).
+ */
 #pragma once
 
 #include <vector>
@@ -10,4 +14,3 @@ struct HasParams {
 };
 
 }
-

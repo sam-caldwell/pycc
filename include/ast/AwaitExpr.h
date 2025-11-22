@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include <memory>
@@ -12,4 +16,3 @@ struct AwaitExpr final : Expr, Acceptable<AwaitExpr, NodeKind::AwaitExpr> {
 };
 
 } // namespace pycc::ast
-

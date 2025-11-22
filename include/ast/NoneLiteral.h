@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST None literal declarations.
+ */
 /***
  * Name: pycc::ast::NoneLiteral
  * Purpose: Represent the Python None literal.
@@ -14,4 +18,3 @@ struct NoneLiteral final : Expr, Acceptable<NoneLiteral, NodeKind::NoneLiteral> 
 };
 
 }
-

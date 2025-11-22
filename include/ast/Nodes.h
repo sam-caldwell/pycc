@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Aggregate AST node includes.
+ */
 #pragma once
 
 #include "ast/NodeKind.h"

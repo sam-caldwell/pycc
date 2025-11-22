@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST statement base declarations.
+ */
 #pragma once
 
 #include "ast/Node.h"

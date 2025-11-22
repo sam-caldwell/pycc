@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief AST declarations.
+ */
 #pragma once
 
 #include "ast/Literal.h"
@@ -8,4 +12,3 @@ namespace pycc::ast {
 using ImagLiteral = Literal<double, NodeKind::ImagLiteral>;
 
 } // namespace pycc::ast
-
