@@ -41,6 +41,8 @@ class Sema {
   }
 
  private:
+  // Allow the implementation helper to access private fields during the refactor.
+  friend bool sema_check_impl(Sema* self, ast::Module& mod, std::vector<Diagnostic>& diags);
   std::unordered_map<const ast::FunctionDef*, FuncFlags> funcFlags_;
   std::unordered_map<const ast::Stmt*, bool> stmtMayRaise_;
 };
