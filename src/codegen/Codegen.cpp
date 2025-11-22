@@ -362,6 +362,15 @@ namespace pycc::codegen {
                 << "declare i1 @pycc_pathlib_rmdir(ptr)\n"
                 << "declare i1 @pycc_pathlib_unlink(ptr)\n"
                 << "declare i1 @pycc_pathlib_rename(ptr, ptr)\n\n"
+                // os.path module (wrappers)
+                << "declare ptr @pycc_os_path_join2(ptr, ptr)\n"
+                << "declare ptr @pycc_os_path_dirname(ptr)\n"
+                << "declare ptr @pycc_os_path_basename(ptr)\n"
+                << "declare ptr @pycc_os_path_splitext(ptr)\n"
+                << "declare ptr @pycc_os_path_abspath(ptr)\n"
+                << "declare i1 @pycc_os_path_exists(ptr)\n"
+                << "declare i1 @pycc_os_path_isfile(ptr)\n"
+                << "declare i1 @pycc_os_path_isdir(ptr)\n\n"
                 // JSON shims
                 << "declare ptr @pycc_json_dumps(ptr)\n"
                 << "declare ptr @pycc_json_dumps_ex(ptr, i32)\n"
@@ -480,17 +489,27 @@ namespace pycc::codegen {
                 << "declare ptr @pycc_tempfile_mkstemp()\n\n"
                 // statistics module
                 << "declare double @pycc_statistics_mean(ptr)\n"
-                << "declare double @pycc_statistics_median(ptr)\n\n"
+                << "declare double @pycc_statistics_median(ptr)\n"
+                << "declare double @pycc_statistics_pvariance(ptr)\n"
+                << "declare double @pycc_statistics_stdev(ptr)\n\n"
                 // textwrap module
                 << "declare ptr @pycc_textwrap_fill(ptr, i32)\n"
                 << "declare ptr @pycc_textwrap_shorten(ptr, i32)\n"
                 << "declare ptr @pycc_textwrap_wrap(ptr, i32)\n"
-                << "declare ptr @pycc_textwrap_dedent(ptr)\n\n"
+                << "declare ptr @pycc_textwrap_dedent(ptr)\n"
+                << "declare ptr @pycc_textwrap_indent(ptr, ptr)\n\n"
                 // hashlib module (subset)
                 << "declare ptr @pycc_hashlib_sha256(ptr)\n"
                 << "declare ptr @pycc_hashlib_md5(ptr)\n\n"
                 // pprint module
                 << "declare ptr @pycc_pprint_pformat(ptr)\n\n"
+                // reprlib module
+                << "declare ptr @pycc_reprlib_repr(ptr)\n\n"
+                // colorsys module
+                << "declare ptr @pycc_colorsys_rgb_to_hsv(double, double, double)\n"
+                << "declare ptr @pycc_colorsys_hsv_to_rgb(double, double, double)\n\n"
+                // types module
+                << "declare ptr @pycc_types_simple_namespace(ptr)\n\n"
                 // linecache module
                 << "declare ptr @pycc_linecache_getline(ptr, i32)\n\n"
                 // getpass module
@@ -502,9 +521,24 @@ namespace pycc::codegen {
                 // html module
                 << "declare ptr @pycc_html_escape(ptr, i32)\n"
                 << "declare ptr @pycc_html_unescape(ptr)\n\n"
+                // unicodedata module
+                << "declare ptr @pycc_unicodedata_normalize(ptr, ptr)\n\n"
                 // binascii module
                 << "declare ptr @pycc_binascii_hexlify(ptr)\n"
                 << "declare ptr @pycc_binascii_unhexlify(ptr)\n\n"
+                // struct module
+                << "declare ptr @pycc_struct_pack(ptr, ptr)\n"
+                << "declare ptr @pycc_struct_unpack(ptr, ptr)\n"
+                << "declare i32 @pycc_struct_calcsize(ptr)\n\n"
+                // argparse module
+                << "declare ptr @pycc_argparse_argument_parser()\n"
+                << "declare void @pycc_argparse_add_argument(ptr, ptr, ptr)\n"
+                << "declare ptr @pycc_argparse_parse_args(ptr, ptr)\n\n"
+                // array module
+                << "declare ptr @pycc_array_array(ptr, ptr)\n"
+                << "declare void @pycc_array_append(ptr, ptr)\n"
+                << "declare ptr @pycc_array_pop(ptr)\n"
+                << "declare ptr @pycc_array_tolist(ptr)\n\n"
                 // hmac module
                 << "declare ptr @pycc_hmac_digest(ptr, ptr, ptr)\n\n"
                 // warnings module
@@ -1730,6 +1764,66 @@ namespace pycc::codegen {
                                 emitNotImplemented(mod, fn, ValKind::F64);
                                 return;
                             }
+                            if (mod == "posixpath") {
+                                const std::string &fn = at->attr;
+                                if (fn == "join") {
+                                    if (call.args.size()!=2) throw std::runtime_error("posixpath.join() takes 2 args in this subset");
+                                    auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_os_path_join2(ptr "<<a.s<<", ptr "<<b.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "dirname" || fn == "basename" || fn == "abspath") {
+                                    if (call.args.size()!=1) throw std::runtime_error(std::string("posixpath.")+fn+"() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    const char* cal = (fn=="dirname"?"pycc_os_path_dirname": (fn=="basename"?"pycc_os_path_basename":"pycc_os_path_abspath"));
+                                    ir << "  "<<r.str()<<" = call ptr @"<<cal<<"(ptr "<<p.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "splitext") {
+                                    if (call.args.size()!=1) throw std::runtime_error("posixpath.splitext() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_os_path_splitext(ptr "<<p.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "exists" || fn == "isfile" || fn == "isdir") {
+                                    if (call.args.size()!=1) throw std::runtime_error(std::string("posixpath.")+fn+"() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    const char* cal = (fn=="exists"?"pycc_os_path_exists": (fn=="isfile"?"pycc_os_path_isfile":"pycc_os_path_isdir"));
+                                    ir << "  "<<r.str()<<" = call i1 @"<<cal<<"(ptr "<<p.s<<")\n";
+                                    out = Value{r.str(), ValKind::I1}; return;
+                                }
+                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                            }
+                            if (mod == "ntpath") {
+                                const std::string &fn = at->attr;
+                                if (fn == "join") {
+                                    if (call.args.size()!=2) throw std::runtime_error("ntpath.join() takes 2 args in this subset");
+                                    auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_os_path_join2(ptr "<<a.s<<", ptr "<<b.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "dirname" || fn == "basename" || fn == "abspath") {
+                                    if (call.args.size()!=1) throw std::runtime_error(std::string("ntpath.")+fn+"() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    const char* cal = (fn=="dirname"?"pycc_os_path_dirname": (fn=="basename"?"pycc_os_path_basename":"pycc_os_path_abspath"));
+                                    ir << "  "<<r.str()<<" = call ptr @"<<cal<<"(ptr "<<p.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "splitext") {
+                                    if (call.args.size()!=1) throw std::runtime_error("ntpath.splitext() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_os_path_splitext(ptr "<<p.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "exists" || fn == "isfile" || fn == "isdir") {
+                                    if (call.args.size()!=1) throw std::runtime_error(std::string("ntpath.")+fn+"() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    const char* cal = (fn=="exists"?"pycc_os_path_exists": (fn=="isfile"?"pycc_os_path_isfile":"pycc_os_path_isdir"));
+                                    ir << "  "<<r.str()<<" = call i1 @"<<cal<<"(ptr "<<p.s<<")\n";
+                                    out = Value{r.str(), ValKind::I1}; return;
+                                }
+                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                            }
                             // Subprocess stdlib lowering
                             if (mod == "subprocess") {
                                 auto toPtr = [&](const Value &v) -> std::string {
@@ -2328,10 +2422,10 @@ namespace pycc::codegen {
                             }
                             if (mod == "statistics") {
                                 const std::string &fn = at->attr;
-                                if (fn == "mean" || fn == "median") {
+                                if (fn == "mean" || fn == "median" || fn == "stdev" || fn == "pvariance") {
                                     if (call.args.size() != 1) throw std::runtime_error("statistics." + fn + "() takes 1 arg");
                                     auto a = needList(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="mean"?"pycc_statistics_mean":"pycc_statistics_median");
+                                    std::string callee = (fn=="mean"?"pycc_statistics_mean": fn=="median"?"pycc_statistics_median": fn=="stdev"?"pycc_statistics_stdev":"pycc_statistics_pvariance");
                                     ir << "  " << r.str() << " = call double @" << callee << "(ptr " << a.s << ")\n";
                                     out = Value{r.str(), ValKind::F64}; return;
                                 }
@@ -2350,6 +2444,13 @@ namespace pycc::codegen {
                                     std::ostringstream r; r<<"%t"<<temp++;
                                     std::string callee = (fn=="fill"?"pycc_textwrap_fill": fn=="shorten"?"pycc_textwrap_shorten":"pycc_textwrap_wrap");
                                     ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << s.s << ", i32 " << wi32 << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "indent") {
+                                    if (call.args.size() != 2) throw std::runtime_error("textwrap.indent() takes 2 args");
+                                    auto s = needPtr(call.args[0].get()); auto p = needPtr(call.args[1].get());
+                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_textwrap_indent(ptr "<<s.s<<", ptr "<<p.s<<")\n";
                                     out = Value{r.str(), ValKind::Ptr}; return;
                                 }
                                 if (fn == "dedent") {
@@ -2378,6 +2479,46 @@ namespace pycc::codegen {
                                     if (call.args.size() != 1) throw std::runtime_error("pprint.pformat() takes 1 arg");
                                     auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_pprint_pformat(ptr " << a.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                            }
+                            if (mod == "reprlib") {
+                                const std::string &fn = at->attr;
+                                if (fn == "repr") {
+                                    if (call.args.size()!=1) throw std::runtime_error("reprlib.repr() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_reprlib_repr(ptr "<<a.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                            }
+                            if (mod == "colorsys") {
+                                const std::string &fn = at->attr;
+                                auto toDouble = [&](const Value &v) -> std::string {
+                                    if (v.k == ValKind::F64) return v.s;
+                                    if (v.k == ValKind::I32) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = sitofp i32 "<<v.s<<" to double\n"; return z.str(); }
+                                    if (v.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = uitofp i1 "<<v.s<<" to double\n"; return z.str(); }
+                                    throw std::runtime_error("colorsys: numeric args required"); };
+                                if (fn == "rgb_to_hsv" || fn == "hsv_to_rgb") {
+                                    if (call.args.size()!=3) throw std::runtime_error("colorsys."+fn+"() takes 3 args");
+                                    auto a0 = run(*call.args[0]); auto a1 = run(*call.args[1]); auto a2 = run(*call.args[2]);
+                                    std::string d0 = toDouble(a0), d1 = toDouble(a1), d2 = toDouble(a2);
+                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    std::string cal = (fn=="rgb_to_hsv")?"@pycc_colorsys_rgb_to_hsv":"@pycc_colorsys_hsv_to_rgb";
+                                    ir << "  "<<r.str()<<" = call ptr "<<cal<<"(double "<<d0<<", double "<<d1<<", double "<<d2<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                            }
+                            if (mod == "types") {
+                                const std::string &fn = at->attr;
+                                if (fn == "SimpleNamespace") {
+                                    if (call.args.size()>1) throw std::runtime_error("types.SimpleNamespace() takes 0 or 1 args (list of pairs)");
+                                    std::string arg = "null";
+                                    if (call.args.size()==1) { auto a = needPtr(call.args[0].get()); arg = a.s; }
+                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_types_simple_namespace(ptr "<<arg<<")\n";
                                     out = Value{r.str(), ValKind::Ptr}; return;
                                 }
                                 emitNotImplemented(mod, fn, ValKind::Ptr); return;
@@ -2456,6 +2597,18 @@ namespace pycc::codegen {
                                 }
                                 emitNotImplemented(mod, fn, ValKind::Ptr); return;
                             }
+                            if (mod == "unicodedata") {
+                                const std::string &fn = at->attr;
+                                if (fn == "normalize") {
+                                    if (call.args.size()!=2) throw std::runtime_error("unicodedata.normalize() takes 2 args");
+                                    auto form = needPtr(call.args[0].get());
+                                    auto s = needPtr(call.args[1].get());
+                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_unicodedata_normalize(ptr "<<form.s<<", ptr "<<s.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                            }
                             if (mod == "binascii") {
                                 const std::string &fn = at->attr;
                                 if (fn == "hexlify" || fn == "unhexlify") {
@@ -2463,6 +2616,52 @@ namespace pycc::codegen {
                                     auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
                                     std::string callee = (fn=="hexlify"?"pycc_binascii_hexlify":"pycc_binascii_unhexlify");
                                     ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << a.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                            }
+                            if (mod == "struct") {
+                                const std::string &fn = at->attr;
+                                if (fn == "pack") {
+                                    if (call.args.size()!=2) throw std::runtime_error("struct.pack() takes 2 args in this subset");
+                                    auto f = needPtr(call.args[0].get()); auto v = needPtr(call.args[1].get());
+                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_struct_pack(ptr "<<f.s<<", ptr "<<v.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "unpack") {
+                                    if (call.args.size()!=2) throw std::runtime_error("struct.unpack() takes 2 args in this subset");
+                                    auto f = needPtr(call.args[0].get()); auto d = needPtr(call.args[1].get());
+                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_struct_unpack(ptr "<<f.s<<", ptr "<<d.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "calcsize") {
+                                    if (call.args.size()!=1) throw std::runtime_error("struct.calcsize() takes 1 arg");
+                                    auto f = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call i32 @pycc_struct_calcsize(ptr "<<f.s<<")\n";
+                                    out = Value{r.str(), ValKind::I32}; return;
+                                }
+                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                            }
+                            if (mod == "argparse") {
+                                const std::string &fn = at->attr;
+                                if (fn == "ArgumentParser") {
+                                    if (!call.args.empty()) throw std::runtime_error("argparse.ArgumentParser() takes 0 args in this subset");
+                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_argparse_argument_parser()\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "add_argument") {
+                                    if (call.args.size()!=3) throw std::runtime_error("argparse.add_argument(parser, name, action)");
+                                    auto p = needPtr(call.args[0].get()); auto n = needPtr(call.args[1].get()); auto a = needPtr(call.args[2].get());
+                                    ir << "  call void @pycc_argparse_add_argument(ptr "<<p.s<<", ptr "<<n.s<<", ptr "<<a.s<<")\n";
+                                    out = Value{"null", ValKind::Ptr}; return;
+                                }
+                                if (fn == "parse_args") {
+                                    if (call.args.size()!=2) throw std::runtime_error("argparse.parse_args(parser, list)");
+                                    auto p = needPtr(call.args[0].get()); auto lst = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_argparse_parse_args(ptr "<<p.s<<", ptr "<<lst.s<<")\n";
                                     out = Value{r.str(), ValKind::Ptr}; return;
                                 }
                                 emitNotImplemented(mod, fn, ValKind::Ptr); return;
@@ -2628,6 +2827,43 @@ namespace pycc::codegen {
                                 }
                                 emitNotImplemented(mod, fn, ValKind::Ptr);
                                 return;
+                            }
+                            if (mod == "array") {
+                                const std::string &fn = at->attr;
+                                if (fn == "array") {
+                                    if (call.args.empty() || call.args.size() > 2) throw std::runtime_error("array.array() takes 1 or 2 args");
+                                    auto tc = needPtr(call.args[0].get());
+                                    std::string init = "null";
+                                    if (call.args.size() == 2) { auto li = needPtr(call.args[1].get()); init = li.s; }
+                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_array_array(ptr "<<tc.s<<", ptr "<<init<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "append") {
+                                    if (call.args.size() != 2) throw std::runtime_error("array.append(arr, value) takes 2 args");
+                                    auto arr = needPtr(call.args[0].get()); auto v = run(*call.args[1]);
+                                    std::string vptr;
+                                    if (v.k == ValKind::Ptr) vptr = v.s;
+                                    else if (v.k == ValKind::I32) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = call ptr @pycc_box_int(i64 "<<v.s<<")\n"; vptr = z.str(); }
+                                    else if (v.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = call ptr @pycc_box_bool(i1 "<<v.s<<")\n"; vptr = z.str(); }
+                                    else if (v.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = call ptr @pycc_box_float(double "<<v.s<<")\n"; vptr = z.str(); }
+                                    else throw std::runtime_error("array.append: unsupported value");
+                                    ir << "  call void @pycc_array_append(ptr "<<arr.s<<", ptr "<<vptr<<")\n";
+                                    out = Value{"null", ValKind::Ptr}; return;
+                                }
+                                if (fn == "pop") {
+                                    if (call.args.size() != 1) throw std::runtime_error("array.pop(arr) takes 1 arg");
+                                    auto arr = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_array_pop(ptr "<<arr.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                if (fn == "tolist") {
+                                    if (call.args.size() != 1) throw std::runtime_error("array.tolist(arr) takes 1 arg");
+                                    auto arr = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    ir << "  "<<r.str()<<" = call ptr @pycc_array_tolist(ptr "<<arr.s<<")\n";
+                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                }
+                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
                             }
                             if (mod == "itertools") {
                                 auto needList = [&](const ast::Expr *e) {
@@ -3388,7 +3624,44 @@ namespace pycc::codegen {
                                 emitNotImplemented(mod, fn, ValKind::Ptr);
                                 return;
                             }
+                        } else if (at->value && at->value->kind == ast::NodeKind::Attribute) {
+                            // Handle nested stdlib module: os.path.*
+                            const auto *mid = static_cast<const ast::Attribute *>(at->value.get());
+                            if (mid->value && mid->value->kind == ast::NodeKind::Name) {
+                                const auto *root = static_cast<const ast::Name *>(mid->value.get());
+                                const std::string fn = at->attr;
+                                if (root->id == "os" && mid->attr == "path") {
+                                    if (fn == "join") {
+                                        if (call.args.size()!=2) throw std::runtime_error("os.path.join() takes 2 args in this subset");
+                                        auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                        ir << "  "<<r.str()<<" = call ptr @pycc_os_path_join2(ptr "<<a.s<<", ptr "<<b.s<<")\n";
+                                        out = Value{r.str(), ValKind::Ptr}; return;
+                                    }
+                                    if (fn == "dirname" || fn == "basename" || fn == "abspath") {
+                                        if (call.args.size()!=1) throw std::runtime_error(std::string("os.path.")+fn+"() takes 1 arg");
+                                        auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                        const char* cal = (fn=="dirname"?"pycc_os_path_dirname": (fn=="basename"?"pycc_os_path_basename":"pycc_os_path_abspath"));
+                                        ir << "  "<<r.str()<<" = call ptr @"<<cal<<"(ptr "<<p.s<<")\n";
+                                        out = Value{r.str(), ValKind::Ptr}; return;
+                                    }
+                                    if (fn == "splitext") {
+                                        if (call.args.size()!=1) throw std::runtime_error("os.path.splitext() takes 1 arg");
+                                        auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                        ir << "  "<<r.str()<<" = call ptr @pycc_os_path_splitext(ptr "<<p.s<<")\n";
+                                        out = Value{r.str(), ValKind::Ptr}; return;
+                                    }
+                                    if (fn == "exists" || fn == "isfile" || fn == "isdir") {
+                                        if (call.args.size()!=1) throw std::runtime_error(std::string("os.path.")+fn+"() takes 1 arg");
+                                        auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                        const char* cal = (fn=="exists"?"pycc_os_path_exists": (fn=="isfile"?"pycc_os_path_isfile":"pycc_os_path_isdir"));
+                                        ir << "  "<<r.str()<<" = call i1 @"<<cal<<"(ptr "<<p.s<<")\n";
+                                        out = Value{r.str(), ValKind::I1}; return;
+                                    }
+                                    emitNotImplemented("os.path", fn, ValKind::Ptr); return;
+                                }
+                            }
                         }
+                    }
                     }
                     // Polymorphic list.append(x) and other attribute calls
                     if (call.callee->kind == ast::NodeKind::Attribute) {

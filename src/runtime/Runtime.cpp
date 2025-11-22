@@ -38,6 +38,7 @@
 #include <unistd.h>
 #include <filesystem>
 #include <system_error>
+#include <cmath>
 
 namespace pycc::rt {
 
@@ -1885,6 +1886,108 @@ extern "C" bool  pycc_pathlib_rmdir(void* p) { return ::pycc::rt::pathlib_rmdir(
 extern "C" bool  pycc_pathlib_unlink(void* p) { return ::pycc::rt::pathlib_unlink(p); }
 extern "C" bool  pycc_pathlib_rename(void* a, void* b) { return ::pycc::rt::pathlib_rename(a,b); }
 
+// ===== os.path module (subset wrappers) =====
+namespace pycc::rt {
+
+void* os_path_join2(void* a, void* b) { return pathlib_join2(a,b); }
+void* os_path_dirname(void* p) { return pathlib_parent(p); }
+void* os_path_basename(void* p) { return pathlib_basename(p); }
+void* os_path_abspath(void* p) { return pathlib_absolute(p); }
+bool  os_path_exists(void* p) { return pathlib_exists(p); }
+bool  os_path_isfile(void* p) { return pathlib_is_file(p); }
+bool  os_path_isdir(void* p) { return pathlib_is_dir(p); }
+void* os_path_splitext(void* p) {
+  if (!p) return list_new(2);
+  // ext via pathlib_suffix; root by removing ext from end if present
+  void* ext = pathlib_suffix(p);
+  std::string path(string_data(p), string_len(p));
+  std::string e(string_data(ext), string_len(ext));
+  std::string root = path;
+  if (!e.empty() && path.size() >= e.size()) {
+    if (path.compare(path.size()-e.size(), e.size(), e) == 0) {
+      root = path.substr(0, path.size() - e.size());
+    }
+  }
+  void* out = list_new(2);
+  list_push_slot(&out, string_new(root.data(), root.size()));
+  list_push_slot(&out, ext);
+  return out;
+}
+
+} // namespace pycc::rt
+
+// C ABI for os.path
+extern "C" void* pycc_os_path_join2(void* a, void* b) { return ::pycc::rt::os_path_join2(a,b); }
+extern "C" void* pycc_os_path_dirname(void* p) { return ::pycc::rt::os_path_dirname(p); }
+extern "C" void* pycc_os_path_basename(void* p) { return ::pycc::rt::os_path_basename(p); }
+extern "C" void* pycc_os_path_splitext(void* p) { return ::pycc::rt::os_path_splitext(p); }
+extern "C" void* pycc_os_path_abspath(void* p) { return ::pycc::rt::os_path_abspath(p); }
+extern "C" bool  pycc_os_path_exists(void* p) { return ::pycc::rt::os_path_exists(p); }
+extern "C" bool  pycc_os_path_isfile(void* p) { return ::pycc::rt::os_path_isfile(p); }
+extern "C" bool  pycc_os_path_isdir(void* p) { return ::pycc::rt::os_path_isdir(p); }
+
+// ===== colorsys module (subset) =====
+namespace pycc::rt {
+
+static inline double clamp01(double x) { if (x < 0.0) return 0.0; if (x > 1.0) return 1.0; return x; }
+
+void* colorsys_rgb_to_hsv(double r, double g, double b) {
+  r = clamp01(r); g = clamp01(g); b = clamp01(b);
+  double maxc = std::max(r, std::max(g, b));
+  double minc = std::min(r, std::min(g, b));
+  double v = maxc;
+  double s, h;
+  if (minc == maxc) {
+    s = 0.0; h = 0.0;
+  } else {
+    double diff = maxc - minc;
+    s = (maxc <= 0.0) ? 0.0 : (diff / maxc);
+    if (r == maxc) h = (g - b) / diff;
+    else if (g == maxc) h = 2.0 + (b - r) / diff;
+    else h = 4.0 + (r - g) / diff;
+    h /= 6.0;
+    if (h < 0.0) h += 1.0;
+  }
+  void* out = list_new(3);
+  list_push_slot(&out, box_float(h));
+  list_push_slot(&out, box_float(s));
+  list_push_slot(&out, box_float(v));
+  return out;
+}
+
+void* colorsys_hsv_to_rgb(double h, double s, double v) {
+  h = clamp01(h); s = clamp01(s); v = clamp01(v);
+  double r, g, b;
+  if (s == 0.0) { r = g = b = v; }
+  else {
+    double hh = h * 6.0;
+    int i = static_cast<int>(std::floor(hh)) % 6;
+    double f = hh - std::floor(hh);
+    double p = v * (1.0 - s);
+    double q = v * (1.0 - s * f);
+    double t = v * (1.0 - s * (1.0 - f));
+    switch (i) {
+      case 0: r = v; g = t; b = p; break;
+      case 1: r = q; g = v; b = p; break;
+      case 2: r = p; g = v; b = t; break;
+      case 3: r = p; g = q; b = v; break;
+      case 4: r = t; g = p; b = v; break;
+      default: r = v; g = p; b = q; break;
+    }
+  }
+  void* out = list_new(3);
+  list_push_slot(&out, box_float(r));
+  list_push_slot(&out, box_float(g));
+  list_push_slot(&out, box_float(b));
+  return out;
+}
+
+} // namespace pycc::rt
+
+// C ABI for colorsys
+extern "C" void* pycc_colorsys_rgb_to_hsv(double r, double g, double b) { return ::pycc::rt::colorsys_rgb_to_hsv(r,g,b); }
+extern "C" void* pycc_colorsys_hsv_to_rgb(double h, double s, double v) { return ::pycc::rt::colorsys_hsv_to_rgb(h,s,v); }
+
 // C ABI wrappers for _abc
 extern "C" long long pycc_abc_get_cache_token() { return ::pycc::rt::abc_get_cache_token(); }
 extern "C" int  pycc_abc_register(void* a, void* b) { return ::pycc::rt::abc_register(a,b) ? 1 : 0; }
@@ -3587,11 +3690,40 @@ double statistics_median(void* lst) {
   return (a + b) / 2.0;
 }
 
+double statistics_pvariance(void* lst) {
+  if (!lst) return 0.0;
+  std::size_t n = list_len(lst); if (n == 0) return 0.0;
+  long double sum = 0.0L; std::size_t cnt = 0;
+  for (std::size_t i=0;i<n;++i) { double v; if (to_num_for_stats(list_get(lst,i), v)) { sum += v; ++cnt; } }
+  if (cnt == 0) return 0.0;
+  long double mean = sum / static_cast<long double>(cnt);
+  long double ss = 0.0L;
+  for (std::size_t i=0;i<n;++i) { double v; if (to_num_for_stats(list_get(lst,i), v)) { long double d = static_cast<long double>(v) - mean; ss += d*d; } }
+  long double var = ss / static_cast<long double>(cnt);
+  return static_cast<double>(var);
+}
+
+double statistics_stdev(void* lst) {
+  if (!lst) return 0.0;
+  std::size_t n = list_len(lst); if (n < 2) return 0.0;
+  long double sum = 0.0L; std::size_t cnt = 0;
+  for (std::size_t i=0;i<n;++i) { double v; if (to_num_for_stats(list_get(lst,i), v)) { sum += v; ++cnt; } }
+  if (cnt < 2) return 0.0;
+  long double mean = sum / static_cast<long double>(cnt);
+  long double ss = 0.0L;
+  for (std::size_t i=0;i<n;++i) { double v; if (to_num_for_stats(list_get(lst,i), v)) { long double d = static_cast<long double>(v) - mean; ss += d*d; } }
+  long double var = ss / static_cast<long double>(cnt - 1);
+  double sd = std::sqrt(static_cast<double>(var));
+  return sd;
+}
+
 } // namespace pycc::rt
 
 // C ABI for statistics
 extern "C" double pycc_statistics_mean(void* a) { return ::pycc::rt::statistics_mean(a); }
 extern "C" double pycc_statistics_median(void* a) { return ::pycc::rt::statistics_median(a); }
+extern "C" double pycc_statistics_pvariance(void* a) { return ::pycc::rt::statistics_pvariance(a); }
+extern "C" double pycc_statistics_stdev(void* a) { return ::pycc::rt::statistics_stdev(a); }
 
 // ===== textwrap module =====
 namespace pycc::rt {
@@ -3730,6 +3862,27 @@ extern "C" void* pycc_textwrap_fill(void* s, int32_t w) { return ::pycc::rt::tex
 extern "C" void* pycc_textwrap_shorten(void* s, int32_t w) { return ::pycc::rt::textwrap_shorten(s,w); }
 extern "C" void* pycc_textwrap_wrap(void* s, int32_t w) { return ::pycc::rt::textwrap_wrap(s,w); }
 extern "C" void* pycc_textwrap_dedent(void* s) { return ::pycc::rt::textwrap_dedent(s); }
+namespace pycc::rt {
+
+void* textwrap_indent(void* str, void* prefix) {
+  if (!str || !prefix) return str;
+  std::string s(string_data(str), string_len(str));
+  std::string p(string_data(prefix), string_len(prefix));
+  if (s.empty()) return string_from_cstr("");
+  std::string out; out.reserve(s.size() + p.size() * 4);
+  std::size_t i=0, n=s.size();
+  while (i<n) {
+    out += p;
+    std::size_t j=i; while (j<n && s[j] != '\n') ++j;
+    out.append(s, i, j-i);
+    if (j<n && s[j]=='\n') { out.push_back('\n'); i = j+1; } else { i = j; }
+  }
+  return string_new(out.data(), out.size());
+}
+
+} // namespace pycc::rt
+
+extern "C" void* pycc_textwrap_indent(void* s, void* p) { return ::pycc::rt::textwrap_indent(s,p); }
 
 // ===== hashlib module (subset) =====
 namespace pycc::rt {
@@ -3848,6 +4001,58 @@ void* pprint_pformat(void* obj) {
 
 // C ABI for pprint
 extern "C" void* pycc_pprint_pformat(void* o) { return ::pycc::rt::pprint_pformat(o); }
+
+// ===== reprlib module (subset) =====
+namespace pycc::rt {
+
+void* reprlib_repr(void* obj) {
+  // Use pprint formatting then truncate to a modest limit (60 chars)
+  std::string s = pformat_impl(obj, 0);
+  constexpr std::size_t kLimit = 60;
+  if (s.size() > kLimit) {
+    std::string out = s.substr(0, kLimit - 3);
+    out += "...";
+    return string_new(out.data(), out.size());
+  }
+  return string_new(s.data(), s.size());
+}
+
+} // namespace pycc::rt
+
+// C ABI for reprlib
+extern "C" void* pycc_reprlib_repr(void* o) { return ::pycc::rt::reprlib_repr(o); }
+
+// ===== types module (subset) =====
+namespace pycc::rt {
+
+void* types_simple_namespace(void* list_of_pairs_opt) {
+  void* obj = object_new(0);
+  if (!list_of_pairs_opt) return obj;
+  std::size_t n = list_len(list_of_pairs_opt);
+  for (std::size_t i=0;i<n;++i) {
+    void* pair = list_get(list_of_pairs_opt, i);
+    if (!pair || list_len(pair) < 2) continue;
+    void* k = list_get(pair, 0);
+    void* v = list_get(pair, 1);
+    if (!k) continue;
+    // Ensure key is string
+    void* keyStr = nullptr;
+    auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(k) - sizeof(ObjectHeader));
+    if (static_cast<TypeTag>(h->tag) == TypeTag::String) keyStr = k;
+    else if (static_cast<TypeTag>(h->tag) == TypeTag::Int) {
+      long long iv = box_int_value(k); std::string s = std::to_string(iv); keyStr = string_new(s.data(), s.size());
+    } else if (static_cast<TypeTag>(h->tag) == TypeTag::Bool) {
+      const char* s = box_bool_value(k) ? "True" : "False"; keyStr = string_from_cstr(s);
+    } else { continue; }
+    object_set_attr(obj, keyStr, v);
+  }
+  return obj;
+}
+
+} // namespace pycc::rt
+
+// C ABI for types
+extern "C" void* pycc_types_simple_namespace(void* pairs) { return ::pycc::rt::types_simple_namespace(pairs); }
 
 // ===== linecache module =====
 namespace pycc::rt {
@@ -4499,3 +4704,375 @@ extern "C" void* pycc_collections_chainmap(void* dicts) { return ::pycc::rt::col
 extern "C" void* pycc_collections_defaultdict_new(void* defv) { return ::pycc::rt::collections_defaultdict_new(defv); }
 extern "C" void* pycc_collections_defaultdict_get(void* dd, void* key) { return ::pycc::rt::collections_defaultdict_get(dd,key); }
 extern "C" void  pycc_collections_defaultdict_set(void* dd, void* key, void* val) { ::pycc::rt::collections_defaultdict_set(dd,key,val); }
+
+// ===== array module (minimal) =====
+namespace pycc::rt {
+
+static inline char array_typecode(void* arr) {
+  if (!arr) return 'i';
+  void* tc = object_get(arr, 0);
+  if (!tc) return 'i';
+  const char* data = string_data(tc);
+  std::size_t len = string_len(tc);
+  return len > 0 ? data[0] : 'i';
+}
+static inline void* array_storage(void* arr) { return object_get(arr, 1); }
+static inline void  array_set_storage(void* arr, void* lst) { object_set(arr, 1, lst); }
+
+static inline long long to_int_like_any(void* v) {
+  if (!v) return 0;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
+  switch (static_cast<TypeTag>(h->tag)) {
+    case TypeTag::Int: return box_int_value(v);
+    case TypeTag::Float: return static_cast<long long>(box_float_value(v));
+    case TypeTag::Bool: return box_bool_value(v) ? 1 : 0;
+    default: return 0;
+  }
+}
+static inline double to_float_like_any(void* v) {
+  if (!v) return 0.0;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
+  switch (static_cast<TypeTag>(h->tag)) {
+    case TypeTag::Int: return static_cast<double>(box_int_value(v));
+    case TypeTag::Float: return box_float_value(v);
+    case TypeTag::Bool: return box_bool_value(v) ? 1.0 : 0.0;
+    default: return 0.0;
+  }
+}
+
+void* array_array(void* typecode_str, void* initializer_list_or_null) {
+  void* arr = object_new(2);
+  if (!typecode_str) typecode_str = string_from_cstr("i");
+  object_set(arr, 0, typecode_str);
+  void* storage = list_new(0);
+  if (initializer_list_or_null) {
+    std::size_t n = list_len(initializer_list_or_null);
+    for (std::size_t i=0;i<n;++i) {
+      void* el = list_get(initializer_list_or_null, i);
+      char tc = array_typecode(arr);
+      if (tc == 'f') {
+        double dv = to_float_like_any(el);
+        list_push_slot(&storage, box_float(dv));
+      } else {
+        long long iv = to_int_like_any(el);
+        if (tc == 'b') {
+          if (iv < -128) iv = -128; if (iv > 127) iv = 127;
+        }
+        list_push_slot(&storage, box_int(iv));
+      }
+    }
+  }
+  array_set_storage(arr, storage);
+  return arr;
+}
+
+void array_append(void* arr, void* value) {
+  if (!arr) return;
+  void* storage = array_storage(arr);
+  char tc = array_typecode(arr);
+  if (tc == 'f') {
+    double dv = to_float_like_any(value);
+    list_push_slot(&storage, box_float(dv));
+  } else {
+    long long iv = to_int_like_any(value);
+    if (tc == 'b') { if (iv < -128) iv = -128; if (iv > 127) iv = 127; }
+    list_push_slot(&storage, box_int(iv));
+  }
+  array_set_storage(arr, storage);
+}
+
+void* array_pop(void* arr) {
+  if (!arr) return nullptr;
+  void* storage = array_storage(arr);
+  if (!storage) return nullptr;
+  auto* meta = reinterpret_cast<std::size_t*>(storage);
+  std::size_t n = meta[0];
+  if (n == 0) return nullptr;
+  auto** items = reinterpret_cast<void**>(meta + 2);
+  void* last = items[n - 1];
+  gc_pre_barrier(&items[n - 1]); items[n - 1] = nullptr; gc_write_barrier(&items[n - 1], nullptr);
+  meta[0] = n - 1;
+  return last;
+}
+
+void* array_tolist(void* arr) {
+  if (!arr) return list_new(0);
+  void* storage = array_storage(arr);
+  if (!storage) return list_new(0);
+  std::size_t n = list_len(storage);
+  void* out = list_new(n);
+  for (std::size_t i=0;i<n;++i) { list_push_slot(&out, list_get(storage, i)); }
+  return out;
+}
+
+} // namespace pycc::rt
+
+// C ABI for array
+extern "C" void* pycc_array_array(void* tc, void* init) { return ::pycc::rt::array_array(tc, init); }
+extern "C" void  pycc_array_append(void* arr, void* v) { ::pycc::rt::array_append(arr, v); }
+extern "C" void* pycc_array_pop(void* arr) { return ::pycc::rt::array_pop(arr); }
+extern "C" void* pycc_array_tolist(void* arr) { return ::pycc::rt::array_tolist(arr); }
+
+// ===== unicodedata module (subset) =====
+namespace pycc::rt {
+
+void* unicodedata_normalize(void* form_str, void* s_str) {
+  if (!form_str || !s_str) return s_str;
+  std::string f(string_data(form_str), string_len(form_str));
+  NormalizationForm form = NormalizationForm::NFC;
+  if (f == "NFC") form = NormalizationForm::NFC;
+  else if (f == "NFD") form = NormalizationForm::NFD;
+  else if (f == "NFKC") form = NormalizationForm::NFKC;
+  else if (f == "NFKD") form = NormalizationForm::NFKD;
+  else { rt_raise("ValueError", "unicodedata.normalize: unknown form"); return nullptr; }
+  return string_normalize(s_str, form);
+}
+
+} // namespace pycc::rt
+
+// C ABI for unicodedata
+extern "C" void* pycc_unicodedata_normalize(void* form, void* s) { return ::pycc::rt::unicodedata_normalize(form, s); }
+
+// ===== struct module (subset) =====
+namespace pycc::rt {
+
+struct FmtItem { char code; int count; };
+
+static bool parse_struct_fmt(const std::string& fmt, std::vector<FmtItem>& out, bool& little) {
+  little = true; // default little-endian in this subset
+  std::size_t i = 0, n = fmt.size();
+  if (i<n && (fmt[i]=='<' || fmt[i]=='>')) { little = (fmt[i] == '<'); ++i; }
+  while (i < n) {
+    int count = 0;
+    while (i<n && std::isdigit(static_cast<unsigned char>(fmt[i]))) { count = count*10 + (fmt[i]-'0'); ++i; }
+    if (count == 0) count = 1;
+    if (i>=n) return false;
+    char c = fmt[i++];
+    if (!(c=='i' || c=='I' || c=='b' || c=='B' || c=='f')) return false;
+    out.push_back(FmtItem{c, count});
+  }
+  return true;
+}
+
+static inline void append_u32(std::vector<unsigned char>& buf, uint32_t v, bool little) {
+  if (little) { buf.push_back(v & 0xFFU); buf.push_back((v>>8) & 0xFFU); buf.push_back((v>>16) & 0xFFU); buf.push_back((v>>24) & 0xFFU); }
+  else { buf.push_back((v>>24) & 0xFFU); buf.push_back((v>>16) & 0xFFU); buf.push_back((v>>8) & 0xFFU); buf.push_back(v & 0xFFU); }
+}
+static inline uint32_t read_u32(const unsigned char* p, bool little) {
+  if (little) return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
+  return ((uint32_t)p[0]<<24) | ((uint32_t)p[1]<<16) | ((uint32_t)p[2]<<8) | (uint32_t)p[3];
+}
+
+void* struct_pack(void* fmt_str, void* values_list) {
+  if (!fmt_str) return bytes_new(nullptr, 0);
+  std::string fmt(string_data(fmt_str), string_len(fmt_str));
+  std::vector<FmtItem> items; bool little;
+  if (!parse_struct_fmt(fmt, items, little)) { rt_raise("ValueError", "struct.pack: invalid format"); return nullptr; }
+  std::vector<unsigned char> out; out.reserve(16);
+  std::size_t vi = 0; std::size_t vcount = values_list ? list_len(values_list) : 0;
+  auto needValue = [&](const char* what){ if (vi >= vcount) { rt_raise("ValueError", what); return (void*)nullptr; } return list_get(values_list, vi++); };
+  for (const auto& it : items) {
+    for (int k=0;k<it.count;++k) {
+      if (it.code == 'b' || it.code == 'B') {
+        void* v = needValue("struct.pack: insufficient values"); if (rt_has_exception()) return nullptr;
+        long long iv = 0; // to_int_like
+        if (v) {
+          auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
+          if (static_cast<TypeTag>(h->tag) == TypeTag::Int) iv = box_int_value(v);
+          else if (static_cast<TypeTag>(h->tag) == TypeTag::Float) iv = static_cast<long long>(box_float_value(v));
+          else if (static_cast<TypeTag>(h->tag) == TypeTag::Bool) iv = box_bool_value(v) ? 1 : 0;
+        }
+        if (it.code == 'b') { if (iv < -128) iv = -128; if (iv > 127) iv = 127; out.push_back(static_cast<unsigned char>(iv & 0xFF)); }
+        else { if (iv < 0) iv = 0; if (iv > 255) iv = 255; out.push_back(static_cast<unsigned char>(iv)); }
+      } else if (it.code == 'i' || it.code == 'I') {
+        void* v = needValue("struct.pack: insufficient values"); if (rt_has_exception()) return nullptr;
+        long long iv = 0;
+        if (v) {
+          auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
+          if (static_cast<TypeTag>(h->tag) == TypeTag::Int) iv = box_int_value(v);
+          else if (static_cast<TypeTag>(h->tag) == TypeTag::Float) iv = static_cast<long long>(box_float_value(v));
+          else if (static_cast<TypeTag>(h->tag) == TypeTag::Bool) iv = box_bool_value(v) ? 1 : 0;
+        }
+        uint32_t u = static_cast<uint32_t>(iv);
+        append_u32(out, u, little);
+      } else if (it.code == 'f') {
+        void* v = needValue("struct.pack: insufficient values"); if (rt_has_exception()) return nullptr;
+        double dv = 0.0;
+        if (v) {
+          auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
+          if (static_cast<TypeTag>(h->tag) == TypeTag::Float) dv = box_float_value(v);
+          else if (static_cast<TypeTag>(h->tag) == TypeTag::Int) dv = static_cast<double>(box_int_value(v));
+          else if (static_cast<TypeTag>(h->tag) == TypeTag::Bool) dv = box_bool_value(v) ? 1.0 : 0.0;
+        }
+        float fv = static_cast<float>(dv);
+        uint32_t u; static_assert(sizeof(float)==4); std::memcpy(&u, &fv, sizeof(float));
+        append_u32(out, u, little);
+      }
+    }
+  }
+  return bytes_new(out.data(), out.size());
+}
+
+void* struct_unpack(void* fmt_str, void* data_bytes) {
+  if (!fmt_str || !data_bytes) return list_new(0);
+  std::string fmt(string_data(fmt_str), string_len(fmt_str));
+  std::vector<FmtItem> items; bool little;
+  if (!parse_struct_fmt(fmt, items, little)) { rt_raise("ValueError", "struct.unpack: invalid format"); return nullptr; }
+  const unsigned char* p = bytes_data(data_bytes);
+  std::size_t nb = bytes_len(data_bytes);
+  // Compute required size
+  std::size_t need = 0; for (const auto& it: items){ int w=(it.code=='f'||it.code=='i'||it.code=='I')?4:1; need += static_cast<std::size_t>(it.count)*w; }
+  if (nb != need) { rt_raise("ValueError", "struct.unpack: wrong size"); return nullptr; }
+  void* out = list_new(0);
+  std::size_t idx = 0;
+  for (const auto& it : items) {
+    for (int k=0;k<it.count;++k) {
+      if (it.code == 'b') {
+        int8_t v = static_cast<int8_t>(p[idx++]);
+        list_push_slot(&out, box_int(static_cast<long long>(v)));
+      } else if (it.code == 'B') {
+        uint8_t v = p[idx++];
+        list_push_slot(&out, box_int(static_cast<long long>(v)));
+      } else if (it.code == 'i' || it.code == 'I') {
+        uint32_t u = read_u32(p + idx, little); idx += 4;
+        if (it.code == 'i') {
+          int32_t s; std::memcpy(&s, &u, sizeof(uint32_t));
+          list_push_slot(&out, box_int(static_cast<long long>(s)));
+        } else {
+          list_push_slot(&out, box_int(static_cast<long long>(u)));
+        }
+      } else if (it.code == 'f') {
+        uint32_t u = read_u32(p + idx, little); idx += 4; float fv; std::memcpy(&fv, &u, sizeof(uint32_t));
+        list_push_slot(&out, box_float(static_cast<double>(fv)));
+      }
+    }
+  }
+  return out;
+}
+
+int32_t struct_calcsize(void* fmt_str) {
+  if (!fmt_str) return 0;
+  std::string fmt(string_data(fmt_str), string_len(fmt_str));
+  std::vector<FmtItem> items; bool little;
+  if (!parse_struct_fmt(fmt, items, little)) return 0;
+  std::size_t need = 0; for (const auto& it: items){ int w=(it.code=='f'||it.code=='i'||it.code=='I')?4:1; need += static_cast<std::size_t>(it.count)*w; }
+  return static_cast<int32_t>(need);
+}
+
+} // namespace pycc::rt
+
+// C ABI for struct
+extern "C" void* pycc_struct_pack(void* fmt, void* vals) { return ::pycc::rt::struct_pack(fmt, vals); }
+extern "C" void* pycc_struct_unpack(void* fmt, void* data) { return ::pycc::rt::struct_unpack(fmt, data); }
+extern "C" int  pycc_struct_calcsize(void* fmt) { return ::pycc::rt::struct_calcsize(fmt); }
+
+// ===== argparse module (subset) =====
+namespace pycc::rt {
+
+// Parser object layout: [0] = dict opt_to_name, [1] = dict name_to_action
+
+void* argparse_argument_parser() {
+  void* p = object_new(2);
+  object_set(p, 0, dict_new(8));
+  object_set(p, 1, dict_new(8));
+  return p;
+}
+
+static inline void* ap_opt_map(void* p){ return object_get(p, 0); }
+static inline void* ap_act_map(void* p){ return object_get(p, 1); }
+
+static std::string canonical_name(const std::string& flag) {
+  std::size_t i = 0; while (i<flag.size() && flag[i]=='-') ++i;
+  if (i>=flag.size()) return std::string();
+  return flag.substr(i);
+}
+
+void argparse_add_argument(void* parser, void* name_str, void* action_str) {
+  if (!parser || !name_str || !action_str) return;
+  std::string names(string_data(name_str), string_len(name_str));
+  std::string action(string_data(action_str), string_len(action_str));
+  void* optmap = ap_opt_map(parser);
+  void* actmap = ap_act_map(parser);
+  // Split names on '|'
+  std::size_t start = 0;
+  std::string firstName;
+  while (start <= names.size()) {
+    std::size_t sep = names.find('|', start);
+    std::string token = (sep == std::string::npos) ? names.substr(start) : names.substr(start, sep - start);
+    if (!token.empty()) {
+      std::string canon = canonical_name(token);
+      if (firstName.empty()) firstName = canon;
+      void* tokS = string_new(token.data(), token.size());
+      void* canonS = string_new(canon.data(), canon.size());
+      dict_set(&optmap, tokS, canonS);
+    }
+    if (sep == std::string::npos) break; else start = sep + 1;
+  }
+  // Record action by canonical name
+  if (!firstName.empty()) {
+    void* key = string_new(firstName.data(), firstName.size());
+    void* act = string_new(action.data(), action.size());
+    dict_set(&actmap, key, act);
+  }
+  object_set(parser, 0, optmap);
+  object_set(parser, 1, actmap);
+}
+
+void* argparse_parse_args(void* parser, void* args_list) {
+  if (!parser) return dict_new(0);
+  void* result = dict_new(8);
+  void* optmap = ap_opt_map(parser);
+  void* actmap = ap_act_map(parser);
+  std::size_t n = (args_list ? list_len(args_list) : 0);
+  for (std::size_t i=0; i<n; ++i) {
+    void* tok = list_get(args_list, i);
+    if (!tok) continue;
+    std::string t(string_data(tok), string_len(tok));
+    if (!t.empty() && t[0]=='-') {
+      // Support --name=value
+      std::string opt = t, val;
+      std::size_t eq = t.find('=');
+      if (eq != std::string::npos) { opt = t.substr(0, eq); val = t.substr(eq+1); }
+      void* canon = dict_get(optmap, string_new(opt.data(), opt.size()));
+      if (!canon) continue; // unknown option: skip
+      void* act = dict_get(actmap, canon);
+      if (!act) continue;
+      std::string an(string_data(act), string_len(act));
+      std::string keyS(string_data(canon), string_len(canon));
+      void* key = canon; // reuse
+      if (an == "store_true") {
+        dict_set(&result, key, box_bool(true));
+      } else if (an == "store") {
+        if (val.empty()) {
+          if (i + 1 >= n) { rt_raise("ValueError", "argparse: missing value"); return nullptr; }
+          void* nv = list_get(args_list, ++i);
+          dict_set(&result, key, nv);
+        } else {
+          dict_set(&result, key, string_new(val.data(), val.size()));
+        }
+      } else if (an == "store_int") {
+        std::string sval;
+        if (val.empty()) {
+          if (i + 1 >= n) { rt_raise("ValueError", "argparse: missing int value"); return nullptr; }
+          void* nv = list_get(args_list, ++i);
+          sval.assign(string_data(nv), string_len(nv));
+        } else {
+          sval = val;
+        }
+        // parse integer
+        long long v = 0; bool neg=false; std::size_t j=0; if(!sval.empty() && (sval[0]=='+'||sval[0]=='-')){neg=(sval[0]=='-'); j=1;}
+        for (; j<sval.size(); ++j) { if (!std::isdigit(static_cast<unsigned char>(sval[j]))) { rt_raise("ValueError", "argparse: invalid int"); return nullptr; } v = v*10 + (sval[j]-'0'); }
+        if (neg) v = -v;
+        dict_set(&result, key, box_int(v));
+      }
+    }
+  }
+  return result;
+}
+
+} // namespace pycc::rt
+
+// C ABI for argparse
+extern "C" void* pycc_argparse_argument_parser() { return ::pycc::rt::argparse_argument_parser(); }
+extern "C" void  pycc_argparse_add_argument(void* p, void* n, void* a) { ::pycc::rt::argparse_add_argument(p,n,a); }
+extern "C" void* pycc_argparse_parse_args(void* p, void* lst) { return ::pycc::rt::argparse_parse_args(p,lst); }
