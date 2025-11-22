@@ -27,12 +27,11 @@ struct EffectsScan : public ast::VisitorBase {
   void visit(const ast::TupleLiteral& t) override;
   void visit(const ast::ListLiteral& l) override;
   void visit(const ast::Name&) override;
-  void visit(const ast::IntLiteral&) override;
-  void visit(const ast::BoolLiteral&) override;
-  void visit(const ast::FloatLiteral&) override;
-  void visit(const ast::StringLiteral&) override;
+  void visit(const ast::Literal<long long, ast::NodeKind::IntLiteral>&) override;
+  void visit(const ast::Literal<bool, ast::NodeKind::BoolLiteral>&) override;
+  void visit(const ast::Literal<double, ast::NodeKind::FloatLiteral>&) override;
+  void visit(const ast::Literal<std::string, ast::NodeKind::StringLiteral>&) override;
   void visit(const ast::NoneLiteral&) override;
 };
 
 } // namespace pycc::sema
-

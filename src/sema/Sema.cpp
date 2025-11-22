@@ -10,6 +10,10 @@
 #include "sema/detail/ExprVisitHelpers.h"
 #include "sema/detail/ExprVisitContainers.h"
 #include "sema/detail/LocalsAssigned.h"
+#include "sema/detail/ExpressionTyper.h"
+#include "sema/detail/ReturnParamScan.h"
+#include "sema/detail/FnTraitScan.h"
+#include "sema/detail/EffStmtScan.h"
 #include <cstddef>
 #include <cstdint>
 #include <ios>
@@ -65,7 +69,9 @@ using pycc::sema::addDiag;
 
 // EffectsScan implementation moved to individual compilation units (see sema/detail/EffectsScan.h)
 
-struct ExpressionTyper final : public ast::VisitorBase {
+// ExpressionTyper implementation moved to individual compilation units (see sema/detail/ExpressionTyper.h)
+// Core visit methods are defined in src/sema/visit_exptyper_*.cpp
+/* struct ExpressionTyper final : public ast::VisitorBase {
   // retParamIdxs: mapping of function name -> parameter index when return is trivially forwarded
   // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
   // Back-compat constructor without classes map
@@ -2324,7 +2330,7 @@ struct ExpressionTyper final : public ast::VisitorBase {
   void visit(const ast::IfStmt& ifStmt) override { addDiag(*diags, "internal error: if is not expression", &ifStmt); ok = false; }
   void visit(const ast::FunctionDef& functionDef) override { addDiag(*diags, "internal error: function is not expression", &functionDef); ok = false; }
   void visit(const ast::Module& module) override { addDiag(*diags, "internal error: module is not expression", &module); ok = false; }
-};
+}; */
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static bool inferExprType(const ast::Expr* expr,
@@ -2464,7 +2470,8 @@ bool sema_check_impl(pycc::sema::Sema* self, ast::Module& mod, std::vector<pycc:
     }
   }
   // Build a trivial interprocedural summary: which function consistently returns a specific parameter index
-  std::unordered_map<std::string, int> retParamIdxs; // func -> param index
+  std::unordered_map<std::string, int> retParamIdxs = computeReturnParamIdxs(mod); // func -> param index
+  #if 0
   struct RetIdxVisitor : public ast::VisitorBase {
     const ast::FunctionDef* fn{nullptr};
     int retIdx{-1}; bool hasReturn{false}; bool consistent{true};
@@ -2506,8 +2513,10 @@ bool sema_check_impl(pycc::sema::Sema* self, ast::Module& mod, std::vector<pycc:
     for (const auto& stmt : func->body) { stmt->accept(visitor); if (!visitor.consistent) { break; } }
     if (visitor.hasReturn && visitor.consistent && visitor.retIdx >= 0) { retParamIdxs[func->name] = visitor.retIdx; }
   }
+  #endif
 
   // Function flags: generator/coroutine pre-scan
+  #if 0
   struct FnTraitScan : public ast::VisitorBase {
     bool hasYield{false}; bool hasAwait{false};
     // Stubs for pure virtuals
@@ -2539,6 +2548,8 @@ bool sema_check_impl(pycc::sema::Sema* self, ast::Module& mod, std::vector<pycc:
     FnTraitScan scan; for (const auto& st : func->body) if (st) st->accept(scan);
     funcFlags_[func.get()] = FuncFlags{scan.hasYield, scan.hasAwait};
   }
+  #endif
+  scanFunctionTraits(mod, funcFlags_);
 
   for (const auto& func : mod.functions) {
     if (!(typeIsInt(func->returnType) || typeIsBool(func->returnType) || typeIsFloat(func->returnType) || typeIsStr(func->returnType) || func->returnType == Type::Tuple)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/tuple returns supported"; diags.push_back(std::move(diagVar)); return false; }
@@ -3796,6 +3807,7 @@ bool sema_check_impl(pycc::sema::Sema* self, ast::Module& mod, std::vector<pycc:
     }
   }
   // Effect typing: per-statement mayRaise map (post-pass)
+  #if 0
   struct EffStmtScan : public ast::VisitorBase {
     std::unordered_map<const ast::Stmt*, bool>& out;
     explicit EffStmtScan(std::unordered_map<const ast::Stmt*, bool>& o) : out(o) {}
@@ -3826,6 +3838,8 @@ bool sema_check_impl(pycc::sema::Sema* self, ast::Module& mod, std::vector<pycc:
     EffStmtScan ess{stmtMayRaise_};
     for (const auto& st : func->body) if (st) st->accept(ess);
   }
+  #endif
+  scanStmtEffects(mod, stmtMayRaise_);
   return diags.empty();
 }
 

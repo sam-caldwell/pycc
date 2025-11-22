@@ -3,6 +3,7 @@
  * Purpose: Division/modulo may raise; scan operands.
  */
 #include "sema/detail/EffectsScan.h"
+#include "ast/Binary.h"
 #include "ast/BinaryOperator.h"
 
 using namespace pycc;
@@ -14,4 +15,3 @@ void EffectsScan::visit(const ast::Binary& b) {
   if (b.lhs) b.lhs->accept(*this);
   if (b.rhs) b.rhs->accept(*this);
 }
-

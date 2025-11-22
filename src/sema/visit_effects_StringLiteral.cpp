@@ -7,5 +7,4 @@
 using namespace pycc;
 using pycc::sema::EffectsScan;
 
-void EffectsScan::visit(const ast::StringLiteral&) {}
-
+void EffectsScan::visit(const ast::Literal<std::string, ast::NodeKind::StringLiteral>&) {}

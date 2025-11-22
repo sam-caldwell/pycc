@@ -7,7 +7,11 @@
 #include "ast/TypeKind.h"
 #include <cstdint>
 
-namespace pycc::ast { struct IntLiteral; struct BoolLiteral; struct FloatLiteral; struct StringLiteral; struct NoneLiteral; }
+#include "ast/IntLiteral.h"
+#include "ast/BoolLiteral.h"
+#include "ast/FloatLiteral.h"
+#include "ast/StringLiteral.h"
+#include "ast/NoneLiteral.h"
 
 namespace pycc::sema::expr {
 
@@ -26,4 +30,3 @@ VisitResult handleStringLiteral(const ast::StringLiteral& n);
 VisitResult handleNoneLiteral(const ast::NoneLiteral& n);
 
 } // namespace pycc::sema::expr
-

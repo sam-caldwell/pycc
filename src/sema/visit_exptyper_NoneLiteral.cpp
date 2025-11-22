@@ -1,9 +1,10 @@
 /***
  * Name: ExpressionTyper::visit(NoneLiteral)
- * Purpose: Type None literal and set canonical form.
+ * Purpose: Delegate to literal helper and set outputs.
  */
 #include "sema/detail/ExpressionTyper.h"
 #include "sema/detail/ExprVisitHelpers.h"
+#include "ast/NoneLiteral.h"
 
 using namespace pycc;
 using namespace pycc::sema;

@@ -1,9 +1,10 @@
 /***
  * Name: ExpressionTyper::visit(BoolLiteral)
- * Purpose: Type bool literals and set canonical form.
+ * Purpose: Delegate to literal helper and set outputs.
  */
 #include "sema/detail/ExpressionTyper.h"
 #include "sema/detail/ExprVisitHelpers.h"
+#include "ast/BoolLiteral.h"
 
 using namespace pycc;
 using namespace pycc::sema;

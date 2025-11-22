@@ -1,9 +1,10 @@
 /***
  * Name: ExpressionTyper::visit(StringLiteral)
- * Purpose: Type string literals and set canonical form.
+ * Purpose: Delegate to literal helper and set outputs.
  */
 #include "sema/detail/ExpressionTyper.h"
 #include "sema/detail/ExprVisitHelpers.h"
+#include "ast/StringLiteral.h"
 
 using namespace pycc;
 using namespace pycc::sema;
