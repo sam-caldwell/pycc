@@ -82,7 +82,7 @@ static std::size_t runOnBlock(std::vector<std::unique_ptr<Stmt>>& body) {
           void visit(const Module&) override {}
           void visit(const FunctionDef&) override {}
           void visit(const ReturnStmt&) override {}
-          void visit(const AssignStmt&) override {}
+          void visit(const AssignStmt& as) override { if (as.value) as.value->accept(*this); }
           void visit(const IfStmt&) override {}
           void visit(const ExprStmt& es) override { if (es.value) es.value->accept(*this); }
           void visit(const IntLiteral&) override {}
@@ -104,9 +104,14 @@ static std::size_t runOnBlock(std::vector<std::unique_ptr<Stmt>>& body) {
       // Hoist this assignment before the loop
       auto moved = std::move(*bit);
       bit = ws->thenBody.erase(bit);
-      const std::size_t idx = static_cast<std::size_t>(std::distance(body.begin(), it));
-      body.insert(body.begin() + static_cast<long>(idx), std::move(moved));
+      // Insert before the current while-statement. Inserting into 'body' invalidates iterators,
+      // so recompute 'it' after insertion using indices.
+      const std::size_t widx = static_cast<std::size_t>(std::distance(body.begin(), it));
+      body.insert(body.begin() + static_cast<long>(widx), std::move(moved));
       ++hoisted;
+      // Reacquire iterator to the while-statement (now shifted by +1)
+      it = body.begin() + static_cast<long>(widx + 1);
+      ws = static_cast<WhileStmt*>(it->get());
       // Restart scan conservatively from loop start
       bit = ws->thenBody.begin();
     }

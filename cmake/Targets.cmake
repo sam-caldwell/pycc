@@ -9,6 +9,16 @@ if(Threads_FOUND)
   target_link_libraries(pycc_core PRIVATE Threads::Threads)
 endif()
 
+# Optional ICU for Unicode normalization/encoding helpers
+option(PYCC_WITH_ICU "Enable ICU-based Unicode normalization" OFF)
+if(PYCC_WITH_ICU)
+  find_package(ICU COMPONENTS uc i18n QUIET)
+  if(ICU_FOUND)
+    target_link_libraries(pycc_core PRIVATE ICU::uc ICU::i18n)
+    target_compile_definitions(pycc_core PRIVATE PYCC_WITH_ICU)
+  endif()
+endif()
+
 add_executable(pycc ${PYCC_MAIN})
 target_link_libraries(pycc PRIVATE pycc_core)
 target_include_directories(pycc PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -35,7 +45,8 @@ if(PYCC_BUILD_LLVM_PASSES)
     message(STATUS "LLVM defs: ${LLVM_DEFINITIONS}")
     add_library(pycc_llvm_passes SHARED
       ${CMAKE_SOURCE_DIR}/src/llvm/ElideGCBarrierPass.cpp)
-    target_include_directories(pycc_llvm_passes PRIVATE ${LLVM_INCLUDE_DIRS})
+    # Mark LLVM includes as SYSTEM to avoid treating their warnings as errors
+    target_include_directories(pycc_llvm_passes SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
     target_compile_definitions(pycc_llvm_passes PRIVATE ${LLVM_DEFINITIONS})
     # Link against umbrella LLVM lib if present; fallback to common components
     if(TARGET LLVM)
@@ -67,6 +78,10 @@ add_library(pycc_runtime
 target_include_directories(pycc_runtime PUBLIC ${CMAKE_SOURCE_DIR}/include)
 if(Threads_FOUND)
   target_link_libraries(pycc_runtime PRIVATE Threads::Threads)
+endif()
+if(PYCC_WITH_ICU AND ICU_FOUND)
+  target_link_libraries(pycc_runtime PRIVATE ICU::uc ICU::i18n)
+  target_compile_definitions(pycc_runtime PRIVATE PYCC_WITH_ICU)
 endif()
 
 # Provide absolute path to runtime library for Codegen to link user programs

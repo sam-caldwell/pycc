@@ -1,6 +1,6 @@
 /***
  * Name: test_runtime_threads_shared
- * Purpose: Basic cross-thread sharing without a GIL: read-only access to a string object.
+ * Purpose: Basic cross-thread sharing: read-only access to a string object.
  */
 #include <gtest/gtest.h>
 #include "runtime/Runtime.h"
@@ -19,4 +19,3 @@ TEST(RuntimeThreads, ShareStringReadOnly) {
   EXPECT_EQ(len_in_thread, 6u);
   gc_unregister_root(&s);
 }
-

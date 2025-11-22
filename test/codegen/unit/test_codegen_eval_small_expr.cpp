@@ -36,3 +36,19 @@ def main() -> int:
   ASSERT_NE(ir.find("call ptr @pycc_box_bool(i1 1)"), std::string::npos);
 }
 
+TEST(CodegenEvalSmallExpr, BooleanLogicAndConditionalAndNot) {
+  const char* src = R"PY(
+def main() -> int:
+  a = eval("True and (0 or 1)")
+  b = eval("(1 if 0 else 2) + 3")
+  c = eval("not 3")
+  return 0
+)PY";
+  const auto ir = genIR(src);
+  // True and (0 or 1) -> True
+  ASSERT_NE(ir.find("call ptr @pycc_box_bool(i1 1)"), std::string::npos);
+  // (1 if 0 else 2) + 3 -> 5
+  ASSERT_NE(ir.find("call ptr @pycc_box_int(i64 5)"), std::string::npos);
+  // not 3 -> False
+  ASSERT_NE(ir.find("call ptr @pycc_box_bool(i1 0)"), std::string::npos);
+}

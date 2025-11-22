@@ -24,12 +24,20 @@ struct EffectAlias {
         return (k == NK::StringLiteral || k == NK::TupleLiteral || k == NK::BytesLiteral);
       }
       case NK::Subscript: {
-        // Subscript on immutable literals with pure index is pure (e.g., "abc"[0], (1,2)[1])
+        // Subscript chains rooted at immutable literals with pure indices are pure.
+        // Handles nested tuple indexing like (1,(2,3))[1][0].
         auto* s = static_cast<const ast::Subscript*>(e);
-        if (!s || !s->value) return false;
-        const auto vk = s->value->kind;
-        if (!(vk == NK::StringLiteral || vk == NK::TupleLiteral || vk == NK::BytesLiteral)) return false;
-        return isPureExpr(s->slice.get());
+        if (!s) return false;
+        // Verify all indices in the chain are pure
+        const ast::Expr* cur = e;
+        while (cur && cur->kind == NK::Subscript) {
+          auto* cs = static_cast<const ast::Subscript*>(cur);
+          if (!isPureExpr(cs->slice.get())) return false;
+          cur = cs->value.get();
+        }
+        if (!cur) return false;
+        const auto rootk = cur->kind;
+        return (rootk == NK::StringLiteral || rootk == NK::TupleLiteral || rootk == NK::BytesLiteral);
       }
       case NK::UnaryExpr: {
         auto* u = static_cast<const ast::Unary*>(e);

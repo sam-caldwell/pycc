@@ -53,6 +53,8 @@ if(BUILD_TESTING)
     set(RUN_DIR ${CMAKE_BINARY_DIR}/run-${RUN_TS})
     file(MAKE_DIRECTORY ${RUN_DIR})
     set_tests_properties(test_e2e PROPERTIES WORKING_DIRECTORY ${RUN_DIR})
+    # Tell tests to stay in the CTest-provided working directory (do not create run_local)
+    set_tests_properties(test_e2e PROPERTIES ENVIRONMENT "PYCC_TEST_STAY_CWD=1")
   endif()
 
   # Runtime-only test target for fast, isolated runtime/GC testing
@@ -63,6 +65,7 @@ if(BUILD_TESTING)
     target_link_libraries(test_runtime_only PRIVATE pycc_runtime GTest::gtest_main)
     target_include_directories(test_runtime_only PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME test_runtime_only COMMAND test_runtime_only --gtest_color=yes --gtest_print_time=1 --gtest_fail_fast=1)
-    set_tests_properties(test_runtime_only PROPERTIES TIMEOUT 300)
+    # Shorter default timeout for runtime-only tests
+    set_tests_properties(test_runtime_only PROPERTIES TIMEOUT 120)
   endif()
 endif()

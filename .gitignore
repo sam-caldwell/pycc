@@ -51,7 +51,7 @@ cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
 CMakeScripts/
-Testing/
+build/Testing/
 install_manifest.txt
 cmake_install.cmake
 CTestTestfile.cmake

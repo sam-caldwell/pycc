@@ -16,6 +16,26 @@ namespace pycc::lex {
 
 static bool isIdentStart(char chr) { return (std::isalpha(static_cast<unsigned char>(chr)) != 0) || chr == '_'; }
 static bool isIdentChar(char chr) { return (std::isalnum(static_cast<unsigned char>(chr)) != 0) || chr == '_'; }
+#ifdef PYCC_WITH_ICU
+#include <unicode/uchar.h>
+static bool decodeUtf8Cp(const std::string& s, size_t i, UChar32& out, size_t& next) {
+  const unsigned char c0 = static_cast<unsigned char>(s[i]);
+  if ((c0 & 0x80U) == 0) { out = c0; next = i + 1; return true; }
+  if ((c0 & 0xE0U) == 0xC0U && i + 1 < s.size()) {
+    out = ((c0 & 0x1FU) << 6) | (static_cast<unsigned char>(s[i+1]) & 0x3FU); next = i + 2; return true;
+  }
+  if ((c0 & 0xF0U) == 0xE0U && i + 2 < s.size()) {
+    out = ((c0 & 0x0FU) << 12) | ((static_cast<unsigned char>(s[i+1]) & 0x3FU) << 6) | (static_cast<unsigned char>(s[i+2]) & 0x3FU); next = i + 3; return true;
+  }
+  if ((c0 & 0xF8U) == 0xF0U && i + 3 < s.size()) {
+    out = ((c0 & 0x07U) << 18) | ((static_cast<unsigned char>(s[i+1]) & 0x3FU) << 12) | ((static_cast<unsigned char>(s[i+2]) & 0x3FU) << 6) | (static_cast<unsigned char>(s[i+3]) & 0x3FU);
+    next = i + 4; return true;
+  }
+  out = c0; next = i + 1; return false;
+}
+static bool isXIDStartCp(UChar32 cp) { return cp == 0x5F || u_hasBinaryProperty(cp, UCHAR_XID_START); }
+static bool isXIDContinueCp(UChar32 cp) { return cp == 0x5F || u_hasBinaryProperty(cp, UCHAR_XID_CONTINUE); }
+#endif
 
 // FileInput implementation
 FileInput::FileInput(std::string path) : path_(std::move(path)), in_(nullptr) {
@@ -373,9 +393,31 @@ Token Lexer::scanOne(State& state) {
     ++idx; return makeTok(TokenKind::Dot, idx-1, idx);
   }
 
-  if (isIdentStart(chr)) {
+  // Identifiers: ASCII fast path; ICU XID path if enabled
+  if (
+#ifdef PYCC_WITH_ICU
+      ( (static_cast<unsigned char>(chr) < 0x80 && isIdentStart(chr)) || (static_cast<unsigned char>(chr) >= 0x80) )
+#else
+      isIdentStart(chr)
+#endif
+    ) {
     size_t jpos = idx + 1;
+    
+#ifdef PYCC_WITH_ICU
+    if (static_cast<unsigned char>(chr) >= 0x80) {
+      // Unicode identifier: check XID_Start/XID_Continue by code point
+      UChar32 cp = 0; size_t next = idx;
+      if (!decodeUtf8Cp(line, idx, cp, next) || !isXIDStartCp(cp)) { ++idx; return makeTok(TokenKind::Unknown, idx-1, idx); }
+      jpos = next;
+      while (jpos < line.size()) {
+        UChar32 cp2 = 0; size_t nx = 0; if (!decodeUtf8Cp(line, jpos, cp2, nx)) break; if (!isXIDContinueCp(cp2)) break; jpos = nx;
+      }
+    } else {
+      while (jpos < line.size() && isIdentChar(line[jpos])) { ++jpos; }
+    }
+#else
     while (jpos < line.size() && isIdentChar(line[jpos])) { ++jpos; }
+#endif
     const std::string ident = line.substr(idx, jpos - idx);
     TokenKind kind = TokenKind::Ident;
     if (ident == "def") { kind = TokenKind::Def; }

@@ -11,8 +11,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <optional>
+#ifdef PYCC_WITH_ICU
+#include <unicode/uchar.h>
+#include <unicode/unorm2.h>
+#include <unicode/ustring.h>
+#endif
 #include <pthread.h>
 #include <thread>
 #include <unordered_set>
@@ -51,6 +57,9 @@ struct ObjectHeader {
   uint32_t mark{0};
   uint32_t tag{0};
   std::size_t size{0}; // total allocation size including header
+  uint8_t gen{0};      // 0 = young, 1 = old
+  uint8_t age{0};      // survival count in young gen
+  uint16_t pad{0};
   ObjectHeader* next{nullptr};
 };
 
@@ -92,6 +101,19 @@ static double g_ewma_pressure = 0.0;    // NOLINT(cppcoreguidelines-avoid-non-co
 static std::atomic<int> g_barrier_mode{0}; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables) 0=incremental-update, 1=SATB
 static bool g_debug = (std::getenv("PYCC_RT_DEBUG") != nullptr); // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
+// Segregated free lists for small object sizes (total bytes including header)
+static constexpr std::size_t kClassSizes[] = { 64, 128, 256, 512, 1024, 2048, 4096 };
+static constexpr int kNumClasses = static_cast<int>(sizeof(kClassSizes) / sizeof(kClassSizes[0]));
+static std::vector<ObjectHeader*> g_free_lists[kNumClasses]; // NOLINT
+// Thread-local caches for segregated size classes. Mutators steal batches from global lists.
+static thread_local std::vector<ObjectHeader*> t_free_lists[kNumClasses]; // NOLINT
+static constexpr std::size_t kStealBatch = 16;
+
+static inline int class_index_for(std::size_t total) {
+  for (int i = 0; i < kNumClasses; ++i) { if (total <= kClassSizes[i]) return i; }
+  return -1;
+}
+
 // Thread-local exception state
 static thread_local void* t_last_exception = nullptr; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 static thread_local bool t_exc_root_registered = false; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
@@ -115,11 +137,29 @@ static inline void maybe_request_bg_gc_unlocked() {
 static void* alloc_raw(std::size_t size, TypeTag tag) {
   // allocate size bytes for payload plus header
   const std::size_t total = sizeof(ObjectHeader) + size;
-  auto* mem = static_cast<unsigned char*>(::operator new(total));
+  unsigned char* mem = nullptr;
+  // Try segregated free list first (callers generally hold g_mu)
+  int ci = class_index_for(total);
+  if (ci >= 0) {
+    // Prefer thread-local cache
+    if (!t_free_lists[ci].empty()) {
+      ObjectHeader* h = t_free_lists[ci].back(); t_free_lists[ci].pop_back();
+      mem = reinterpret_cast<unsigned char*>(h);
+    } else if (!g_free_lists[ci].empty()) {
+      // Steal a small batch from global to seed thread-local cache
+      const std::size_t toSteal = std::min<std::size_t>(kStealBatch, g_free_lists[ci].size());
+      for (std::size_t i = 0; i < toSteal; ++i) {
+        ObjectHeader* h = g_free_lists[ci].back(); g_free_lists[ci].pop_back();
+        if (i + 1U < toSteal) { t_free_lists[ci].push_back(h); } else { mem = reinterpret_cast<unsigned char*>(h); }
+      }
+    }
+  }
+  if (mem == nullptr) { mem = static_cast<unsigned char*>(::operator new(total)); }
   auto* header = reinterpret_cast<ObjectHeader*>(mem); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
   header->mark = 0;
   header->tag = static_cast<uint32_t>(tag);
   header->size = total;
+  header->gen = 0; header->age = 0; header->pad = 0;
   header->next = g_head;
   g_head = header;
   g_stats.numAllocated++;
@@ -133,7 +173,13 @@ static void free_obj(ObjectHeader* header) {
   g_stats.numFreed++;
   g_stats.bytesLive -= header->size;
   if (g_debug) { std::fprintf(stderr, "[runtime] free_obj tag=%u size=%zu\n", header->tag, header->size); }
-  ::operator delete(header);
+  int ci = class_index_for(header->size);
+  if (ci >= 0) {
+    // Sweeper runs on background thread; keep pushing to global list. Mutators will steal into local caches.
+    g_free_lists[ci].push_back(header);
+  } else {
+    ::operator delete(header);
+  }
 }
 
 // Forward declaration for interior marking
@@ -333,7 +379,12 @@ static void sweep() {
       reclaimed += dead->size;
       free_obj(dead);
     } else {
+      // Survivor: clear mark and update generation/age
       cur->mark = 0; // clear for next cycle
+      if (cur->gen == 0) {
+        if (cur->age < 2) cur->age += 1;
+        if (cur->age >= 1) { cur->gen = 1; }
+      }
       prev = cur;
       cur = cur->next;
     }
@@ -529,19 +580,25 @@ extern "C" void* pycc_box_float(double value) { return box_float(value); }
 extern "C" void* pycc_box_bool(bool value) { return box_bool(value); }
 extern "C" void* pycc_string_new(const char* data, size_t length) { return string_new(data, length); }
 extern "C" uint64_t pycc_string_len(void* str) { return static_cast<uint64_t>(string_len(str)); }
+extern "C" uint64_t pycc_string_charlen(void* str);
+extern "C" uint64_t pycc_string_charlen(void* str) { return static_cast<uint64_t>(string_charlen(str)); }
 extern "C" void* pycc_string_slice(void* s, int64_t start, int64_t len) {
-  std::size_t L = string_len(s);
-  int64_t st = start; if (st < 0) st += static_cast<int64_t>(L); if (st < 0) st = 0;
-  int64_t ln = len; if (ln < 0) ln = 0;
+  std::size_t L = string_charlen(s);
+  int64_t st = start; if (st < 0) st += static_cast<int64_t>(L); if (st < 0) st = 0; if (static_cast<std::size_t>(st) > L) st = static_cast<int64_t>(L);
+  int64_t ln = len; if (ln < 0) ln = 0; if (static_cast<std::size_t>(st + ln) > L) ln = static_cast<int64_t>(L - static_cast<std::size_t>(st));
   return string_slice(s, static_cast<std::size_t>(st), static_cast<std::size_t>(ln));
+}
+void* string_repeat(void* s, std::size_t n) {
+  if (n == 0) return string_new("", 0);
+  const char* d = string_data(s);
+  const std::size_t L = string_len(s);
+  std::string tmp; tmp.resize(L * n);
+  for (std::size_t i = 0; i < n; ++i) { if (L) std::memcpy(tmp.data() + (i * L), d, L); }
+  return string_new(tmp.data(), tmp.size());
 }
 extern "C" void* pycc_string_repeat(void* s, int64_t n) {
   if (n <= 0) return string_new("", 0);
-  const char* d = string_data(s);
-  std::size_t L = string_len(s);
-  std::string tmp; tmp.resize(L * static_cast<std::size_t>(n));
-  for (std::size_t i = 0; i < static_cast<std::size_t>(n); ++i) { std::memcpy(tmp.data() + (i * L), d, L); }
-  return string_new(tmp.data(), tmp.size());
+  return string_repeat(s, static_cast<std::size_t>(n));
 }
 extern "C" int pycc_string_contains(void* haystack, void* needle) {
   if (haystack == nullptr || needle == nullptr) return 0;
@@ -635,6 +692,26 @@ std::size_t string_len(void* str) {
   return *plen;
 }
 
+static std::size_t utf8_codepoint_count(const char* data, std::size_t n) {
+  std::size_t count = 0;
+  for (std::size_t i = 0; i < n; ) {
+    unsigned char c = static_cast<unsigned char>(data[i]);
+    if ((c & 0x80U) == 0) { ++i; ++count; continue; }
+    if ((c & 0xE0U) == 0xC0U && (i+1)<n) { i += 2; ++count; continue; }
+    if ((c & 0xF0U) == 0xE0U && (i+2)<n) { i += 3; ++count; continue; }
+    if ((c & 0xF8U) == 0xF0U && (i+3)<n) { i += 4; ++count; continue; }
+    ++i; ++count; // invalid, advance 1 byte
+  }
+  return count;
+}
+
+std::size_t string_charlen(void* str) {
+  if (str == nullptr) { return 0; }
+  auto* plen = static_cast<std::size_t*>(str);
+  const char* data = reinterpret_cast<const char*>(plen + 1);
+  return utf8_codepoint_count(data, *plen);
+}
+
 const char* string_data(void* str) {
   if (str == nullptr) { return nullptr; }
   auto* plen = static_cast<std::size_t*>(str);
@@ -663,10 +740,25 @@ void* string_concat(void* a, void* b) {
 
 void* string_slice(void* s, std::size_t start, std::size_t len) {
   const char* d = string_data(s);
-  const std::size_t L = string_len(s);
-  if (start > L) start = L;
-  std::size_t n = (start + len > L) ? (L - start) : len;
-  return string_new(d + start, n);
+  const std::size_t nb = string_len(s);
+  // Map code point index to byte offset
+  auto cp_to_byte = [&](std::size_t cpIndex) -> std::size_t {
+    std::size_t i = 0; std::size_t cp = 0;
+    while (i < nb && cp < cpIndex) {
+      unsigned char c = static_cast<unsigned char>(d[i]);
+      if ((c & 0x80U) == 0) i += 1;
+      else if ((c & 0xE0U) == 0xC0U) i += 2;
+      else if ((c & 0xF0U) == 0xE0U) i += 3;
+      else if ((c & 0xF8U) == 0xF0U) i += 4;
+      else i += 1;
+      ++cp;
+    }
+    return i;
+  };
+  std::size_t bstart = cp_to_byte(start);
+  std::size_t bend = cp_to_byte(start + len);
+  if (bend < bstart) bend = bstart;
+  return string_new(d + bstart, bend - bstart);
 }
 
 // UTF-8 validation helper
@@ -949,6 +1041,12 @@ extern "C" void* pycc_dict_iter_next(void* it) {
   return nullptr;
 }
 
+// C++ API wrappers to match header declarations
+namespace pycc::rt {
+void* dict_iter_new(void* dict) { return pycc_dict_iter_new(dict); }
+void* dict_iter_next(void* it) { return pycc_dict_iter_next(it); }
+}
+
 // Objects (fixed-size field table)
 void* object_new(std::size_t field_count) {
   const std::lock_guard<std::mutex> lock(g_mu);
@@ -1156,6 +1254,20 @@ bool io_write_file(const char* path, void* str) {
   return n == len;
 }
 
+// C ABI wrappers for io module
+extern "C" void pycc_io_write_stdout(void* str) { ::pycc::rt::io_write_stdout(str); }
+extern "C" void pycc_io_write_stderr(void* str) { ::pycc::rt::io_write_stderr(str); }
+extern "C" void* pycc_io_read_file(void* pathStr) {
+  const char* p = ::pycc::rt::string_data(pathStr);
+  if (!p) return nullptr;
+  return ::pycc::rt::io_read_file(p);
+}
+extern "C" bool pycc_io_write_file(void* pathStr, void* str) {
+  const char* p = ::pycc::rt::string_data(pathStr);
+  if (!p) return false;
+  return ::pycc::rt::io_write_file(p, str);
+}
+
 void* os_getenv(const char* name) {
   if (name == nullptr) { return nullptr; }
   const char* val = std::getenv(name);
@@ -1167,6 +1279,134 @@ int64_t os_time_ms() {
   using namespace std::chrono;
   auto now = time_point_cast<milliseconds>(system_clock::now());
   return now.time_since_epoch().count();
+}
+
+// Time module shims
+double time_time() {
+  using namespace std::chrono;
+  auto now = system_clock::now();
+  auto secs = duration_cast<duration<double>>(now.time_since_epoch());
+  return secs.count();
+}
+int64_t time_time_ns() {
+  using namespace std::chrono;
+  auto now = system_clock::now();
+  auto ns = duration_cast<nanoseconds>(now.time_since_epoch());
+  return static_cast<int64_t>(ns.count());
+}
+double time_monotonic() {
+  using namespace std::chrono;
+  auto now = steady_clock::now();
+  static const auto start = now;
+  return duration_cast<duration<double>>(now - start).count();
+}
+int64_t time_monotonic_ns() {
+  using namespace std::chrono;
+  auto now = steady_clock::now();
+  static const auto start = now;
+  return static_cast<int64_t>(duration_cast<nanoseconds>(now - start).count());
+}
+double time_perf_counter() {
+  using namespace std::chrono;
+  auto now = high_resolution_clock::now();
+  static const auto start = now;
+  return duration_cast<duration<double>>(now - start).count();
+}
+int64_t time_perf_counter_ns() {
+  using namespace std::chrono;
+  auto now = high_resolution_clock::now();
+  static const auto start = now;
+  return static_cast<int64_t>(duration_cast<nanoseconds>(now - start).count());
+}
+double time_process_time() {
+  return static_cast<double>(std::clock()) / static_cast<double>(CLOCKS_PER_SEC);
+}
+void time_sleep(double seconds) {
+  if (seconds <= 0.0) return;
+  using namespace std::chrono;
+  auto dur = duration<double>(seconds);
+  auto ms = duration_cast<milliseconds>(dur);
+  std::this_thread::sleep_for(ms);
+}
+
+static void* make_iso8601_from_tm(const std::tm& tm, int sec) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d",
+                tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                tm.tm_hour, tm.tm_min, sec);
+  return string_from_cstr(buf);
+}
+void* datetime_now() {
+  std::time_t t = std::time(nullptr);
+  std::tm localTm{};
+#if defined(_WIN32)
+  localtime_s(&localTm, &t);
+#else
+  localtime_r(&t, &localTm);
+#endif
+  return make_iso8601_from_tm(localTm, localTm.tm_sec);
+}
+void* datetime_utcnow() {
+  std::time_t t = std::time(nullptr);
+  std::tm utcTm{};
+#if defined(_WIN32)
+  gmtime_s(&utcTm, &t);
+#else
+  gmtime_r(&t, &utcTm);
+#endif
+  return make_iso8601_from_tm(utcTm, utcTm.tm_sec);
+}
+void* datetime_fromtimestamp(double ts) {
+  std::time_t t = static_cast<std::time_t>(ts);
+  std::tm localTm{};
+#if defined(_WIN32)
+  localtime_s(&localTm, &t);
+#else
+  localtime_r(&t, &localTm);
+#endif
+  return make_iso8601_from_tm(localTm, localTm.tm_sec);
+}
+void* datetime_utcfromtimestamp(double ts) {
+  std::time_t t = static_cast<std::time_t>(ts);
+  std::tm utcTm{};
+#if defined(_WIN32)
+  gmtime_s(&utcTm, &t);
+#else
+  gmtime_r(&t, &utcTm);
+#endif
+  return make_iso8601_from_tm(utcTm, utcTm.tm_sec);
+}
+
+// ---- sys module shims ----
+static thread_local int32_t t_last_exit_code = 0; // NOLINT
+void* sys_platform() {
+#if defined(__APPLE__)
+  return string_from_cstr("darwin");
+#elif defined(__linux__)
+  return string_from_cstr("linux");
+#elif defined(_WIN32)
+  return string_from_cstr("win32");
+#else
+  return string_from_cstr("unknown");
+#endif
+}
+void* sys_version() {
+#if defined(__clang__)
+  return string_from_cstr("pycc/clang");
+#elif defined(__GNUC__)
+  return string_from_cstr("pycc/gcc");
+#else
+  return string_from_cstr("pycc");
+#endif
+}
+int64_t sys_maxsize() {
+  // Approximate: pointer width decides; return 2^31-1 or 2^63-1
+  if (sizeof(void*) >= 8) return static_cast<int64_t>(0x7FFFFFFFFFFFFFFFLL);
+  return static_cast<int64_t>(0x7FFFFFFFLL);
+}
+void sys_exit(int32_t code) {
+  t_last_exit_code = code;
+  // In test environment, we don't actually exit the process.
 }
 
 // Bytes (immutable)
@@ -1199,6 +1439,151 @@ void* bytes_concat(void* a, void* b) {
   if (lb) std::memcpy(tmp.data() + la, db, lb);
   return bytes_new(tmp.data(), tmp.size());
 }
+
+// Encoding/decoding helpers (basic utf-8/ascii)
+static const char* nonnull(const char* p, const char* defv) { return (p && *p) ? p : defv; }
+void* string_encode(void* s, const char* encoding, const char* errors) {
+  if (!s) return nullptr;
+  const char* enc = nonnull(encoding, "utf-8");
+  const char* err = nonnull(errors, "strict");
+  (void)err;
+  if (std::strcmp(enc, "utf-8") == 0) {
+    return bytes_new(string_data(s), string_len(s));
+  }
+  if (std::strcmp(enc, "ascii") == 0) {
+    const char* d = string_data(s);
+    const std::size_t nb = string_len(s);
+    std::vector<unsigned char> out; out.reserve(nb);
+    for (std::size_t i=0; i<nb; ) {
+      unsigned char c = static_cast<unsigned char>(d[i]);
+      if ((c & 0x80U) == 0) { out.push_back(c); ++i; }
+      else {
+        if (std::strcmp(err, "replace") == 0) {
+          out.push_back('?');
+          if ((c & 0xE0U) == 0xC0U) i += 2; else if ((c & 0xF0U) == 0xE0U) i += 3; else if ((c & 0xF8U) == 0xF0U) i += 4; else i += 1;
+        } else {
+          rt_raise("UnicodeEncodeError", "ascii codec can't encode character");
+          return nullptr;
+        }
+      }
+    }
+    return bytes_new(out.data(), out.size());
+  }
+  rt_raise("LookupError", "unknown encoding");
+  return nullptr;
+}
+void* bytes_decode(void* b, const char* encoding, const char* errors) {
+  if (!b) return nullptr;
+  const char* enc = nonnull(encoding, "utf-8");
+  const char* err = nonnull(errors, "strict");
+  if (std::strcmp(enc, "utf-8") == 0) {
+    const std::size_t nb = bytes_len(b);
+    const unsigned char* p = bytes_data(b);
+    if (!utf8_is_valid(reinterpret_cast<const char*>(p), nb)) {
+      if (std::strcmp(err, "replace") == 0) {
+        std::vector<unsigned char> repaired; repaired.reserve(nb);
+        for (std::size_t i=0; i<nb; ) {
+          unsigned char c = p[i];
+          if ((c & 0x80U) == 0) { repaired.push_back(c); ++i; }
+          else if ((c & 0xE0U) == 0xC0U && (i+1)<nb) { repaired.push_back(c); repaired.push_back(p[i+1]); i+=2; }
+          else if ((c & 0xF0U) == 0xE0U && (i+2)<nb) { repaired.push_back(c); repaired.push_back(p[i+1]); repaired.push_back(p[i+2]); i+=3; }
+          else if ((c & 0xF8U) == 0xF0U && (i+3)<nb) { repaired.push_back(c); repaired.push_back(p[i+1]); repaired.push_back(p[i+2]); repaired.push_back(p[i+3]); i+=4; }
+          else { repaired.push_back(0xEFU); repaired.push_back(0xBFU); repaired.push_back(0xBDU); ++i; }
+        }
+        return string_new(reinterpret_cast<const char*>(repaired.data()), repaired.size());
+      }
+      rt_raise("UnicodeDecodeError", "invalid utf-8");
+      return nullptr;
+    }
+    return string_new(reinterpret_cast<const char*>(p), nb);
+  }
+  if (std::strcmp(enc, "ascii") == 0) {
+    const std::size_t nb = bytes_len(b);
+    const unsigned char* p = bytes_data(b);
+    for (std::size_t i=0; i<nb; ++i) {
+      if ((p[i] & 0x80U) != 0) {
+        if (std::strcmp(err, "replace") == 0) {
+          std::vector<unsigned char> out; out.reserve(nb);
+          for (std::size_t j=0; j<nb; ++j) out.push_back((p[j]&0x80U)?'?':p[j]);
+          return string_new(reinterpret_cast<const char*>(out.data()), out.size());
+        }
+        rt_raise("UnicodeDecodeError", "ascii codec can't decode byte");
+        return nullptr;
+      }
+    }
+    return string_new(reinterpret_cast<const char*>(p), nb);
+  }
+  rt_raise("LookupError", "unknown encoding");
+  return nullptr;
+}
+
+// Normalization and casefolding stubs (full ICU support behind PYCC_WITH_ICU)
+void* string_normalize(void* s, NormalizationForm form) {
+  if (!s) return nullptr;
+#ifdef PYCC_WITH_ICU
+  const char* data = string_data(s);
+  const int32_t nb = static_cast<int32_t>(string_len(s));
+  UErrorCode status = U_ZERO_ERROR;
+  const char* mode = (form == NormalizationForm::NFC) ? "nfc"
+                     : (form == NormalizationForm::NFD) ? "nfd"
+                     : (form == NormalizationForm::NFKC) ? "nfkc" : "nfkd";
+  const UNormalizer2* norm = unorm2_getInstance(nullptr, mode, UNORM2_COMPOSE, &status);
+  if (U_FAILURE(status)) { return string_new(data, nb); }
+  // Convert UTF-8 -> UTF-16
+  int32_t uLen = 0; u_strFromUTF8(nullptr, 0, &uLen, data, nb, &status);
+  if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) { return string_new(data, nb); }
+  status = U_ZERO_ERROR; std::vector<UChar> ustr(uLen + 1);
+  u_strFromUTF8(ustr.data(), uLen + 1, nullptr, data, nb, &status);
+  if (U_FAILURE(status)) { return string_new(data, nb); }
+  // Normalize
+  int32_t nLen = unorm2_normalize(norm, ustr.data(), uLen, nullptr, 0, &status);
+  if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) { return string_new(data, nb); }
+  status = U_ZERO_ERROR; std::vector<UChar> normBuf(nLen + 1);
+  unorm2_normalize(norm, ustr.data(), uLen, normBuf.data(), nLen + 1, &status);
+  if (U_FAILURE(status)) { return string_new(data, nb); }
+  // Convert UTF-16 -> UTF-8
+  int32_t outLen = 0; u_strToUTF8(nullptr, 0, &outLen, normBuf.data(), nLen, &status);
+  if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) { return string_new(data, nb); }
+  status = U_ZERO_ERROR; std::vector<char> out(outLen + 1);
+  u_strToUTF8(out.data(), outLen + 1, nullptr, normBuf.data(), nLen, &status);
+  if (U_FAILURE(status)) { return string_new(data, nb); }
+  return string_new(out.data(), static_cast<std::size_t>(outLen));
+#else
+  (void)form;
+  return string_new(string_data(s), string_len(s));
+#endif
+}
+void* string_casefold(void* s) {
+  if (!s) return nullptr;
+#ifdef PYCC_WITH_ICU
+  const char* data = string_data(s);
+  const int32_t nb = static_cast<int32_t>(string_len(s));
+  UErrorCode status = U_ZERO_ERROR;
+  int32_t uLen = 0; u_strFromUTF8(nullptr, 0, &uLen, data, nb, &status);
+  if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) { return string_new(data, nb); }
+  status = U_ZERO_ERROR; std::vector<UChar> ustr(uLen + 1);
+  u_strFromUTF8(ustr.data(), uLen + 1, nullptr, data, nb, &status);
+  if (U_FAILURE(status)) { return string_new(data, nb); }
+  // Case fold (full)
+  int32_t fLen = u_strFoldCase(nullptr, 0, ustr.data(), uLen, U_FOLD_CASE_DEFAULT, &status);
+  if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) { return string_new(data, nb); }
+  status = U_ZERO_ERROR; std::vector<UChar> fbuf(fLen + 1);
+  u_strFoldCase(fbuf.data(), fLen + 1, ustr.data(), uLen, U_FOLD_CASE_DEFAULT, &status);
+  if (U_FAILURE(status)) { return string_new(data, nb); }
+  // Convert back to UTF-8
+  int32_t outLen = 0; u_strToUTF8(nullptr, 0, &outLen, fbuf.data(), fLen, &status);
+  if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) { return string_new(data, nb); }
+  status = U_ZERO_ERROR; std::vector<char> out(outLen + 1);
+  u_strToUTF8(out.data(), outLen + 1, nullptr, fbuf.data(), fLen, &status);
+  if (U_FAILURE(status)) { return string_new(data, nb); }
+  return string_new(out.data(), static_cast<std::size_t>(outLen));
+#else
+  return string_new(string_data(s), string_len(s));
+#endif
+}
+
+extern "C" void* pycc_string_encode(void* s, const char* enc, const char* err) { return string_encode(s, enc, err); }
+extern "C" void* pycc_bytes_decode(void* b, const char* enc, const char* err) { return bytes_decode(b, enc, err); }
 
 // ByteArray (mutable)
 void* bytearray_new(std::size_t len) {
@@ -1270,15 +1655,42 @@ bool os_mkdir(const char* path, int mode) {
 bool os_remove(const char* path) { if (!path) return false; return ::remove(path) == 0; }
 bool os_rename(const char* src, const char* dst) { if (!src || !dst) return false; return ::rename(src, dst) == 0; }
 
-// Module registry
-static std::unordered_set<std::string> g_modules; // NOLINT
-void rt_module_register(const char* name) { if (!name) return; const std::lock_guard<std::mutex> lock(g_mu); g_modules.insert(std::string(name)); }
-bool rt_module_loaded(const char* name) { if (!name) return false; const std::lock_guard<std::mutex> lock(g_mu); return g_modules.find(std::string(name)) != g_modules.end(); }
-void rt_module_unload(const char* name) { if (!name) return; const std::lock_guard<std::mutex> lock(g_mu); g_modules.erase(std::string(name)); }
+// No module registry: imports are handled AOT in Codegen and linked statically.
+
+// ---- Subprocess shims ----
+static int32_t decode_exit_code(int rc) {
+#if defined(__unix__) || defined(__APPLE__)
+  if (rc == -1) return -1;
+  // system() returns wait status; decode exit status when possible
+  if (WIFEXITED(rc)) return static_cast<int32_t>(WEXITSTATUS(rc));
+  return static_cast<int32_t>(rc);
+#else
+  return static_cast<int32_t>(rc);
+#endif
+}
+
+int32_t subprocess_run(void* cmd) {
+  const char* c = string_data(cmd);
+  if (!c) return -1;
+  int rc = std::system(c);
+  return decode_exit_code(rc);
+}
+int32_t subprocess_call(void* cmd) { return subprocess_run(cmd); }
+int32_t subprocess_check_call(void* cmd) {
+  int32_t rc = subprocess_run(cmd);
+  if (rc != 0) {
+    rt_raise("CalledProcessError", "subprocess returned non-zero exit status");
+  }
+  return rc;
+}
 
 } // namespace pycc::rt
 
-// ===== Concurrency scaffolding (no-GIL model) =====
+extern "C" int32_t pycc_subprocess_run(void* cmd) { return ::pycc::rt::subprocess_run(cmd); }
+extern "C" int32_t pycc_subprocess_call(void* cmd) { return ::pycc::rt::subprocess_call(cmd); }
+extern "C" int32_t pycc_subprocess_check_call(void* cmd) { return ::pycc::rt::subprocess_check_call(cmd); }
+
+// ===== Concurrency scaffolding =====
 namespace pycc::rt {
 
 struct ThreadHandle {
@@ -1356,6 +1768,16 @@ void chan_close(RtChannelHandle* handle) {
 }
 void chan_send(RtChannelHandle* handle, void* value) {
   auto* ch = reinterpret_cast<Chan*>(handle); if (!ch) return;
+  // Enforce cross-thread immutability/message-passing discipline: only immutable payloads (or nullptr).
+  if (value != nullptr) {
+    auto* header = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(value) - sizeof(ObjectHeader));
+    const auto tag = static_cast<TypeTag>(header->tag);
+    const bool immutable = (tag == TypeTag::String) || (tag == TypeTag::Int) || (tag == TypeTag::Float) || (tag == TypeTag::Bool) || (tag == TypeTag::Bytes);
+    if (!immutable) {
+      rt_raise("TypeError", "chan_send: only immutable payloads (int/float/bool/str/bytes) allowed across threads");
+      return;
+    }
+  }
   std::unique_lock<std::mutex> lk(ch->mu);
   ch->cv_not_full.wait(lk, [&]{ return ch->closed || ch->q.size() < ch->cap; });
   if (ch->closed) return;
@@ -1379,3 +1801,467 @@ void atomic_int_store(RtAtomicIntHandle* h, long long v) { if (!h) return; auto*
 long long atomic_int_add_fetch(RtAtomicIntHandle* h, long long d) { if (!h) return 0; auto* a = reinterpret_cast<AtomicInt*>(h); return a->v.fetch_add(d, std::memory_order_acq_rel) + d; }
 
 } // namespace pycc::rt
+
+// ===== JSON shims =====
+namespace pycc::rt {
+
+static TypeTag type_of(void* obj) {
+  if (!obj) return TypeTag::Object;
+  auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(obj) - sizeof(ObjectHeader));
+  return static_cast<TypeTag>(h->tag);
+}
+
+// removed: superseded by json_dump_str with UTF-8/ensure_ascii
+static void indent_nl(std::string& out, int depth, int indent) {
+  out.push_back('\n');
+  for (int i=0;i<depth*indent;++i) out.push_back(' ');
+}
+
+struct DumpOpts { int indent{0}; bool ensureAscii{false}; const char* sepItem{nullptr}; const char* sepKv{nullptr}; bool sortKeys{false}; };
+
+static void emit_codepoint_escaped(uint32_t cp, std::string& out) {
+  auto emit_u4 = [&](uint16_t x){
+    static const char* H="0123456789abcdef";
+    out += "\\u";
+    out.push_back(H[(x>>12)&0xF]); out.push_back(H[(x>>8)&0xF]); out.push_back(H[(x>>4)&0xF]); out.push_back(H[x&0xF]);
+  };
+  if (cp <= 0xFFFF) emit_u4(static_cast<uint16_t>(cp));
+  else { uint32_t v = cp - 0x10000; uint16_t hi = 0xD800 | ((v>>10)&0x3FF); uint16_t lo = 0xDC00 | (v & 0x3FF); emit_u4(hi); emit_u4(lo); }
+}
+
+static void append_utf8_cp(uint32_t cp, std::string& o) {
+  if (cp<=0x7F) o.push_back(static_cast<char>(cp));
+  else if (cp<=0x7FF) { o.push_back(static_cast<char>(0xC0|(cp>>6))); o.push_back(static_cast<char>(0x80|(cp&0x3F))); }
+  else if (cp<=0xFFFF) { o.push_back(static_cast<char>(0xE0|(cp>>12))); o.push_back(static_cast<char>(0x80|((cp>>6)&0x3F))); o.push_back(static_cast<char>(0x80|(cp&0x3F))); }
+  else { o.push_back(static_cast<char>(0xF0|(cp>>18))); o.push_back(static_cast<char>(0x80|((cp>>12)&0x3F))); o.push_back(static_cast<char>(0x80|((cp>>6)&0x3F))); o.push_back(static_cast<char>(0x80|(cp&0x3F))); }
+}
+
+static void json_dump_str(const char* s, std::size_t n, std::string& out, const DumpOpts& opts) {
+  out.push_back('"');
+  for (std::size_t i = 0; i < n; ) {
+    unsigned char c = static_cast<unsigned char>(s[i]);
+    if (c < 0x80U) {
+      switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+          if (c < 0x20U) { char hex[3]; static const char* H="0123456789abcdef"; out += "\\u00"; hex[0]=H[(c>>4)&0xF]; hex[1]=H[c&0xF]; hex[2]='\0'; out += hex; }
+          else out.push_back(static_cast<char>(c));
+      }
+      ++i;
+    } else {
+      // Decode UTF-8 to code point
+      uint32_t cp = 0; int extra = 0;
+      if ((c & 0xE0U) == 0xC0U) { cp = c & 0x1FU; extra = 1; }
+      else if ((c & 0xF0U) == 0xE0U) { cp = c & 0x0FU; extra = 2; }
+      else if ((c & 0xF8U) == 0xF0U) { cp = c & 0x07U; extra = 3; }
+      else { // invalid start; emit as-is escaped
+        if (opts.ensureAscii) emit_codepoint_escaped(c, out); else out.push_back(static_cast<char>(c)); ++i; continue;
+      }
+      if (i + extra >= n) { // truncated, emit bytes
+        for (int k=0;k<=extra && i<n;++k,++i) { if (opts.ensureAscii) emit_codepoint_escaped(s[i], out); else out.push_back(s[i]); }
+        continue;
+      }
+      ++i; for (int k=0;k<extra;++k,++i) { cp = (cp << 6U) | (static_cast<unsigned char>(s[i]) & 0x3FU); }
+      if (opts.ensureAscii) emit_codepoint_escaped(cp, out); else append_utf8_cp(cp, out);
+    }
+  }
+  out.push_back('"');
+}
+
+static void json_dumps_rec(void* obj, std::string& out, const DumpOpts& opts, int depth) {
+  switch (type_of(obj)) {
+    case TypeTag::String: {
+      const char* d = string_data(obj); std::size_t n = string_len(obj); json_dump_str(d, n, out, opts); return;
+    }
+    case TypeTag::Int: {
+      out += std::to_string(static_cast<long long>(box_int_value(obj))); return;
+    }
+    case TypeTag::Float: {
+      char buf[64]; std::snprintf(buf, sizeof(buf), "%g", box_float_value(obj)); out += buf; return;
+    }
+    case TypeTag::Bool: { out += (box_bool_value(obj) ? "true" : "false"); return; }
+    case TypeTag::List: {
+      auto* meta = reinterpret_cast<std::size_t*>(obj); std::size_t len = meta[0]; auto** items = reinterpret_cast<void**>(meta + 2);
+      out.push_back('[');
+      if (len && opts.indent>0) indent_nl(out, depth+1, opts.indent);
+      for (std::size_t i=0;i<len;++i) {
+        if (i) {
+          if (opts.indent>0) { out.push_back(','); indent_nl(out, depth+1, opts.indent); }
+          else if (opts.sepItem) { out += opts.sepItem; }
+          else { out.push_back(','); }
+        }
+        json_dumps_rec(items[i], out, opts, depth+1);
+      }
+      if (len && opts.indent>0) indent_nl(out, depth, opts.indent);
+      out.push_back(']');
+      return;
+    }
+    case TypeTag::Dict: {
+      // Note: only string keys supported
+      auto* base = reinterpret_cast<unsigned char*>(obj);
+      auto* pm = reinterpret_cast<std::size_t*>(base);
+      const std::size_t cap = pm[1];
+      auto** keys = reinterpret_cast<void**>(pm + 2);
+      auto** vals = keys + cap;
+      out.push_back('{');
+      bool first = true;
+      if (opts.sortKeys) {
+        std::vector<void*> klist; klist.reserve(cap);
+        for (std::size_t i=0;i<cap;++i) if (keys[i] != nullptr) klist.push_back(keys[i]);
+        std::sort(klist.begin(), klist.end(), [](void* a, void* b){ return std::strcmp(string_data(a), string_data(b)) < 0; });
+        for (void* kk : klist) {
+          // find value
+          std::size_t idx = ptr_hash(kk) & (cap - 1);
+          while (keys[idx] != nullptr && keys[idx] != kk) { idx = (idx + 1) & (cap - 1); }
+          void* vv = (keys[idx] == kk) ? vals[idx] : nullptr;
+          if (type_of(kk) != TypeTag::String) { rt_raise("TypeError", "json.dumps: dict keys must be str"); out.clear(); return; }
+          if (!first) {
+            if (opts.indent>0) { out.push_back(','); indent_nl(out, depth+1, opts.indent); }
+            else if (opts.sepItem) { out += opts.sepItem; }
+            else { out.push_back(','); }
+          }
+          first=false;
+          const char* kd = string_data(kk); std::size_t kn = string_len(kk); json_dump_str(kd, kn, out, opts);
+          if (opts.indent>0) { out.push_back(':'); out.push_back(' '); }
+          else if (opts.sepKv) { out += opts.sepKv; }
+          else { out.push_back(':'); }
+          json_dumps_rec(vv, out, opts, depth+1);
+        }
+      } else {
+        for (std::size_t i=0;i<cap;++i) {
+          if (keys[i] != nullptr) {
+            if (type_of(keys[i]) != TypeTag::String) { rt_raise("TypeError", "json.dumps: dict keys must be str"); out.clear(); return; }
+            if (!first) {
+              if (opts.indent>0) { out.push_back(','); indent_nl(out, depth+1, opts.indent); }
+              else if (opts.sepItem) { out += opts.sepItem; }
+              else { out.push_back(','); }
+            }
+            first=false;
+            const char* kd = string_data(keys[i]); std::size_t kn = string_len(keys[i]); json_dump_str(kd, kn, out, opts);
+            if (opts.indent>0) { out.push_back(':'); out.push_back(' '); }
+            else if (opts.sepKv) { out += opts.sepKv; }
+            else { out.push_back(':'); }
+            json_dumps_rec(vals[i], out, opts, depth+1);
+          }
+        }
+      }
+      if (!first && opts.indent>0) indent_nl(out, depth, opts.indent);
+      out.push_back('}');
+      return;
+    }
+    case TypeTag::Bytes:
+    case TypeTag::ByteArray:
+    case TypeTag::Object:
+    default:
+      out += "null"; return;
+  }
+}
+
+void* json_dumps(void* obj) {
+  return json_dumps_ex(obj, 0);
+}
+
+void* json_dumps_ex(void* obj, int indent) {
+  std::string out;
+  if (indent < 0) indent = 0;
+  DumpOpts opts; opts.indent = indent; opts.ensureAscii = false; opts.sepItem = nullptr; opts.sepKv = nullptr; opts.sortKeys = false;
+  json_dumps_rec(obj, out, opts, 0);
+  if (rt_has_exception()) return nullptr;
+  return string_new(out.data(), out.size());
+}
+
+void* json_dumps_opts(void* obj, int ensure_ascii, int indent, const char* item_sep, const char* kv_sep, int sort_keys) {
+  DumpOpts opts; opts.indent = (indent<0)?0:indent; opts.ensureAscii = (ensure_ascii!=0); opts.sepItem = item_sep; opts.sepKv = kv_sep; opts.sortKeys = (sort_keys!=0);
+  std::string out; json_dumps_rec(obj, out, opts, 0);
+  if (rt_has_exception()) return nullptr;
+  return string_new(out.data(), out.size());
+}
+
+struct JsonParser {
+  const char* s; std::size_t n; std::size_t i;
+  explicit JsonParser(const char* s_, std::size_t n_) : s(s_), n(n_), i(0) {}
+  void skipws(){ while(i<n && (s[i]==' '||s[i]=='\n'||s[i]=='\r'||s[i]=='\t')) ++i; }
+  bool consume(char c){ skipws(); if (i<n && s[i]==c) { ++i; return true; } return false; }
+  bool match(const char* t){ skipws(); std::size_t j=0; while(t[j]&& i+j<n && s[i+j]==t[j]) ++j; if(!t[j]){ i+=j; return true;} return false; }
+  void append_utf8(uint32_t cp, std::string& o){ if (cp<=0x7F) o.push_back(static_cast<char>(cp)); else if (cp<=0x7FF){ o.push_back(static_cast<char>(0xC0|(cp>>6))); o.push_back(static_cast<char>(0x80|(cp&0x3F))); } else if (cp<=0xFFFF){ o.push_back(static_cast<char>(0xE0|(cp>>12))); o.push_back(static_cast<char>(0x80|((cp>>6)&0x3F))); o.push_back(static_cast<char>(0x80|(cp&0x3F))); } else { o.push_back(static_cast<char>(0xF0|(cp>>18))); o.push_back(static_cast<char>(0x80|((cp>>12)&0x3F))); o.push_back(static_cast<char>(0x80|((cp>>6)&0x3F))); o.push_back(static_cast<char>(0x80|(cp&0x3F))); } }
+  void* parseString(){
+    auto hexval=[&](char c)->int{ if(c>='0'&&c<='9') return c-'0'; if(c>='a'&&c<='f') return 10+(c-'a'); if(c>='A'&&c<='F') return 10+(c-'A'); return -1; };
+    skipws(); if (i>=n || s[i] != '"') { rt_raise("ValueError","json: expected string"); return nullptr; } ++i; std::string out;
+    while(i<n){ char c=s[i++]; if(c=='"') break; if(c=='\\'&& i<n){ char e=s[i++]; switch(e){ case '"': out.push_back('"'); break; case '\\': out.push_back('\\'); break; case '/': out.push_back('/'); break; case 'b': out.push_back('\b'); break; case 'f': out.push_back('\f'); break; case 'n': out.push_back('\n'); break; case 'r': out.push_back('\r'); break; case 't': out.push_back('\t'); break; case 'u': {
+              if (i+4>n) { rt_raise("ValueError","json: invalid unicode escape"); return nullptr; }
+              int h1=hexval(s[i]),h2=hexval(s[i+1]),h3=hexval(s[i+2]),h4=hexval(s[i+3]);
+              if (h1<0||h2<0||h3<0||h4<0) { rt_raise("ValueError","json: invalid unicode escape"); return nullptr; }
+              uint32_t cp = static_cast<uint32_t>((h1<<12)|(h2<<8)|(h3<<4)|h4);
+              i+=4;
+              if (cp>=0xD800 && cp<=0xDBFF) {
+                if (!(i+6<=n && s[i]=='\\' && s[i+1]=='u')) { rt_raise("ValueError","json: invalid unicode surrogate"); return nullptr; }
+                i+=2; int h5=hexval(s[i]),h6=hexval(s[i+1]),h7=hexval(s[i+2]),h8=hexval(s[i+3]);
+                if (h5<0||h6<0||h7<0||h8<0) { rt_raise("ValueError","json: invalid unicode surrogate"); return nullptr; }
+                uint32_t low = static_cast<uint32_t>((h5<<12)|(h6<<8)|(h7<<4)|h8); i+=4;
+                if (!(low>=0xDC00 && low<=0xDFFF)) { rt_raise("ValueError","json: invalid unicode surrogate"); return nullptr; }
+                cp = 0x10000 + (((cp-0xD800)<<10) | (low-0xDC00));
+              }
+              append_utf8(cp,out); break; }
+            default: out.push_back(e); break; }
+          } else { out.push_back(c);} }
+    return string_new(out.data(), out.size());
+  }
+  void* parseNumber(){ skipws(); std::size_t start=i; if(i<n && (s[i]=='-'||s[i]=='+')) ++i; bool hasDot=false, hasExp=false; while(i<n){ char c=s[i]; if(c>='0'&&c<='9'){ ++i; continue; } if(c=='.'){ hasDot=true; ++i; continue; } if(c=='e'||c=='E'){ hasExp=true; ++i; if(i<n && (s[i]=='+'||s[i]=='-')) ++i; while(i<n && s[i]>='0'&&s[i]<='9') ++i; break;} break; }
+  std::string t(s+start, i-start); if(hasDot||hasExp){ return box_float(std::strtod(t.c_str(), nullptr)); } else { long long v=std::strtoll(t.c_str(), nullptr, 10); return box_int(v);} }
+  void* parseValue(){ skipws(); if(i>=n){ rt_raise("ValueError","json: unexpected end"); return nullptr;} char c=s[i]; if(c=='"') return parseString(); if(c=='{' ) return parseObject(); if(c=='[') return parseArray(); if(c=='t'){ if(match("true")) return box_bool(true);} if(c=='f'){ if(match("false")) return box_bool(false);} if(c=='n'){ if(match("null")) return nullptr;} return parseNumber(); }
+  void* parseArray(){ if(!consume('[')){ rt_raise("ValueError","json: expected '['"); return nullptr;} void* list=nullptr; list = list_new(4); while(true){ skipws(); if(consume(']')) break; void* v = parseValue(); if(rt_has_exception()) return nullptr; list_push_slot(&list, v); skipws(); if(consume(']')) break; if(!consume(',')){ rt_raise("ValueError","json: expected ',' or ']'"); return nullptr; } }
+  return list; }
+  void* parseObject(){ if(!consume('{')){ rt_raise("ValueError","json: expected '{'"); return nullptr;} void* d = dict_new(8); while(true){ skipws(); if(consume('}')) break; void* k = parseString(); if(rt_has_exception()) return nullptr; skipws(); if(!consume(':')){ rt_raise("ValueError","json: expected ':'"); return nullptr; } void* v = parseValue(); if(rt_has_exception()) return nullptr; dict_set(&d, k, v); skipws(); if(consume('}')) break; if(!consume(',')){ rt_raise("ValueError","json: expected ',' or '}'"); return nullptr; } }
+  return d; }
+};
+
+void* json_loads(void* s) {
+  const char* d = string_data(s); std::size_t n = string_len(s);
+  JsonParser p(d, n);
+  void* v = p.parseValue();
+  return v;
+}
+
+// ---------------------------
+// Itertools (materialized list-based)
+// ---------------------------
+static inline void* rt_make_list2(void* a, void* b) {
+  void* pair = list_new(2);
+  list_push_slot(&pair, a);
+  list_push_slot(&pair, b);
+  return pair;
+}
+
+void* itertools_chain2(void* a, void* b) {
+  if (a == nullptr && b == nullptr) return list_new(0);
+  std::size_t la = (a ? list_len(a) : 0);
+  std::size_t lb = (b ? list_len(b) : 0);
+  void* out = list_new(la + lb);
+  for (std::size_t i = 0; i < la; ++i) { list_push_slot(&out, list_get(a, i)); }
+  for (std::size_t i = 0; i < lb; ++i) { list_push_slot(&out, list_get(b, i)); }
+  return out;
+}
+
+void* itertools_chain_from_iterable(void* list_of_lists) {
+  void* out = list_new(0);
+  if (list_of_lists == nullptr) return out;
+  const std::size_t n = list_len(list_of_lists);
+  for (std::size_t i = 0; i < n; ++i) {
+    void* sub = list_get(list_of_lists, i);
+    if (sub == nullptr) continue;
+    const std::size_t m = list_len(sub);
+    for (std::size_t j = 0; j < m; ++j) { list_push_slot(&out, list_get(sub, j)); }
+  }
+  return out;
+}
+
+void* itertools_product2(void* a, void* b) {
+  void* out = list_new(0);
+  const std::size_t la = (a ? list_len(a) : 0);
+  const std::size_t lb = (b ? list_len(b) : 0);
+  for (std::size_t i = 0; i < la; ++i) {
+    void* ai = list_get(a, i);
+    for (std::size_t j = 0; j < lb; ++j) {
+      void* bj = list_get(b, j);
+      void* pair = rt_make_list2(ai, bj);
+      list_push_slot(&out, pair);
+    }
+  }
+  return out;
+}
+
+static void rt_permute_rec(void* src, std::vector<int>& idx, int r, int depth, std::vector<int>& used, void*& out) {
+  if (depth == r) {
+    void* tup = list_new(static_cast<std::size_t>(r));
+    for (int k = 0; k < r; ++k) { list_push_slot(&tup, list_get(src, static_cast<std::size_t>(idx[k]))); }
+    list_push_slot(&out, tup);
+    return;
+  }
+  const std::size_t n = list_len(src);
+  for (std::size_t i = 0; i < n; ++i) {
+    if (used[static_cast<std::size_t>(i)]) continue;
+    used[static_cast<std::size_t>(i)] = 1;
+    idx[depth] = static_cast<int>(i);
+    rt_permute_rec(src, idx, r, depth + 1, used, out);
+    used[static_cast<std::size_t>(i)] = 0;
+  }
+}
+
+void* itertools_permutations(void* a, int r) {
+  if (a == nullptr) return list_new(0);
+  const std::size_t n = list_len(a);
+  int rr = (r <= 0) ? static_cast<int>(n) : r;
+  if (rr < 0 || static_cast<std::size_t>(rr) > n) return list_new(0);
+  void* out = list_new(0);
+  std::vector<int> idx(static_cast<std::size_t>(rr), 0);
+  std::vector<int> used(n, 0);
+  rt_permute_rec(a, idx, rr, 0, used, out);
+  return out;
+}
+
+static void rt_comb_rec(void* src, int r, int start, std::vector<int>& cur, void*& out, bool with_replacement) {
+  if (static_cast<int>(cur.size()) == r) {
+    void* tup = list_new(static_cast<std::size_t>(r));
+    for (int id : cur) { list_push_slot(&tup, list_get(src, static_cast<std::size_t>(id))); }
+    list_push_slot(&out, tup);
+    return;
+  }
+  const std::size_t n = list_len(src);
+  for (int i = start; i < static_cast<int>(n); ++i) {
+    cur.push_back(i);
+    rt_comb_rec(src, r, with_replacement ? i : (i + 1), cur, out, with_replacement);
+    cur.pop_back();
+  }
+}
+
+void* itertools_combinations(void* a, int r) {
+  if (a == nullptr || r <= 0) return list_new(0);
+  void* out = list_new(0);
+  std::vector<int> cur;
+  rt_comb_rec(a, r, 0, cur, out, false);
+  return out;
+}
+
+void* itertools_combinations_with_replacement(void* a, int r) {
+  if (a == nullptr || r <= 0) return list_new(0);
+  void* out = list_new(0);
+  std::vector<int> cur;
+  rt_comb_rec(a, r, 0, cur, out, true);
+  return out;
+}
+
+void* itertools_zip_longest2(void* a, void* b, void* fillvalue) {
+  void* out = list_new(0);
+  const std::size_t la = (a ? list_len(a) : 0);
+  const std::size_t lb = (b ? list_len(b) : 0);
+  const std::size_t lm = (la > lb) ? la : lb;
+  for (std::size_t i = 0; i < lm; ++i) {
+    void* ai = (i < la) ? list_get(a, i) : fillvalue;
+    void* bi = (i < lb) ? list_get(b, i) : fillvalue;
+    void* pair = rt_make_list2(ai, bi);
+    list_push_slot(&out, pair);
+  }
+  return out;
+}
+
+void* itertools_islice(void* a, int start, int stop, int step) {
+  if (a == nullptr) return list_new(0);
+  if (step == 0) step = 1;
+  const std::size_t n = list_len(a);
+  int s = (start < 0) ? 0 : start;
+  int e = (stop < 0 || stop > static_cast<int>(n)) ? static_cast<int>(n) : stop;
+  if (s > e) return list_new(0);
+  void* out = list_new(0);
+  for (int i = s; i < e; i += step) { list_push_slot(&out, list_get(a, static_cast<std::size_t>(i))); }
+  return out;
+}
+
+void* itertools_accumulate_sum(void* a) {
+  if (a == nullptr) return list_new(0);
+  const std::size_t n = list_len(a);
+  void* out = list_new(0);
+  bool useFloat = false;
+  if (n > 0) {
+    double d0 = box_float_value(list_get(a, 0));
+    long long i0 = box_int_value(list_get(a, 0));
+    useFloat = (d0 != static_cast<double>(i0));
+  }
+  double fsum = 0.0; long long isum = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (useFloat) {
+      fsum += box_float_value(list_get(a, i));
+      list_push_slot(&out, box_float(fsum));
+    } else {
+      isum += box_int_value(list_get(a, i));
+      list_push_slot(&out, box_int(isum));
+    }
+  }
+  return out;
+}
+
+void* itertools_repeat(void* obj, int times) {
+  if (times <= 0) return list_new(0);
+  void* out = list_new(static_cast<std::size_t>(times));
+  for (int i = 0; i < times; ++i) { list_push_slot(&out, obj); }
+  return out;
+}
+
+void* itertools_pairwise(void* a) {
+  if (a == nullptr) return list_new(0);
+  const std::size_t n = list_len(a);
+  if (n < 2) return list_new(0);
+  void* out = list_new(0);
+  for (std::size_t i = 0; i + 1 < n; ++i) {
+    void* pair = rt_make_list2(list_get(a, i), list_get(a, i + 1));
+    list_push_slot(&out, pair);
+  }
+  return out;
+}
+
+void* itertools_batched(void* a, int n) {
+  if (a == nullptr || n <= 0) return list_new(0);
+  const std::size_t len = list_len(a);
+  void* out = list_new(0);
+  for (std::size_t i = 0; i < len; i += static_cast<std::size_t>(n)) {
+    std::size_t end = i + static_cast<std::size_t>(n);
+    if (end > len) end = len;
+    void* batch = list_new(static_cast<std::size_t>(n));
+    for (std::size_t j = i; j < end; ++j) { list_push_slot(&batch, list_get(a, j)); }
+    list_push_slot(&out, batch);
+  }
+  return out;
+}
+
+void* itertools_compress(void* data, void* selectors) {
+  if (data == nullptr || selectors == nullptr) return list_new(0);
+  const std::size_t nd = list_len(data);
+  const std::size_t ns = list_len(selectors);
+  const std::size_t n = (nd < ns) ? nd : ns;
+  void* out = list_new(0);
+  for (std::size_t i = 0; i < n; ++i) {
+    void* sel = list_get(selectors, i);
+    bool truth = box_bool_value(sel);
+    if (truth) { list_push_slot(&out, list_get(data, i)); }
+  }
+  return out;
+}
+
+} // namespace pycc::rt
+
+extern "C" void* pycc_json_dumps(void* obj) { return ::pycc::rt::json_dumps(obj); }
+extern "C" void* pycc_json_loads(void* s) { return ::pycc::rt::json_loads(s); }
+extern "C" void* pycc_json_dumps_ex(void* obj, int indent) { return ::pycc::rt::json_dumps_ex(obj, indent); }
+extern "C" void* pycc_json_dumps_opts(void* obj, int ensure_ascii, int indent, const char* item_sep, const char* kv_sep, int sort_keys) { return ::pycc::rt::json_dumps_opts(obj, ensure_ascii, indent, item_sep, kv_sep, sort_keys); }
+
+extern "C" double pycc_time_time() { return ::pycc::rt::time_time(); }
+extern "C" long long pycc_time_time_ns() { return static_cast<long long>(::pycc::rt::time_time_ns()); }
+extern "C" double pycc_time_monotonic() { return ::pycc::rt::time_monotonic(); }
+extern "C" long long pycc_time_monotonic_ns() { return static_cast<long long>(::pycc::rt::time_monotonic_ns()); }
+extern "C" double pycc_time_perf_counter() { return ::pycc::rt::time_perf_counter(); }
+extern "C" long long pycc_time_perf_counter_ns() { return static_cast<long long>(::pycc::rt::time_perf_counter_ns()); }
+extern "C" double pycc_time_process_time() { return ::pycc::rt::time_process_time(); }
+extern "C" void pycc_time_sleep(double s) { ::pycc::rt::time_sleep(s); }
+
+extern "C" void* pycc_datetime_now() { return ::pycc::rt::datetime_now(); }
+extern "C" void* pycc_datetime_utcnow() { return ::pycc::rt::datetime_utcnow(); }
+extern "C" void* pycc_datetime_fromtimestamp(double ts) { return ::pycc::rt::datetime_fromtimestamp(ts); }
+extern "C" void* pycc_datetime_utcfromtimestamp(double ts) { return ::pycc::rt::datetime_utcfromtimestamp(ts); }
+
+// C ABI exports for itertools
+extern "C" void* pycc_itertools_chain2(void* a, void* b) { return ::pycc::rt::itertools_chain2(a,b); }
+extern "C" void* pycc_itertools_chain_from_iterable(void* x) { return ::pycc::rt::itertools_chain_from_iterable(x); }
+extern "C" void* pycc_itertools_product2(void* a, void* b) { return ::pycc::rt::itertools_product2(a,b); }
+extern "C" void* pycc_itertools_permutations(void* a, int r) { return ::pycc::rt::itertools_permutations(a,r); }
+extern "C" void* pycc_itertools_combinations(void* a, int r) { return ::pycc::rt::itertools_combinations(a,r); }
+extern "C" void* pycc_itertools_combinations_with_replacement(void* a, int r) { return ::pycc::rt::itertools_combinations_with_replacement(a,r); }
+extern "C" void* pycc_itertools_zip_longest2(void* a, void* b, void* fill) { return ::pycc::rt::itertools_zip_longest2(a,b,fill); }
+extern "C" void* pycc_itertools_islice(void* a, int start, int stop, int step) { return ::pycc::rt::itertools_islice(a,start,stop,step); }
+extern "C" void* pycc_itertools_accumulate_sum(void* a) { return ::pycc::rt::itertools_accumulate_sum(a); }
+extern "C" void* pycc_itertools_repeat(void* obj, int times) { return ::pycc::rt::itertools_repeat(obj,times); }
+extern "C" void* pycc_itertools_pairwise(void* a) { return ::pycc::rt::itertools_pairwise(a); }
+extern "C" void* pycc_itertools_batched(void* a, int n) { return ::pycc::rt::itertools_batched(a,n); }
+extern "C" void* pycc_itertools_compress(void* a, void* b) { return ::pycc::rt::itertools_compress(a,b); }

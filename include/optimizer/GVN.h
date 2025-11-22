@@ -16,7 +16,7 @@ class GVN : public Pass {
  public:
   struct Result { std::size_t classes{0}; std::size_t expressions{0}; };
   Result analyze(const ast::Module& module);
+  size_t run(ast::Module& m) override; // analysis-only: no transformations
 };
 
 } // namespace pycc::opt
-

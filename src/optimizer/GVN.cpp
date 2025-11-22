@@ -65,4 +65,9 @@ GVN::Result GVN::analyze(const Module& module) {
   return r;
 }
 
+size_t GVN::run(Module& m) {
+  (void)analyze(m);
+  return 0; // analysis only
+}
+
 } // namespace pycc::opt

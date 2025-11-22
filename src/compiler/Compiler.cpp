@@ -407,6 +407,23 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
   (void)optimizer.analyze(*mod);
   metrics.stop("OptimizeAST");
 
+  // Optional profile-guided toggles via environment: PYCC_OPT_PGO={aggressive,conservative}
+  if (const char* pgo = std::getenv("PYCC_OPT_PGO"); pgo && *pgo) {
+    const std::string mode = pgo;
+    if (mode == "aggressive") {
+      // Enable all main passes
+      const_cast<cli::Options&>(opts).optConstFold = true;
+      const_cast<cli::Options&>(opts).optAlgebraic = true;
+      const_cast<cli::Options&>(opts).optDCE = true;
+      const_cast<cli::Options&>(opts).optCFG = true;
+    } else if (mode == "conservative") {
+      const_cast<cli::Options&>(opts).optConstFold = true;
+      const_cast<cli::Options&>(opts).optAlgebraic = false;
+      const_cast<cli::Options&>(opts).optDCE = true;
+      const_cast<cli::Options&>(opts).optCFG = false;
+    }
+  }
+
   if (opts.optConstFold) {
     metrics.start("ConstFold");
     opt::ConstantFold constFold; // NOLINT(misc-const-correctness)

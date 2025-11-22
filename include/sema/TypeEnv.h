@@ -120,6 +120,27 @@ class TypeEnv {
         uint32_t inter = am & bm;
         sets_[name] = inter; // may be zero: contradictory
         if (inter != 0U && isSingle(inter)) { types_[name] = kindFor(inter); }
+        // Deep merge: list element types, tuple elements, and dict key/vals
+        auto lit = a.listElemSets_.find(name);
+        auto lit2 = b.listElemSets_.find(name);
+        if (lit != a.listElemSets_.end() && lit2 != b.listElemSets_.end()) {
+          listElemSets_[name] = (lit->second & lit2->second);
+        }
+        auto tit = a.tupleElemSets_.find(name);
+        auto tit2 = b.tupleElemSets_.find(name);
+        if (tit != a.tupleElemSets_.end() && tit2 != b.tupleElemSets_.end()) {
+          const auto& va = tit->second; const auto& vb = tit2->second;
+          const size_t n = std::min(va.size(), vb.size());
+          std::vector<uint32_t> out; out.reserve(n);
+          for (size_t i = 0; i < n; ++i) { out.push_back(va[i] & vb[i]); }
+          tupleElemSets_[name] = std::move(out);
+        }
+        auto ditk = a.dictKeySets_.find(name);
+        auto ditk2 = b.dictKeySets_.find(name);
+        auto ditv = a.dictValSets_.find(name);
+        auto ditv2 = b.dictValSets_.find(name);
+        if (ditk != a.dictKeySets_.end() && ditk2 != b.dictKeySets_.end()) { dictKeySets_[name] = (ditk->second & ditk2->second); }
+        if (ditv != a.dictValSets_.end() && ditv2 != b.dictValSets_.end()) { dictValSets_[name] = (ditv->second & ditv2->second); }
       }
     }
     for (const auto& kv : b.sets_) {
@@ -131,6 +152,21 @@ class TypeEnv {
         uint32_t inter = am & bm;
         sets_[name] = inter;
         if (inter != 0U && isSingle(inter)) { types_[name] = kindFor(inter); }
+        // Deep merge (mirror logic)
+        auto lit = a.listElemSets_.find(name);
+        auto lit2 = b.listElemSets_.find(name);
+        if (lit != a.listElemSets_.end() && lit2 != b.listElemSets_.end()) { listElemSets_[name] = (lit->second & lit2->second); }
+        auto tit = a.tupleElemSets_.find(name);
+        auto tit2 = b.tupleElemSets_.find(name);
+        if (tit != a.tupleElemSets_.end() && tit2 != b.tupleElemSets_.end()) {
+          const auto& va = tit->second; const auto& vb = tit2->second; const size_t n = std::min(va.size(), vb.size()); std::vector<uint32_t> out; out.reserve(n); for (size_t i=0;i<n;++i) out.push_back(va[i] & vb[i]); tupleElemSets_[name] = std::move(out);
+        }
+        auto ditk = a.dictKeySets_.find(name);
+        auto ditk2 = b.dictKeySets_.find(name);
+        auto ditv = a.dictValSets_.find(name);
+        auto ditv2 = b.dictValSets_.find(name);
+        if (ditk != a.dictKeySets_.end() && ditk2 != b.dictKeySets_.end()) { dictKeySets_[name] = (ditk->second & ditk2->second); }
+        if (ditv != a.dictValSets_.end() && ditv2 != b.dictValSets_.end()) { dictValSets_[name] = (ditv->second & ditv2->second); }
       }
     }
   }

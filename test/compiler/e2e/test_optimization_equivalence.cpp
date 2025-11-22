@@ -26,11 +26,11 @@ static void write_file(const std::string& path, const std::string& s) {
 }
 
 static void ensure_run_cwd() {
-  // Make direct invocation robust (outside of ctest-provided RUN_DIR).
-  // Create a local run directory under the current working directory and chdir into it.
+  // For direct invocation (outside of CTest), create a run directory under build/ and chdir into it.
+  // When invoked by CTest, we honor PYCC_TEST_STAY_CWD=1 and keep the working directory untouched.
   const char* stay = std::getenv("PYCC_TEST_STAY_CWD");
   if (stay && std::string(stay) == "1") return;
-  const std::string dir = "run_local";
+  const std::string dir = "build/run_local";
   (void)std::system((std::string("mkdir -p ") + dir).c_str());
   (void)chdir(dir.c_str());
 }

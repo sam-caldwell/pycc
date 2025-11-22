@@ -56,13 +56,32 @@ void gc_reset_for_tests();
 
 // String objects (opaque)
 void* string_new(const char* data, std::size_t len);
+// String length in bytes
 std::size_t string_len(void* str);
 const char* string_data(void* str);
 void* string_from_cstr(const char* cstr);
 void* string_concat(void* a, void* b);
+// Slice uses Unicode code points (start, length)
 void* string_slice(void* s, std::size_t start, std::size_t len);
 void* string_repeat(void* s, std::size_t n);
 bool string_contains(void* haystack, void* needle);
+// Unicode code point length helper
+std::size_t string_charlen(void* str);
+
+// Unicode normalization and case handling (optional full support)
+enum class NormalizationForm : uint32_t { NFC = 0, NFD = 1, NFKC = 2, NFKD = 3 };
+// When ICU is available (PYCC_WITH_ICU), these perform full normalization.
+// Otherwise they return a shallow copy (no-op normalization) for portability.
+void* string_normalize(void* s, NormalizationForm form);
+void* string_casefold(void* s);
+
+// Encoding/decoding helpers
+// Encode to requested encoding; supported: "utf-8" and "ascii".
+// errors: "strict" (default) or "replace".
+void* string_encode(void* s, const char* encoding, const char* errors);
+// Decode bytes as requested encoding; supported: "utf-8" and "ascii".
+// errors: "strict" (default) or "replace".
+void* bytes_decode(void* b, const char* encoding, const char* errors);
 
 // Unicode / text encodings (helpers operate on raw buffers)
 bool utf8_is_valid(const char* data, std::size_t len);
@@ -151,13 +170,66 @@ bool os_mkdir(const char* path, int mode /*octal*/);
 bool os_remove(const char* path);
 bool os_rename(const char* src, const char* dst);
 
-// Module lifecycle registry (simple)
-void rt_module_register(const char* name);
-bool rt_module_loaded(const char* name);
-void rt_module_unload(const char* name);
+// Subprocess module shims
+// Execute shell command string. Returns exit code (decoded on POSIX when possible).
+int32_t subprocess_run(void* cmd);
+int32_t subprocess_call(void* cmd);
+int32_t subprocess_check_call(void* cmd); // raises CalledProcessError on non-zero
 
-} // namespace pycc::rt
-// Concurrency scaffolding (no-GIL model)
+// Sys module shims
+void* sys_platform(); // returns String
+void* sys_version();  // returns String
+int64_t sys_maxsize();
+void sys_exit(int32_t code); // test-safe: records last code; may exit in standalone mode
+
+// JSON module shims
+void* json_dumps(void* obj); // returns String or nullptr on error
+void* json_dumps_ex(void* obj, int indent); // pretty-print with indent spaces (0 = compact)
+void* json_dumps_opts(void* obj, int ensure_ascii, int indent, const char* item_sep, const char* kv_sep, int sort_keys);
+void* json_loads(void* s);   // returns parsed object or nullptr on error
+
+// Time module shims
+double time_time();
+int64_t time_time_ns();
+double time_monotonic();
+int64_t time_monotonic_ns();
+double time_perf_counter();
+int64_t time_perf_counter_ns();
+double time_process_time();
+void time_sleep(double seconds);
+
+// Datetime module shims (return ISO-8601 strings)
+void* datetime_now();
+void* datetime_utcnow();
+void* datetime_fromtimestamp(double ts);
+void* datetime_utcfromtimestamp(double ts);
+
+// Itertools (materialized list-based helpers for AOT subset)
+// chain: concatenates two or more lists; from_iterable flattens a list of lists.
+void* itertools_chain2(void* a, void* b);
+void* itertools_chain_from_iterable(void* list_of_lists);
+// product of two lists -> list of 2-element lists
+void* itertools_product2(void* a, void* b);
+// permutations/combinations over a list; results as list of lists
+void* itertools_permutations(void* a, int r /* <=0 means len(a) */);
+void* itertools_combinations(void* a, int r);
+void* itertools_combinations_with_replacement(void* a, int r);
+// zip_longest of two lists with fillvalue
+void* itertools_zip_longest2(void* a, void* b, void* fillvalue);
+// islice(list, start, stop, step)
+void* itertools_islice(void* a, int start, int stop, int step);
+// accumulate numbers (int/float) with sum; returns list of prefix sums
+void* itertools_accumulate_sum(void* a);
+// repeat(obj, times)
+void* itertools_repeat(void* obj, int times);
+// pairwise(list) -> list of [a,b]
+void* itertools_pairwise(void* a);
+// batched(list, n) -> list of batches (lists)
+void* itertools_batched(void* a, int n);
+// compress(data, selectors) -> elements where selector truthy
+void* itertools_compress(void* data, void* selectors);
+
+// Concurrency scaffolding
 using RtStart = void(*)(const void* payload, std::size_t len, void** ret, std::size_t* ret_len);
 struct RtThreadHandle; // opaque
 struct RtChannelHandle; // opaque
@@ -179,3 +251,4 @@ RtAtomicIntHandle* atomic_int_new(long long initial);
 long long atomic_int_load(RtAtomicIntHandle* a);
 void atomic_int_store(RtAtomicIntHandle* a, long long v);
 long long atomic_int_add_fetch(RtAtomicIntHandle* a, long long delta);
+} // namespace pycc::rt

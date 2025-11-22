@@ -35,5 +35,9 @@ std::unordered_map<std::string, RangeAnalysis::Range> RangeAnalysis::analyze(con
   return out;
 }
 
-} // namespace pycc::opt
+size_t RangeAnalysis::run(Module& m) {
+  (void)analyze(m);
+  return 0; // analysis only
+}
 
+} // namespace pycc::opt
