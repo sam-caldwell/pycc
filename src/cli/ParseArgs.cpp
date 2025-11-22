@@ -1,146 +1,14 @@
 #include "cli/ParseArgs.h"
 #include "cli/ColorMode.h"
 #include "cli/Options.h"
-#include <algorithm>
-#include <cstddef>
+#include "cli/ParseArgsInternals.h"
 #include <iostream>
-#include <string>
-#include <string_view>
 
 namespace pycc::cli {
     /***
      * Name: pycc::cli::ParseArgs
      * Purpose: Minimal GCC-like CLI argument parser for pycc.
      */
-    static bool isFlag(const std::string_view arg, const std::string_view flag) {
-        return arg == flag;
-    }
-
-    static inline AstLogMode parseAstLogValue(const std::string_view value) {
-        using enum pycc::cli::AstLogMode;
-        if (value == "after") { return After; }
-        if (value == "both") { return Both; }
-        return Before;
-    }
-
-    static inline ColorMode parseColorValue(const std::string_view value) {
-        using enum pycc::cli::ColorMode;
-        if (value == "always") { return Always; }
-        if (value == "never") { return Never; }
-        return Auto;
-    }
-
-    static inline void collectRemainingAsInputs(const std::size_t startIndex, const int argc, char **argv, Options &out) {
-        for (int j = static_cast<int>(startIndex); j < argc; ++j) {
-            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-            out.inputs.emplace_back(argv[j]);
-        }
-    }
-
-    static inline bool isUnknownOptionArg(const std::string_view arg) {
-        return !arg.empty() && arg[0] == '-';
-    }
-
-    static inline bool hasConflictingModes(const Options &opts) {
-        return opts.emitAssemblyOnly && opts.compileOnly;
-    }
-
-    static bool applySimpleBoolFlags(const std::string_view arg, Options &out) {
-        if (isFlag(arg, "-h")) {
-            out.showHelp = true;
-            return true;
-        }
-        if (isFlag(arg, "--help")) {
-            out.showHelp = true;
-            return true;
-        }
-        if (isFlag(arg, "-S")) {
-            out.emitAssemblyOnly = true;
-            return true;
-        }
-        if (isFlag(arg, "-c")) {
-            out.compileOnly = true;
-            return true;
-        }
-        if (isFlag(arg, "--metrics")) {
-            out.metrics = true;
-            return true;
-        }
-        if (isFlag(arg, "--metrics-json")) {
-            out.metricsJson = true;
-            return true;
-        }
-        if (isFlag(arg, "--opt-const-fold")) {
-            out.optConstFold = true;
-            return true;
-        }
-        if (isFlag(arg, "--opt-algebraic")) {
-            out.optAlgebraic = true;
-            return true;
-        }
-        if (isFlag(arg, "--opt-dce")) {
-            out.optDCE = true;
-            return true;
-        }
-        if (isFlag(arg, "--opt-cfg")) {
-            out.optCFG = true;
-            return true;
-        }
-        if (isFlag(arg, "--log-lexer")) {
-            out.logLexer = true;
-            return true;
-        }
-        if (isFlag(arg, "--log-ast")) {
-            out.logAst = true;
-            return true;
-        }
-        if (isFlag(arg, "--log-codegen")) {
-            out.logCodegen = true;
-            return true;
-        }
-        if (isFlag(arg, "--ast-log")) {
-            out.astLog = AstLogMode::Before;
-            return true;
-        }
-        return false;
-    }
-
-    static bool applyPrefixedOptions(const std::string_view arg, Options &out) {
-        if (constexpr std::string_view astLogPrefix{"--ast-log="}; arg.rfind(astLogPrefix, 0) == 0) {
-            out.astLog = parseAstLogValue(arg.substr(astLogPrefix.size()));
-            return true;
-        }
-
-        if (constexpr std::string_view logPathPrefix{"--log-path="}; arg.rfind(logPathPrefix, 0) == 0) {
-            out.logPath = std::string(arg.substr(logPathPrefix.size()));
-            return true;
-        }
-
-        if (constexpr std::string_view colorPrefix{"--color="}; arg.rfind(colorPrefix, 0) == 0) {
-            out.color = parseColorValue(arg.substr(colorPrefix.size()));
-            return true;
-        }
-
-        if (constexpr std::string_view diagPrefix{"--diag-context="}; arg.rfind(diagPrefix, 0) == 0) {
-            int numLines = 0;
-            try { numLines = std::stoi(std::string(arg.substr(diagPrefix.size()))); } catch (...) { numLines = 0; }
-            out.diagContext = std::max(numLines, 0);
-            return true;
-        }
-        return false;
-    }
-
-    static bool handleOutputFileFlag(int &idx, const int argc, char **argv, Options &out) {
-        // -o <file>
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        const std::string_view arg{argv[idx]};
-        if (!isFlag(arg, "-o")) { return false; }
-        if (idx + 1 >= argc) { return false; }
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        out.outputFile = argv[++idx];
-        return true;
-    }
-
     bool ParseArgs(const int argc, char **argv, Options &out) {
         for (int i = 1; i < argc; ++i) {
             // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
@@ -150,23 +18,23 @@ namespace pycc::cli {
                 out.defines.emplace_back(std::string(arg.substr(2)));
                 continue;
             }
-            if (isFlag(arg, "--")) {
-                collectRemainingAsInputs(i + 1, argc, argv, out);
+            if (detail::isFlag(arg, "--")) {
+                detail::collectRemainingAsInputs(i + 1, argc, argv, out);
                 break;
             }
-            if (handleOutputFileFlag(i, argc, argv, out)) { continue; }
-            if (applySimpleBoolFlags(arg, out)) { continue; }
-            if (applyPrefixedOptions(arg, out)) { continue; }
+            if (detail::handleOutputFileFlag(i, argc, argv, out)) { continue; }
+            if (detail::applySimpleBoolFlags(arg, out)) { continue; }
+            if (detail::applyPrefixedOptions(arg, out)) { continue; }
 
             // Positional
-            if (isUnknownOptionArg(arg)) {
+            if (detail::isUnknownOptionArg(arg)) {
                 std::cerr << "pycc: unknown option '" << arg << "'\n";
                 return false;
             }
             out.inputs.emplace_back(std::string(arg));
         }
 
-        if (hasConflictingModes(out)) {
+        if (detail::hasConflictingModes(out)) {
             std::cerr << "pycc: cannot use -S and -c together\n";
             return false;
         }
