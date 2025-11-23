@@ -8,7 +8,7 @@
 #include <string>
 #include <sys/wait.h>
 
-TEST(ExecuteListLen, DISABLED_ReturnsThree) {
+TEST(ExecuteListLen, ReturnsThree) {
   namespace fs = std::filesystem;
   std::vector<fs::path> candidates = {fs::path("../../../demos"), fs::path("../../demos"), fs::path("demos")};
   fs::path demosDir;

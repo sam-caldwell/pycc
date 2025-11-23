@@ -16,6 +16,8 @@ presets:
 
 configure:
 	@echo "[configure] Configuring in $(OUTDIR)"
+	@# Remove any stray top-level Testing directory from prior runs
+	@$(CMAKE) -E rm -r Testing || true
 	@CC=$(CC) CXX=$(CXX) CMAKE_C_COMPILER=$(CC) CMAKE_CXX_COMPILER=$(CXX) $(CMAKE) -S . -B $(OUTDIR) -G Ninja
 
 build:
@@ -34,6 +36,8 @@ clean:
 	@$(CMAKE) -E rm -r $(OUTDIR) || true
 	@# Remove any IDE-generated cmake build trees if present
 	@sh -c 'set -eu; for d in cmake-build-*; do [ -e "$$d" ] && $(CMAKE) -E rm -r "$$d" || true; done'
+	@# Remove any stray Testing/ directory in repo root (tests should write under build/Testing)
+	@$(CMAKE) -E rm -r Testing || true
 
 lint:
 	@echo "[lint] configuring lint tree at $(OUTDIR_LINT)"

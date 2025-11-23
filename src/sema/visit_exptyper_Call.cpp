@@ -97,6 +97,16 @@ void ExpressionTyper::visit(const ast::Call& callNode) {
       out = ast::TypeKind::Int; const_cast<ast::Call&>(callNode).setType(out);
       return;
     }
+    // Builtin: obj_get(o, i) -> str (opaque object field access by index)
+    if (nameNode->id == "obj_get") {
+      if (callNode.args.size() != 2) { addDiag(*diags, "obj_get() takes two arguments", &callNode); ok = false; return; }
+      // Only enforce that the index is an int; first arg is an opaque object pointer
+      ExpressionTyper idxTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets}; if (callNode.args[1]) callNode.args[1]->accept(idxTyper);
+      if (!idxTyper.ok) { ok = false; return; }
+      if (!typeIsInt(idxTyper.out)) { addDiag(*diags, "obj_get index must be int", callNode.args[1].get()); ok = false; return; }
+      out = ast::TypeKind::Str; const_cast<ast::Call&>(callNode).setType(out);
+      return;
+    }
     auto it = sigs->find(nameNode->id);
     if (it == sigs->end()) {
       // Could be a variable alias to multiple polymorphic targets

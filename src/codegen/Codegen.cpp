@@ -38,6 +38,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cmath>
 #include <exception>
 #include <fstream>
 #include <functional>
@@ -1142,7 +1143,17 @@ namespace pycc::codegen {
                     std::ostringstream ss;
                     ss.setf(std::ios::fmtflags(0), std::ios::floatfield);
                     ss.precision(17);
-                    ss << fl.value;
+                    const double v = fl.value;
+                    if (std::isfinite(v) && std::floor(v) == v) {
+                        // Ensure a decimal point for integral-valued floats (e.g., 16.0)
+                        std::ostringstream fs;
+                        fs.setf(std::ios::fixed, std::ios::floatfield);
+                        fs.precision(1);
+                        fs << v;
+                        out = Value{fs.str(), ValKind::F64};
+                        return;
+                    }
+                    ss << v;
                     out = Value{ss.str(), ValKind::F64};
                 }
 

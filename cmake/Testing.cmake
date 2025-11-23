@@ -14,6 +14,12 @@ if(BUILD_TESTING)
 
   enable_testing()
 
+  # Create an isolated run directory under the build tree for all test binaries,
+  # so any relative paths like ../Testing resolve to build/Testing instead of repo root.
+  string(TIMESTAMP RUN_TS "%Y%m%d-%H%M%S")
+  set(RUN_DIR ${CMAKE_BINARY_DIR}/run-${RUN_TS})
+  file(MAKE_DIRECTORY ${RUN_DIR})
+
   # Discover tests following: test/{component}/{unit,integration,e2e}/*.cpp
   file(GLOB TEST_UNIT_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_SOURCE_DIR}/test/*/unit/*.cpp)
@@ -28,8 +34,10 @@ if(BUILD_TESTING)
     add_executable(test_unit ${TEST_UNIT_SOURCES})
     target_link_libraries(test_unit PRIVATE pycc_core GTest::gtest_main)
     target_include_directories(test_unit PRIVATE ${CMAKE_SOURCE_DIR}/include)
-    # Re-enable a focused subset of unit tests (SSAGVN)
-    add_test(NAME test_unit COMMAND test_unit --gtest_color=yes --gtest_print_time=1 --gtest_fail_fast=1 --gtest_filter=SSAGVN.*)
+    # Re-enable a focused subset of unit tests (SSAGVN + GVN)
+    add_test(NAME test_unit COMMAND test_unit --gtest_color=yes --gtest_print_time=1 --gtest_fail_fast=1 --gtest_filter=SSAGVN.*:GVN.*)
+    # Keep unit tests running inside the build tree to ensure Testing/ stays under build/
+    set_tests_properties(test_unit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     set_tests_properties(test_unit PROPERTIES TIMEOUT 300)
   endif()
 
@@ -38,6 +46,10 @@ if(BUILD_TESTING)
     target_link_libraries(test_integration PRIVATE pycc_core GTest::gtest_main)
     target_include_directories(test_integration PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME test_integration COMMAND test_integration --gtest_color=yes --gtest_print_time=1 --gtest_fail_fast=1)
+    # Run integration tests under the run directory so ../Testing lives under build/
+    set_tests_properties(test_integration PROPERTIES WORKING_DIRECTORY ${RUN_DIR})
+    # Provide a convenient ./pycc in RUN_DIR for integration tests that expect it
+    file(CREATE_LINK ${CMAKE_BINARY_DIR}/pycc ${RUN_DIR}/pycc SYMBOLIC)
     set_tests_properties(test_integration PROPERTIES TIMEOUT 300)
   endif()
 
@@ -52,10 +64,7 @@ if(BUILD_TESTING)
     if(TARGET pycc)
       add_dependencies(test_e2e pycc)
     endif()
-    # Create an isolated run directory with timestamp to avoid polluting the build root
-    string(TIMESTAMP RUN_TS "%Y%m%d-%H%M%S")
-    set(RUN_DIR ${CMAKE_BINARY_DIR}/run-${RUN_TS})
-    file(MAKE_DIRECTORY ${RUN_DIR})
+    # Run e2e tests under the run directory
     set_tests_properties(test_e2e PROPERTIES WORKING_DIRECTORY ${RUN_DIR})
     # Tell tests to stay in the CTest-provided working directory (do not create run_local)
     set_tests_properties(test_e2e PROPERTIES ENVIRONMENT "PYCC_TEST_STAY_CWD=1")
@@ -68,8 +77,31 @@ if(BUILD_TESTING)
     add_executable(test_runtime_only ${TEST_RUNTIME_SOURCES})
     target_link_libraries(test_runtime_only PRIVATE pycc_runtime GTest::gtest_main)
     target_include_directories(test_runtime_only PRIVATE ${CMAKE_SOURCE_DIR}/include)
-    # Re-enable a focused runtime-only test subset to validate deep copy stability
-    add_test(NAME test_runtime_only COMMAND test_runtime_only --gtest_color=yes --gtest_print_time=1 --gtest_fail_fast=1 --gtest_filter=RuntimeCopy.DeepDictCopy:RuntimeCopy.ShallowListCopy)
+    # Re-enable a broader runtime-only subset known to be hermetic and fast.
+    add_test(NAME test_runtime_only COMMAND test_runtime_only --gtest_color=yes --gtest_print_time=1 --gtest_fail_fast=1 --gtest_filter=
+      RuntimeCopy.*:
+      RuntimeTypes.*:
+      RuntimeUnicode.*:
+      RuntimeUnicodedata.*:
+      RuntimeString.*:
+      RuntimeStruct.*:
+      RuntimeHashlib.*:
+      RuntimeHmac.*:
+      RuntimeBase64.*:
+      RuntimeBoxed.*:
+      RuntimeExceptions.*:
+      RuntimeRe.*:
+      RuntimePprint.*:
+      RuntimeOS.*:
+      RuntimeOsPath.*:
+      RuntimeSys.*:
+      RuntimeIO.*:
+      RuntimeIOOS.*:
+      RuntimeIOFailures.*:
+      RuntimeOSFS.*:
+      RuntimeGlob.*:
+      RuntimeSubprocess.*:
+      RuntimeTempfile.*)
     # Shorter default timeout for runtime-only tests
     set_tests_properties(test_runtime_only PROPERTIES TIMEOUT 120)
   endif()

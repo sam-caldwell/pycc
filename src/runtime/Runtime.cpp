@@ -944,11 +944,11 @@ static std::size_t ptr_hash(void* p) {
 
 static void* dict_new_locked(std::size_t capacity) {
   if (capacity < 8) { capacity = 8; }
-  const std::size_t payloadSize = (sizeof(std::size_t) * 2) + (capacity * sizeof(void*)) + (capacity * sizeof(void*));
+  const std::size_t payloadSize = (sizeof(std::size_t) * 3) + (capacity * sizeof(void*)) + (capacity * sizeof(void*));
   auto* bytes = static_cast<unsigned char*>(alloc_raw(payloadSize, TypeTag::Dict));
   auto* meta = reinterpret_cast<std::size_t*>(bytes);
-  meta[0] = 0; meta[1] = capacity; // len, cap
-  auto** keys = reinterpret_cast<void**>(meta + 2);
+  meta[0] = 0; meta[1] = capacity; meta[2] = 0; // len, cap, ver
+  auto** keys = reinterpret_cast<void**>(meta + 3);
   auto** vals = keys + capacity;
   for (std::size_t i = 0; i < capacity; ++i) { keys[i] = nullptr; vals[i] = nullptr; }
   maybe_request_bg_gc_unlocked();
@@ -964,12 +964,12 @@ static void dict_rehash(void** dict_slot, std::size_t newCap) {
   auto* old = *dict_slot;
   auto* meta = reinterpret_cast<std::size_t*>(old);
   const std::size_t cap = meta[1];
-  auto** keys = reinterpret_cast<void**>(meta + 2);
+  auto** keys = reinterpret_cast<void**>(meta + 3);
   auto** vals = keys + cap;
-  auto* bytes = static_cast<unsigned char*>(alloc_raw((sizeof(std::size_t) * 2) + (newCap * sizeof(void*)) + (newCap * sizeof(void*)), TypeTag::Dict));
+  auto* bytes = static_cast<unsigned char*>(alloc_raw((sizeof(std::size_t) * 3) + (newCap * sizeof(void*)) + (newCap * sizeof(void*)), TypeTag::Dict));
   auto* nmeta = reinterpret_cast<std::size_t*>(bytes);
-  nmeta[0] = 0; nmeta[1] = newCap;
-  auto** nkeys = reinterpret_cast<void**>(nmeta + 2);
+  nmeta[0] = 0; nmeta[1] = newCap; nmeta[2] = meta[2] + 1; // bump version on rehash
+  auto** nkeys = reinterpret_cast<void**>(nmeta + 3);
   auto** nvals = nkeys + newCap;
   for (std::size_t i = 0; i < newCap; ++i) { nkeys[i] = nullptr; nvals[i] = nullptr; }
   // reinsertion
@@ -990,17 +990,19 @@ void dict_set(void** dict_slot, void* key, void* value) {
   if (*dict_slot == nullptr) { *dict_slot = dict_new_locked(8); }
   auto* meta = reinterpret_cast<std::size_t*>(*dict_slot);
   std::size_t len = meta[0]; const std::size_t cap = meta[1];
-  auto** keys = reinterpret_cast<void**>(meta + 2);
+  auto** keys = reinterpret_cast<void**>(meta + 3);
   auto** vals = keys + cap;
   // grow if load factor > 0.7 (cap should be power of two for masking)
   if ((len + 1) * 10 > cap * 7) { dict_rehash(dict_slot, cap * 2); meta = reinterpret_cast<std::size_t*>(*dict_slot); len = meta[0]; }
-  const std::size_t ncap = meta[1]; keys = reinterpret_cast<void**>(meta + 2); vals = keys + ncap;
+  const std::size_t ncap = meta[1]; keys = reinterpret_cast<void**>(meta + 3); vals = keys + ncap;
   std::size_t idx = ptr_hash(key) & (ncap - 1);
   while (true) {
     if (keys[idx] == nullptr || keys[idx] == key) {
       if (keys[idx] == nullptr) { meta[0] = len + 1; }
       gc_pre_barrier(&keys[idx]); keys[idx] = key; gc_write_barrier(&keys[idx], key);
       gc_pre_barrier(&vals[idx]); vals[idx] = value; gc_write_barrier(&vals[idx], value);
+      // bump version on any set (insert or update)
+      meta[2] = meta[2] + 1;
       break;
     }
     idx = (idx + 1) & (ncap - 1);
@@ -1012,7 +1014,7 @@ void* dict_get(void* dict, void* key) {
   if (dict == nullptr) { return nullptr; }
   auto* meta = reinterpret_cast<std::size_t*>(dict);
   const std::size_t cap = meta[1];
-  auto** keys = reinterpret_cast<void**>(meta + 2);
+  auto** keys = reinterpret_cast<void**>(meta + 3);
   auto** vals = keys + cap;
   // Fast path: pointer-identity lookup via open addressing
   std::size_t idx = ptr_hash(key) & (cap - 1);
@@ -1047,42 +1049,58 @@ std::size_t dict_len(void* dict) {
 }
 
 extern "C" void* pycc_dict_iter_new(void* dict) {
-  // Avoid holding g_mu here: object_new/box_int acquire it internally.
+  // Build a stable snapshot list of keys. We avoid holding runtime-global locks while allocating.
+  // If the dict mutates during snapshot, retry a few times to capture a consistent view.
+  void* snap = list_new(8);
+  if (dict != nullptr) {
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      // Create a fresh list for this attempt
+      snap = list_new(8);
+      auto* meta = reinterpret_cast<std::size_t*>(dict);
+      const std::size_t cap = meta[1];
+      const std::size_t ver = meta[2];
+      auto** keys = reinterpret_cast<void**>(meta + 3);
+      for (std::size_t i = 0; i < cap; ++i) {
+        void* k = keys[i];
+        if (k != nullptr) { list_push_slot(&snap, k); }
+      }
+      // Verify no mutation occurred during snapshot
+      auto* meta2 = reinterpret_cast<std::size_t*>(dict);
+      if (meta2[2] == ver) { break; }
+      // else retry
+    }
+  }
+  // Iterator layout: values[0] = snapshot list ptr, values[1] = next index (boxed int)
   void* it = object_new(2);
-  auto* meta = reinterpret_cast<std::size_t*>(it);
-  auto** vals = reinterpret_cast<void**>(meta + 1);
-  gc_pre_barrier(&vals[0]); vals[0] = dict; gc_write_barrier(&vals[0], dict);
+  auto* meta_it = reinterpret_cast<std::size_t*>(it);
+  auto** vals_it = reinterpret_cast<void**>(meta_it + 1);
+  gc_pre_barrier(&vals_it[0]); vals_it[0] = snap; gc_write_barrier(&vals_it[0], snap);
   void* zero = box_int(0);
-  gc_pre_barrier(&vals[1]); vals[1] = zero; gc_write_barrier(&vals[1], zero);
+  gc_pre_barrier(&vals_it[1]); vals_it[1] = zero; gc_write_barrier(&vals_it[1], zero);
   return it;
 }
 
 extern "C" void* pycc_dict_iter_next(void* it) {
   if (it == nullptr) { return nullptr; }
-  // Do not hold g_mu while allocating box_int; read dictionary snapshot non-atomically.
+  // Do not hold g_mu while allocating box_int; iterate over a stable snapshot list.
   auto* meta_it = reinterpret_cast<std::size_t*>(it);
   auto** vals_it = reinterpret_cast<void**>(meta_it + 1);
-  void* dict = vals_it[0]; if (dict == nullptr) return nullptr;
-  auto* meta = reinterpret_cast<std::size_t*>(dict);
-  const std::size_t cap = meta[1];
-  auto** keys = reinterpret_cast<void**>(meta + 2);
+  void* snap = vals_it[0]; if (snap == nullptr) return nullptr;
+  const std::size_t n = list_len(snap);
   std::size_t idx = static_cast<std::size_t>(box_int_value(vals_it[1]));
-  while (idx < cap) {
-    void* k = keys[idx];
-    ++idx;
-    if (k != nullptr) {
-      void* nextIdx = box_int(static_cast<int64_t>(idx));
-      gc_pre_barrier(&vals_it[1]);
-      vals_it[1] = nextIdx;
-      gc_write_barrier(&vals_it[1], nextIdx);
-      return k;
-    }
+  if (idx >= n) {
+    void* endIdx = box_int(static_cast<int64_t>(n));
+    gc_pre_barrier(&vals_it[1]);
+    vals_it[1] = endIdx;
+    gc_write_barrier(&vals_it[1], endIdx);
+    return nullptr;
   }
-  void* endIdx = box_int(static_cast<int64_t>(cap));
+  void* k = list_get(snap, static_cast<int64_t>(idx));
+  void* nextIdx = box_int(static_cast<int64_t>(idx + 1));
   gc_pre_barrier(&vals_it[1]);
-  vals_it[1] = endIdx;
-  gc_write_barrier(&vals_it[1], endIdx);
-  return nullptr;
+  vals_it[1] = nextIdx;
+  gc_write_barrier(&vals_it[1], nextIdx);
+  return k;
 }
 
 // C++ API wrappers to match header declarations
@@ -2353,7 +2371,7 @@ static void json_dumps_rec(void* obj, std::string& out, const DumpOpts& opts, in
       auto* base = reinterpret_cast<unsigned char*>(obj);
       auto* pm = reinterpret_cast<std::size_t*>(base);
       const std::size_t cap = pm[1];
-      auto** keys = reinterpret_cast<void**>(pm + 2);
+      auto** keys = reinterpret_cast<void**>(pm + 3);
       auto** vals = keys + cap;
       out.push_back('{');
       bool first = true;
