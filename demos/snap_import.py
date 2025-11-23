@@ -1,3 +1,3 @@
-from pkg. import x
+from pkg import x
 def main() -> int:
   return 0
