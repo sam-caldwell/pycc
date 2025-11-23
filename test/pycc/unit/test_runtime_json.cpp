@@ -3,7 +3,7 @@
  * Purpose: Validate json.dumps/loads round-trips for basic types and structures.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

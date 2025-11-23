@@ -3,7 +3,7 @@
  * Purpose: Validate time module shims behavior (monotonicity, sleep, ns variants).
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <thread>
 
 using namespace pycc::rt;

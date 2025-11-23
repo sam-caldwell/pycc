@@ -3,7 +3,7 @@
  * Purpose: Verify stat_ifmt/isdir/isreg with real filesystem modes.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <sys/stat.h>
 
 using namespace pycc::rt;

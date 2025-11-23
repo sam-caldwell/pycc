@@ -3,7 +3,7 @@
  * Purpose: Exercise young/old survivor path and remembered-set barriers by mutating objects across collections.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

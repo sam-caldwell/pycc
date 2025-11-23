@@ -3,7 +3,7 @@
  * Purpose: Verify tempfile.gettempdir/mkdtemp/mkstemp runtime shims.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <sys/stat.h>
 
 using namespace pycc::rt;

@@ -3,7 +3,7 @@
  * Purpose: Verify uuid.uuid4 runtime shim structure.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

@@ -3,7 +3,7 @@
  * Purpose: Verify conservative stack scanning preserves objects referenced only from stack.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

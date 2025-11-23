@@ -3,7 +3,7 @@
  * Purpose: Validate utf8 helpers and basic I/O and OS interop.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cstdio>
 #include <cstdlib>
 

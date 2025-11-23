@@ -3,7 +3,7 @@
  * Purpose: Verify shallow and deep copy behavior for lists and dicts.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

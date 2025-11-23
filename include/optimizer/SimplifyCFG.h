@@ -9,14 +9,13 @@
 #include "optimizer/Pass.h"
 
 namespace pycc::opt {
+    class SimplifyCFG final : public Pass {
+    public:
+        size_t run(ast::Module &m) override;
 
-class SimplifyCFG : public Pass {
- public:
-  size_t run(ast::Module& m) override;
-  const std::unordered_map<std::string, uint64_t>& stats() const { return stats_; }
- private:
-  std::unordered_map<std::string, uint64_t> stats_{};
-};
+        const std::unordered_map<std::string, uint64_t> &stats() const { return stats_; }
 
+    private:
+        std::unordered_map<std::string, uint64_t> stats_{};
+    };
 } // namespace pycc::opt
-

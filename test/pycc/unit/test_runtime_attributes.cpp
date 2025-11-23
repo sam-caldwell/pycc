@@ -3,7 +3,7 @@
  * Purpose: Validate per-instance attribute dict for objects and GC retention.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

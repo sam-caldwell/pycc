@@ -3,7 +3,7 @@
  * Purpose: Verify pprint.pformat runtime shim on lists and scalars.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

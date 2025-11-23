@@ -3,7 +3,7 @@
  * Purpose: Cover thread join return marshaling and channel close unblocking recv.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cstring>
 
 using namespace pycc::rt;

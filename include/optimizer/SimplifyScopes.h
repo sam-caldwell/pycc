@@ -10,12 +10,9 @@
 #include <cstddef>
 
 namespace pycc::opt {
-
-class SimplifyScopes {
- public:
-  // Returns number of changes applied
-  std::size_t run(ast::Module& module);
-};
-
+    class SimplifyScopes {
+    public:
+        // Returns the number of changes applied
+        std::size_t run(ast::Module &module);
+    };
 } // namespace pycc::opt
-

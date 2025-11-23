@@ -3,7 +3,7 @@
  * Purpose: Verify heapq.heappush/heappop runtime shims.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

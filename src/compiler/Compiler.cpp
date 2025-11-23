@@ -11,7 +11,7 @@
 #include "lexer/Lexer.h"
 #include "observability/AstPrinter.h"
 #include "observability/Metrics.h"
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include "optimizer/AlgebraicSimplify.h"
 #include "optimizer/ConstantFold.h"
 #include "optimizer/LocalProp.h"

@@ -3,7 +3,7 @@
  * Purpose: Validate datetime shims (now/utcnow/fromtimestamp/utcfromtimestamp) return ISO-8601 strings.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cstring>
 
 using namespace pycc::rt;

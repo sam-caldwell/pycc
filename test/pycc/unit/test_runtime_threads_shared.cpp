@@ -3,7 +3,7 @@
  * Purpose: Basic cross-thread sharing: read-only access to a string object.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <thread>
 
 using namespace pycc::rt;

@@ -17,11 +17,8 @@
 #include "ast/Nodes.h"
 
 namespace pycc::opt {
-
-class LocalProp : public Pass {
- public:
-  std::size_t run(ast::Module& m) override;
-};
-
+    class LocalProp final : public Pass {
+    public:
+        std::size_t run(ast::Module &m) override;
+    };
 } // namespace pycc::opt
-

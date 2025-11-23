@@ -3,7 +3,7 @@
  * Purpose: Verify sys runtime shims: platform/version/maxsize and test-safe exit.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cstring>
 
 using namespace pycc::rt;

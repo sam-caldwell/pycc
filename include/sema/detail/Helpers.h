@@ -4,28 +4,11 @@
  */
 #pragma once
 
-#include "sema/Sema.h"
-#include "ast/Node.h"
-#include "ast/TypeKind.h"
-#include <vector>
-#include <string>
+// Aggregator header for helper declarations. Individual declarations live under
+// include/sema/detail/helpers/*.h
 
-namespace pycc::sema {
-
-using Type = ast::TypeKind;
-
-/***
- * @brief Append a diagnostic message (with optional source node location).
- */
-void addDiag(std::vector<Diagnostic>& diags, const std::string& msg, const ast::Node* n);
-
-/*** @brief Predicate: is Int kind. */
-inline bool typeIsInt(Type t) { return t == Type::Int; }
-/*** @brief Predicate: is Bool kind. */
-inline bool typeIsBool(Type t) { return t == Type::Bool; }
-/*** @brief Predicate: is Float kind. */
-inline bool typeIsFloat(Type t) { return t == Type::Float; }
-/*** @brief Predicate: is Str kind. */
-inline bool typeIsStr(Type t) { return t == Type::Str; }
-
-} // namespace pycc::sema
+#include "sema/detail/helpers/AddDiag.h"
+#include "sema/detail/helpers/TypeIsInt.h"
+#include "sema/detail/helpers/TypeIsBool.h"
+#include "sema/detail/helpers/TypeIsFloat.h"
+#include "sema/detail/helpers/TypeIsStr.h"

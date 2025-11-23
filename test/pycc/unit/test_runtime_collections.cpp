@@ -3,7 +3,7 @@
  * Purpose: Cover collections helpers: Counter, OrderedDict, ChainMap, defaultdict_*.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 extern "C" void* pycc_dict_iter_new(void* dict);

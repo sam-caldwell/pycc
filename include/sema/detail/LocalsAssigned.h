@@ -4,22 +4,8 @@
  */
 #pragma once
 
-#include <string>
-#include <unordered_set>
+// Aggregator for locals-assigned helpers: split declarations live under
+// include/sema/detail/locals/...
 
-namespace pycc::sema::detail {
-
-/*** @brief Pointer to current function's set of locally-assigned names. */
-extern const std::unordered_set<std::string>* g_locals_assigned;
-
-/***
- * @brief RAII guard that sets current locals-assigned set and restores on exit.
- */
-struct ScopedLocalsAssigned {
-  const std::unordered_set<std::string>* prev;
-  explicit ScopedLocalsAssigned(const std::unordered_set<std::string>* cur);
-  ~ScopedLocalsAssigned();
-};
-
-} // namespace pycc::sema::detail
-
+#include "sema/detail/locals/Globals.h"
+#include "sema/detail/locals/ScopedLocalsAssigned.h"

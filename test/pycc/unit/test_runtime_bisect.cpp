@@ -3,7 +3,7 @@
  * Purpose: Verify bisect_left/right runtime shims on sorted lists.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

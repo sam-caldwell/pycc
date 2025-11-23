@@ -12,12 +12,10 @@
 #include "ast/Nodes.h"
 
 namespace pycc::opt {
+    class Pass {
+    public:
+        virtual ~Pass() = default;
 
-class Pass {
- public:
-  virtual ~Pass() = default;
-  virtual size_t run(ast::Module& m) = 0;
-};
-
+        virtual size_t run(ast::Module &m) = 0;
+    };
 } // namespace pycc::opt
-

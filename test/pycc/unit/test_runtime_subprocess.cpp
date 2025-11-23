@@ -3,7 +3,7 @@
  * Purpose: Cover subprocess shims: run/call/check_call behavior and exceptions.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

@@ -7,15 +7,14 @@
 
 #include <cstddef>
 
-namespace pycc { namespace ast { struct Module; } }
+namespace pycc::ast {
+    struct Module;
+}
 
 namespace pycc::opt {
-
-class SSAGVN {
- public:
-  // Returns number of subexpressions eliminated via temp reuse.
-  std::size_t run(ast::Module& module);
-};
-
+    class SSAGVN {
+    public:
+        // Returns a number of subexpressions eliminated via temp reuse.
+        std::size_t run(ast::Module &module);
+    };
 } // namespace pycc::opt
-

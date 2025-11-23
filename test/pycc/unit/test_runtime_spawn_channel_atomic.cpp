@@ -3,7 +3,7 @@
  * Purpose: Exercise scaffolding for threads, channels, and atomics.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cstring>
 
 using namespace pycc::rt;

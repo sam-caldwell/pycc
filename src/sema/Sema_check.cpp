@@ -9,15 +9,17 @@
  *   - true on success (no diagnostics), false otherwise
  */
 #include "sema/Sema.h"
+#include "sema/detail/SemaImpl.h"
 
 namespace pycc::sema {
 
-// Forward declaration of the internal implementation (defined in Sema.cpp)
-bool sema_check_impl(Sema* self, ast::Module& mod, std::vector<Diagnostic>& diags);
+/***
+ * Name: sema_check_impl (declaration)
+ * Purpose: Internal implementation referenced by Sema::check.
+ */
 
 bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
   return sema_check_impl(this, mod, diags);
 }
 
 } // namespace pycc::sema
-

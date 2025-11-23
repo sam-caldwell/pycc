@@ -3,7 +3,7 @@
  * Purpose: Cover itertools materialized helpers in the runtime.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

@@ -3,7 +3,7 @@
  * Purpose: Drive dict_set through rehash path and validate length/lookup.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

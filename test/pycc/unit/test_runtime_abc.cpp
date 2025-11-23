@@ -3,7 +3,7 @@
  * Purpose: Cover _abc registry and cache token behavior.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

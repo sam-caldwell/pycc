@@ -3,7 +3,7 @@
  * Purpose: Exercise bytes/bytearray edge behaviors (nulls, OOB, capacity limit).
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

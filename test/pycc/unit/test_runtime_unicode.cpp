@@ -3,7 +3,7 @@
  * Purpose: Verify code point-aware len/slice and basic encode/decode behaviors.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cstring>
 
 using namespace pycc::rt;

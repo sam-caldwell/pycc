@@ -2,7 +2,7 @@
  * Simple runtime GC benchmark: compares throughput with background GC on vs. off.
  * Usage: bench_gc [iters] [size]
  */
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <chrono>
 #include <cstddef>
 #include <cstdint>

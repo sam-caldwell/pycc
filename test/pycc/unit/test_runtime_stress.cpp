@@ -3,7 +3,7 @@
  * Purpose: Stress allocations to trigger multiple collections; validate stats invariants.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <vector>
 #include <string>
 #include "../../util/Heartbeat.h"

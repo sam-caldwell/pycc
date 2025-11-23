@@ -3,7 +3,7 @@
  * Purpose: Verify hashlib.sha256/md5 runtime shims (subset, deterministic).
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

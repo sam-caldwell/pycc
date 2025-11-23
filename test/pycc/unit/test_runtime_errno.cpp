@@ -3,7 +3,7 @@
  * Purpose: Verify errno constants match system values.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cerrno>
 
 using namespace pycc::rt;

@@ -3,7 +3,7 @@
  * Purpose: Cover stdout/stderr write and time API monotonic property.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <thread>
 #include <chrono>
 

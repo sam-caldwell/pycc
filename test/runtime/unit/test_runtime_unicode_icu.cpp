@@ -3,7 +3,7 @@
  * Purpose: ICU-backed normalization and casefold tests (guarded by PYCC_WITH_ICU).
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cstring>
 
 using namespace pycc::rt;

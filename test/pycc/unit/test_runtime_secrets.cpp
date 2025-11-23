@@ -3,7 +3,7 @@
  * Purpose: Verify secrets.token_* runtime shims.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cctype>
 
 using namespace pycc::rt;

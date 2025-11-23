@@ -8,11 +8,15 @@
 #include <unordered_map>
 #include <string>
 
-namespace pycc { namespace ast { struct Module; struct FunctionDef; struct Expr; } }
+namespace pycc::ast {
+    struct Module;
+    struct FunctionDef;
+    struct Expr;
+}
 
 namespace pycc::opt {
 
-class GVN : public Pass {
+class GVN final : public Pass {
  public:
   struct Result { std::size_t classes{0}; std::size_t expressions{0}; };
   Result analyze(const ast::Module& module);

@@ -3,7 +3,7 @@
  * Purpose: Exercise OS/FS helpers: getcwd, mkdir, rename, remove.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cstdio>
 
 using namespace pycc::rt;

@@ -16,17 +16,14 @@
 #include "ast/Nodes.h"
 
 namespace pycc::opt {
+    struct Stats {
+        size_t nodesVisited{0};
+        size_t exprsVisited{0};
+        size_t stmtsVisited{0};
+    };
 
-struct Stats {
-  size_t nodesVisited{0};
-  size_t exprsVisited{0};
-  size_t stmtsVisited{0};
-};
-
-class Optimizer {
- public:
-  Stats analyze(const ast::Module& m) const;
-};
-
+    class Optimizer {
+    public:
+        Stats analyze(const ast::Module &m) const;
+    };
 } // namespace pycc::opt
-

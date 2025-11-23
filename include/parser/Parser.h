@@ -22,132 +22,185 @@
 #include <unordered_map>
 
 namespace pycc::parse {
+    class Parser {
+    public:
+        explicit Parser(lex::ITokenStream &stream) : ts_(stream) {
+        }
 
-class Parser {
- public:
-  explicit Parser(lex::ITokenStream& stream) : ts_(stream) {}
-  std::unique_ptr<ast::Module> parseModule();
-  // Aggregated parser errors collected during error-recovery; empty when parsing succeeded without recovery
-  const std::vector<std::string>& errors() const { return errors_; }
-  // Expose a tiny helper to parse a single expression from a string for
-  // compile-time evaluation paths (e.g., literal-only eval()). This reuses the
-  // same lexer/parser and returns an AST expression.
-  static std::unique_ptr<ast::Expr> parseSmallExprFromString(const std::string& text,
-                                                            const std::string& name);
+        std::unique_ptr<ast::Module> parseModule();
 
- private:
-  lex::ITokenStream& ts_;
-  // Buffered tokens to enable PEG-style backtracking/lookahead
-  std::vector<lex::Token> tokens_{};
-  size_t pos_{0};
-  bool initialized_{false};
+        // Aggregated parser errors collected during error-recovery; empty when parsing succeeded without recovery
+        const std::vector<std::string> &errors() const { return errors_; }
+        // Expose a tiny helper to parse a single expression from a string for
+        // compile-time evaluation paths (e.g., literal-only eval()). This reuses the
+        // same lexer/parser and returns an AST expression.
+        static std::unique_ptr<ast::Expr> parseSmallExprFromString(const std::string &text,
+                                                                   const std::string &name);
 
-  // Best-effort farthest error tracking for improved messages
-  size_t farthestPos_{0};
-  std::string farthestExpected_{};
-  std::vector<std::string> errors_{}; // aggregated error messages during recovery
-  bool hadErrors_{false};
+    private:
+        lex::ITokenStream &ts_;
+        // Buffered tokens to enable PEG-style backtracking/lookahead
+        std::vector<lex::Token> tokens_{};
+        size_t pos_{0};
+        bool initialized_{false};
 
-  // Lazy source cache for error context
-  std::unordered_map<std::string, std::vector<std::string>> fileLines_{};
-  bool loadFileIfNeeded(const std::string& path);
-  std::string formatContext(const lex::Token& tok, const std::string& headMsg) const;
+        // Best-effort farthest error tracking for improved messages
+        size_t farthestPos_{0};
+        std::string farthestExpected_{};
+        std::vector<std::string> errors_{}; // aggregated error messages during recovery
+        bool hadErrors_{false};
 
-  // Initialize token buffer from the underlying stream once
-  void initBuffer();
+        // Lazy source cache for error context
+        std::unordered_map<std::string, std::vector<std::string> > fileLines_{};
 
-  // Backtracking marks
-  using Mark = size_t;
-  Mark mark() const { return pos_; }
-  void rewind(Mark m) { pos_ = m; }
+        bool loadFileIfNeeded(const std::string &path);
 
-  const lex::Token& peek() const;
-  const lex::Token& peekNext() const;
-  lex::Token get();
-  bool match(lex::TokenKind tokenKind);
-  void expect(lex::TokenKind tokenKind, const char* msg);
-  // Record farthest parse expectation for better diagnostics
-  void recordExpectation(const char* msg);
-  void addError(const std::string& msg);
-  void synchronize(); // best-effort recovery: skip to newline/dedent/end
-  // Skip until one of the given tokens is reached at top-level nesting for (), [], {}
-  void synchronizeUntil(std::initializer_list<lex::TokenKind> terms);
+        std::string formatContext(const lex::Token &tok, const std::string &headMsg) const;
 
-  std::unique_ptr<ast::FunctionDef> parseFunction();
-  std::unique_ptr<ast::ClassDef> parseClass();
-  void parseParamList(std::vector<ast::Param>& outParams);
-  void parseOptionalParamType(ast::Param& param);
-  void parseSuiteInto(std::vector<std::unique_ptr<ast::Stmt>>& out);
-  std::unique_ptr<ast::Stmt> parseIfStmt();
-  std::unique_ptr<ast::Stmt> parseWhileStmt();
-  std::unique_ptr<ast::Stmt> parseForStmt();
-  std::unique_ptr<ast::Stmt> parseTryStmt();
-  std::unique_ptr<ast::Stmt> parseWithStmt();
-  std::unique_ptr<ast::Stmt> parseImportStmt();
-  std::unique_ptr<ast::Stmt> parseStatement();
-  std::unique_ptr<ast::Expr> parseExpr();
-  std::unique_ptr<ast::Expr> parseComparison();
-  std::unique_ptr<ast::Expr> parseBitwiseOr();
-  std::unique_ptr<ast::Expr> parseBitwiseXor();
-  std::unique_ptr<ast::Expr> parseBitwiseAnd();
-  std::unique_ptr<ast::Expr> parseShift();
-  std::unique_ptr<ast::Expr> parseLogicalAnd();
-  std::unique_ptr<ast::Expr> parseLogicalOr();
-  std::unique_ptr<ast::Expr> parseAdditive();
-  std::unique_ptr<ast::Expr> parseMultiplicative();
-  std::unique_ptr<ast::Expr> parseUnary();
-  std::unique_ptr<ast::Expr> parsePrimary();
-  std::unique_ptr<ast::Expr> parsePostfix(std::unique_ptr<ast::Expr> base);
-  std::unique_ptr<ast::Expr> parseAtom();
-  static ast::TypeKind toTypeKind(const std::string& typeName);
+        // Initialize token buffer from the underlying stream once
+        void initBuffer();
 
-  // Refactoring helpers (kept private)
-  static std::string unquoteString(std::string text);
-  std::unique_ptr<ast::Expr> parseExprFromString(const std::string& text,
-                                                const std::string& name);
-  std::unique_ptr<ast::Expr> parseListLiteral(const lex::Token& openTok);
-  std::unique_ptr<ast::Expr> parseTupleOrParen(const lex::Token& openTok);
-  static std::unique_ptr<ast::Expr> parseNameOrNone(const lex::Token& tok);
-  struct ArgList {
-    std::vector<std::unique_ptr<ast::Expr>> positional;
-    std::vector<ast::KeywordArg> keywords;
-    std::vector<std::unique_ptr<ast::Expr>> starArgs;
-    std::vector<std::unique_ptr<ast::Expr>> kwStarArgs;
-  };
-  ArgList parseArgList();
-  static bool desugarObjectCall(std::unique_ptr<ast::Expr>& base,
-                                std::vector<std::unique_ptr<ast::Expr>>& args);
-  static ast::BinaryOperator mulOpFor(lex::TokenKind kind);
+        // Backtracking marks
+        using Mark = size_t;
+        Mark mark() const { return pos_; }
+        void rewind(Mark m) { pos_ = m; }
 
-  // Set ExprContext recursively on assignment/del targets
-  static void setTargetContext(ast::Expr* e, ast::ExprContext ctx);
+        const lex::Token &peek() const;
 
-  // Parse zero or more decorators: '@' expr [NEWLINE]
-  std::vector<std::unique_ptr<ast::Expr>> parseDecorators();
+        const lex::Token &peekNext() const;
 
-  // Validate whether an expression is a legal assignment target
-  static bool isValidAssignmentTarget(const ast::Expr* e);
+        lex::Token get();
 
-  // Look ahead on the current logical line for an un-nested '='
-  bool hasPendingEqualOnLine();
-  bool hasPendingAugAssignOnLine(lex::TokenKind& which);
+        bool match(lex::TokenKind tokenKind);
 
-  // match/case
-  std::unique_ptr<ast::Stmt> parseMatchStmt();
-  std::unique_ptr<ast::MatchCase> parseMatchCase();
-  std::unique_ptr<ast::Pattern> parsePattern();
-  std::unique_ptr<ast::Pattern> parsePatternOr();
-  std::unique_ptr<ast::Pattern> parseSimplePattern();
+        void expect(lex::TokenKind tokenKind, const char *msg);
 
-  // New literals and statements
-  std::unique_ptr<ast::Expr> parseDictOrSetLiteral(const lex::Token& openTok);
-  std::unique_ptr<ast::Stmt> parseRaiseStmt();
-  std::unique_ptr<ast::Stmt> parseGlobalStmt();
-  std::unique_ptr<ast::Stmt> parseNonlocalStmt();
-  std::unique_ptr<ast::Stmt> parseAssertStmt();
+        // Record farthest parse expectation for better diagnostics
+        void recordExpectation(const char *msg);
 
-  // Comprehension helpers
-  std::vector<ast::ComprehensionFor> parseComprehensionFors();
-};
+        void addError(const std::string &msg);
 
+        void synchronize(); // best-effort recovery: skip to newline/dedent/end
+        // Skip until one of the given tokens is reached at top-level nesting for (), [], {}
+        void synchronizeUntil(std::initializer_list<lex::TokenKind> terms);
+
+        std::unique_ptr<ast::FunctionDef> parseFunction();
+
+        std::unique_ptr<ast::ClassDef> parseClass();
+
+        void parseParamList(std::vector<ast::Param> &outParams);
+
+        void parseOptionalParamType(ast::Param &param);
+
+        void parseSuiteInto(std::vector<std::unique_ptr<ast::Stmt> > &out);
+
+        std::unique_ptr<ast::Stmt> parseIfStmt();
+
+        std::unique_ptr<ast::Stmt> parseWhileStmt();
+
+        std::unique_ptr<ast::Stmt> parseForStmt();
+
+        std::unique_ptr<ast::Stmt> parseTryStmt();
+
+        std::unique_ptr<ast::Stmt> parseWithStmt();
+
+        std::unique_ptr<ast::Stmt> parseImportStmt();
+
+        std::unique_ptr<ast::Stmt> parseStatement();
+
+        std::unique_ptr<ast::Expr> parseExpr();
+
+        std::unique_ptr<ast::Expr> parseComparison();
+
+        std::unique_ptr<ast::Expr> parseBitwiseOr();
+
+        std::unique_ptr<ast::Expr> parseBitwiseXor();
+
+        std::unique_ptr<ast::Expr> parseBitwiseAnd();
+
+        std::unique_ptr<ast::Expr> parseShift();
+
+        std::unique_ptr<ast::Expr> parseLogicalAnd();
+
+        std::unique_ptr<ast::Expr> parseLogicalOr();
+
+        std::unique_ptr<ast::Expr> parseAdditive();
+
+        std::unique_ptr<ast::Expr> parseMultiplicative();
+
+        std::unique_ptr<ast::Expr> parseUnary();
+
+        std::unique_ptr<ast::Expr> parsePrimary();
+
+        std::unique_ptr<ast::Expr> parsePostfix(std::unique_ptr<ast::Expr> base);
+
+        std::unique_ptr<ast::Expr> parseAtom();
+
+        static ast::TypeKind toTypeKind(const std::string &typeName);
+
+        // Refactoring helpers (kept private)
+        static std::string unquoteString(std::string text);
+
+        std::unique_ptr<ast::Expr> parseExprFromString(const std::string &text,
+                                                       const std::string &name);
+
+        std::unique_ptr<ast::Expr> parseListLiteral(const lex::Token &openTok);
+
+        std::unique_ptr<ast::Expr> parseTupleOrParen(const lex::Token &openTok);
+
+        static std::unique_ptr<ast::Expr> parseNameOrNone(const lex::Token &tok);
+
+        struct ArgList {
+            std::vector<std::unique_ptr<ast::Expr> > positional;
+            std::vector<ast::KeywordArg> keywords;
+            std::vector<std::unique_ptr<ast::Expr> > starArgs;
+            std::vector<std::unique_ptr<ast::Expr> > kwStarArgs;
+        };
+
+        ArgList parseArgList();
+
+        static bool desugarObjectCall(std::unique_ptr<ast::Expr> &base,
+                                      std::vector<std::unique_ptr<ast::Expr> > &args);
+
+        static ast::BinaryOperator mulOpFor(lex::TokenKind kind);
+
+        // Set ExprContext recursively on assignment/del targets
+        static void setTargetContext(ast::Expr *e, ast::ExprContext ctx);
+
+        // Parse zero or more decorators: '@' expr [NEWLINE]
+        std::vector<std::unique_ptr<ast::Expr> > parseDecorators();
+
+        // Validate whether an expression is a legal assignment target
+        static bool isValidAssignmentTarget(const ast::Expr *e);
+
+        // Look ahead on the current logical line for an un-nested '='
+        bool hasPendingEqualOnLine();
+
+        bool hasPendingAugAssignOnLine(lex::TokenKind &which);
+
+        // match/case
+        std::unique_ptr<ast::Stmt> parseMatchStmt();
+
+        std::unique_ptr<ast::MatchCase> parseMatchCase();
+
+        std::unique_ptr<ast::Pattern> parsePattern();
+
+        std::unique_ptr<ast::Pattern> parsePatternOr();
+
+        std::unique_ptr<ast::Pattern> parseSimplePattern();
+
+        // New literals and statements
+        std::unique_ptr<ast::Expr> parseDictOrSetLiteral(const lex::Token &openTok);
+
+        std::unique_ptr<ast::Stmt> parseRaiseStmt();
+
+        std::unique_ptr<ast::Stmt> parseGlobalStmt();
+
+        std::unique_ptr<ast::Stmt> parseNonlocalStmt();
+
+        std::unique_ptr<ast::Stmt> parseAssertStmt();
+
+        // Comprehension helpers
+        std::vector<ast::ComprehensionFor> parseComprehensionFors();
+    };
 } // namespace pycc::parse

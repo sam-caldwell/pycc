@@ -3,7 +3,7 @@
  * Purpose: Cover string ops (concat/slice/repeat/contains/eq) and list negative indexing via C ABI wrappers.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

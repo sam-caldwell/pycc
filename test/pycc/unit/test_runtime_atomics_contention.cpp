@@ -3,7 +3,7 @@
  * Purpose: Stress atomic add under high contention across many threads.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

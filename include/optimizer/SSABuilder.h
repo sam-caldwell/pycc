@@ -12,40 +12,46 @@
 #include <vector>
 #include <string>
 
-namespace pycc { namespace ast { struct FunctionDef; struct Stmt; struct Expr; } }
+namespace pycc::ast {
+    struct FunctionDef;
+    struct Stmt;
+    struct Expr;
+}
 
 namespace pycc::opt {
+    struct SSABlock {
+        int id{0};
+        std::vector<ast::Stmt *> stmts; // raw pointers into AST for scaffolding
+        std::vector<int> succ; // successor block IDs
+        std::vector<int> pred; // predecessor block IDs
+        // SSA scaffolding
+        std::unordered_set<std::string> defs; // names assigned in this block
+        struct SSAPhi {
+            std::string var;
+            std::vector<int> incomings;
+        };
 
-struct SSABlock {
-  int id{0};
-  std::vector<ast::Stmt*> stmts; // raw pointers into AST for scaffolding
-  std::vector<int> succ;         // successor block IDs
-  std::vector<int> pred;         // predecessor block IDs
-  // SSA scaffolding
-  std::unordered_set<std::string> defs; // names assigned in this block
-  struct SSAPhi { std::string var; std::vector<int> incomings; };
-  std::vector<SSAPhi> phis; // phi placeholders for join blocks
-};
+        std::vector<SSAPhi> phis; // phi placeholders for join blocks
+    };
 
-struct SSAFunction {
-  const ast::FunctionDef* fn{nullptr};
-  std::vector<SSABlock> blocks;
-  std::unordered_map<const ast::Stmt*, int> blockOf; // stmt -> block id
-};
+    struct SSAFunction {
+        const ast::FunctionDef *fn{nullptr};
+        std::vector<SSABlock> blocks;
+        std::unordered_map<const ast::Stmt *, int> blockOf; // stmt -> block id
+    };
 
-class SSABuilder {
- public:
-  // Build blocks and CFG for a single function (scaffold; no phis).
-  SSAFunction build(ast::FunctionDef& fn);
+    class SSABuilder {
+    public:
+        // Build blocks and CFG for a single function (scaffold; no phis).
+        SSAFunction build(ast::FunctionDef &fn);
 
-  struct DomTree {
-    // idom[i] = immediate dominator block id of i, or -1 for entry/unreachable
-    std::vector<int> idom;
-    std::vector<std::vector<int>> children; // dominator tree adjacency
-  };
+        struct DomTree {
+            // idom[i] = immediate dominator block id of i, or -1 for entry/unreachable
+            std::vector<int> idom;
+            std::vector<std::vector<int> > children; // dominator tree adjacency
+        };
 
-  // Compute a simple dominator tree over the scaffold CFG.
-  DomTree computeDominators(const SSAFunction& fn) const;
-};
-
+        // Compute a simple dominator tree over the scaffold CFG.
+        DomTree computeDominators(const SSAFunction &fn) const;
+    };
 } // namespace pycc::opt

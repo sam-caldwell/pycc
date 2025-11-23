@@ -2,7 +2,7 @@
  * Name: pycc::rt (Runtime impl)
  * Purpose: Minimal precise mark-sweep GC and string objects.
  */
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>

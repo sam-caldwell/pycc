@@ -3,7 +3,7 @@
  * Purpose: Ensure bytes_decode error paths and replacement behavior are correct; also unknown encodings.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 #include <cstring>
 
 using namespace pycc::rt;

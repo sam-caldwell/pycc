@@ -3,7 +3,7 @@
  * Purpose: Cover re module runtime shims: search/match/fullmatch/findall/split/sub/subn/escape and flags/counts.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 

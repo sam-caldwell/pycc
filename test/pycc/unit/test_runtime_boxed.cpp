@@ -3,7 +3,7 @@
  * Purpose: Validate boxed primitive allocations and accessors; exercise GC threshold.
  */
 #include <gtest/gtest.h>
-#include "runtime/Runtime.h"
+#include "runtime/All.h"
 
 using namespace pycc::rt;
 
