@@ -75,6 +75,15 @@ endif()
 # Runtime-only library for isolated tests
 add_library(pycc_runtime
   ${CMAKE_SOURCE_DIR}/src/runtime/Runtime.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/json_DumpList.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/json_DumpDict.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/html_Unescape.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/struct_Pack.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/struct_Unpack.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/struct_Calcsize.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/argparse_Split.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/argparse_Lookup.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/argparse_Apply.cpp
   ${CMAKE_SOURCE_DIR}/include/runtime/Runtime.h)
 target_include_directories(pycc_runtime PUBLIC ${CMAKE_SOURCE_DIR}/include)
 if(Threads_FOUND)

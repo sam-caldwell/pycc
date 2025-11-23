@@ -12,6 +12,7 @@
 #include <vector>
 
 namespace pycc::sema {
+    namespace detail { struct IntersectOps; }
     /***
      * Name: TypeEnv
      * Purpose: Track variable type sets, provenance, and shape details for containers.
@@ -109,5 +110,8 @@ namespace pycc::sema {
         std::unordered_map<std::string, uint32_t> dictValSets_;
         std::unordered_map<std::string, std::unordered_map<std::string, uint32_t> > attrSets_;
         std::unordered_map<std::string, std::string> instances_;
+
+        // Allow internal intersect helpers to access private maps for efficiency
+        friend struct detail::IntersectOps;
     };
 } // namespace pycc::sema

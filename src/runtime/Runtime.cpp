@@ -3,6 +3,12 @@
  * Purpose: Minimal precise mark-sweep GC and string objects.
  */
 #include "runtime/All.h"
+#include "runtime/detail/JsonTypes.h"
+#include "runtime/detail/JsonHandlers.h"
+#include "runtime/detail/RuntimeIntrospection.h"
+#include "runtime/detail/HtmlHandlers.h"
+#include "runtime/detail/StructHandlers.h"
+#include "runtime/detail/ArgparseHandlers.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -199,6 +205,55 @@ static ObjectHeader* find_object_for_pointer(const void* ptr);
 // (removed obsolete wrapper)
 
 // NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
+// Forward declare mark for helper calls
+static void mark(ObjectHeader* header);
+
+// Per-tag mark helpers to keep switch shallow
+static inline void mark_list_body(ObjectHeader* header) {
+  auto* base = reinterpret_cast<unsigned char*>(header);
+  auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader));
+  const std::size_t len = payload[0];
+  auto* const* items = reinterpret_cast<void* const*>(payload + 2);
+  for (std::size_t i = 0; i < len; ++i) {
+    const void* valuePtr = items[i];
+    if (!valuePtr) continue;
+    if (ObjectHeader* headerPtr = find_object_for_pointer(valuePtr)) { mark(headerPtr); }
+  }
+}
+
+static inline void mark_object_body(ObjectHeader* header) {
+  auto* base = reinterpret_cast<unsigned char*>(header);
+  auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader));
+  const std::size_t fields = payload[0];
+  auto* const* values = reinterpret_cast<void* const*>(payload + 1);
+  for (std::size_t i = 0; i < fields; ++i) {
+    const void* valuePtr = values[i];
+    if (!valuePtr) continue;
+    if (ObjectHeader* headerPtr = find_object_for_pointer(valuePtr)) { mark(headerPtr); }
+  }
+  const void* attrDictPtr = values[fields];
+  if (attrDictPtr != nullptr) {
+    if (ObjectHeader* ad = find_object_for_pointer(attrDictPtr)) { mark(ad); }
+  }
+}
+
+static inline void mark_dict_body(ObjectHeader* header) {
+  auto* base = reinterpret_cast<unsigned char*>(header);
+  auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader));
+  const std::size_t cap = payload[1];
+  auto** keys = reinterpret_cast<void**>(payload + 2);
+  auto** vals = keys + cap;
+  for (std::size_t i = 0; i < cap; ++i) {
+    if (keys[i] != nullptr) {
+      if (ObjectHeader* k = find_object_for_pointer(keys[i])) { mark(k); }
+    }
+    if (vals[i] != nullptr) {
+      if (ObjectHeader* v = find_object_for_pointer(vals[i])) { mark(v); }
+    }
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-size,readability-function-cognitive-complexity)
 static void mark(ObjectHeader* header) {
   if (header == nullptr || header->mark != 0U) { return; }
   header->mark = 1;
@@ -211,56 +266,9 @@ static void mark(ObjectHeader* header) {
     case TypeTag::Float:
     case TypeTag::Bool:
       break; // no interior pointers
-    case TypeTag::List: {
-      auto* base = reinterpret_cast<unsigned char*>(header); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-type-reinterpret-cast)
-      auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader)); // len, cap, then items[]
-      const std::size_t len = payload[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-type-reinterpret-cast)
-      auto* const* items = reinterpret_cast<void* const*>(payload + 2);
-      for (std::size_t i = 0; i < len; ++i) {
-        const void* valuePtr = items[i]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        if (valuePtr == nullptr) { continue; }
-        if (ObjectHeader* headerPtr = find_object_for_pointer(valuePtr)) { mark(headerPtr); }
-      }
-      break;
-    }
-    case TypeTag::Object: {
-      auto* base = reinterpret_cast<unsigned char*>(header); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-type-reinterpret-cast)
-      auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader)); // fields, then values[]
-      const std::size_t fields = payload[0]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-type-reinterpret-cast)
-      auto* const* values = reinterpret_cast<void* const*>(payload + 1);
-      for (std::size_t i = 0; i < fields; ++i) {
-        const void* valuePtr = values[i]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        if (valuePtr == nullptr) { continue; }
-        if (ObjectHeader* headerPtr = find_object_for_pointer(valuePtr)) { mark(headerPtr); }
-      }
-      // Mark per-instance attribute dict if present (slot at values[fields])
-      const void* attrDictPtr = values[fields]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      if (attrDictPtr != nullptr) {
-        if (ObjectHeader* ad = find_object_for_pointer(attrDictPtr)) { mark(ad); }
-      }
-      break;
-    }
-    case TypeTag::Dict: {
-      auto* base = reinterpret_cast<unsigned char*>(header);
-      auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader)); // len, cap, keys[], vals[]
-      const std::size_t len = payload[0]; (void)len; // length not needed for marking, we scan up to cap
-      const std::size_t cap = payload[1];
-      auto** keys = reinterpret_cast<void**>(payload + 2);
-      auto** vals = keys + cap;
-      for (std::size_t i = 0; i < cap; ++i) {
-        if (keys[i] != nullptr) {
-          if (ObjectHeader* k = find_object_for_pointer(keys[i])) { mark(k); }
-        }
-        if (vals[i] != nullptr) {
-          if (ObjectHeader* v = find_object_for_pointer(vals[i])) { mark(v); }
-        }
-      }
-      break;
-    }
+    case TypeTag::List: mark_list_body(header); break;
+    case TypeTag::Object: mark_object_body(header); break;
+    case TypeTag::Dict: mark_dict_body(header); break;
   }
 }
 
@@ -1104,10 +1112,8 @@ extern "C" void* pycc_dict_iter_next(void* it) {
 }
 
 // C++ API wrappers to match header declarations
-namespace pycc::rt {
 void* dict_iter_new(void* dict) { return pycc_dict_iter_new(dict); }
 void* dict_iter_next(void* it) { return pycc_dict_iter_next(it); }
-}
 
 // Objects (fixed-size field table)
 void* object_new(std::size_t field_count) {
@@ -2277,13 +2283,12 @@ static TypeTag type_of(void* obj) {
   return static_cast<TypeTag>(h->tag);
 }
 
-// removed: superseded by json_dump_str with UTF-8/ensure_ascii
-static void indent_nl(std::string& out, int depth, int indent) {
-  out.push_back('\n');
-  for (int i=0;i<depth*indent;++i) out.push_back(' ');
-}
+TypeTag type_of_public(void* obj) { return type_of(obj); }
 
-struct DumpOpts { int indent{0}; bool ensureAscii{false}; const char* sepItem{nullptr}; const char* sepKv{nullptr}; bool sortKeys{false}; };
+// removed: superseded by json_dump_str with UTF-8/ensure_ascii
+// (indent_nl moved to JSON handlers)
+
+// DumpOpts moved to runtime/detail/JsonTypes.h
 
 static void emit_codepoint_escaped(uint32_t cp, std::string& out) {
   auto emit_u4 = [&](uint16_t x){
@@ -2351,72 +2356,11 @@ static void json_dumps_rec(void* obj, std::string& out, const DumpOpts& opts, in
     }
     case TypeTag::Bool: { out += (box_bool_value(obj) ? "true" : "false"); return; }
     case TypeTag::List: {
-      auto* meta = reinterpret_cast<std::size_t*>(obj); std::size_t len = meta[0]; auto** items = reinterpret_cast<void**>(meta + 2);
-      out.push_back('[');
-      if (len && opts.indent>0) indent_nl(out, depth+1, opts.indent);
-      for (std::size_t i=0;i<len;++i) {
-        if (i) {
-          if (opts.indent>0) { out.push_back(','); indent_nl(out, depth+1, opts.indent); }
-          else if (opts.sepItem) { out += opts.sepItem; }
-          else { out.push_back(','); }
-        }
-        json_dumps_rec(items[i], out, opts, depth+1);
-      }
-      if (len && opts.indent>0) indent_nl(out, depth, opts.indent);
-      out.push_back(']');
+      detail::json_dump_list(obj, out, opts, depth, &json_dumps_rec);
       return;
     }
     case TypeTag::Dict: {
-      // Note: only string keys supported
-      auto* base = reinterpret_cast<unsigned char*>(obj);
-      auto* pm = reinterpret_cast<std::size_t*>(base);
-      const std::size_t cap = pm[1];
-      auto** keys = reinterpret_cast<void**>(pm + 3);
-      auto** vals = keys + cap;
-      out.push_back('{');
-      bool first = true;
-      if (opts.sortKeys) {
-        std::vector<void*> klist; klist.reserve(cap);
-        for (std::size_t i=0;i<cap;++i) if (keys[i] != nullptr) klist.push_back(keys[i]);
-        std::sort(klist.begin(), klist.end(), [](void* a, void* b){ return std::strcmp(string_data(a), string_data(b)) < 0; });
-        for (void* kk : klist) {
-          // find value
-          std::size_t idx = ptr_hash(kk) & (cap - 1);
-          while (keys[idx] != nullptr && keys[idx] != kk) { idx = (idx + 1) & (cap - 1); }
-          void* vv = (keys[idx] == kk) ? vals[idx] : nullptr;
-          if (type_of(kk) != TypeTag::String) { rt_raise("TypeError", "json.dumps: dict keys must be str"); out.clear(); return; }
-          if (!first) {
-            if (opts.indent>0) { out.push_back(','); indent_nl(out, depth+1, opts.indent); }
-            else if (opts.sepItem) { out += opts.sepItem; }
-            else { out.push_back(','); }
-          }
-          first=false;
-          const char* kd = string_data(kk); std::size_t kn = string_len(kk); json_dump_str(kd, kn, out, opts);
-          if (opts.indent>0) { out.push_back(':'); out.push_back(' '); }
-          else if (opts.sepKv) { out += opts.sepKv; }
-          else { out.push_back(':'); }
-          json_dumps_rec(vv, out, opts, depth+1);
-        }
-      } else {
-        for (std::size_t i=0;i<cap;++i) {
-          if (keys[i] != nullptr) {
-            if (type_of(keys[i]) != TypeTag::String) { rt_raise("TypeError", "json.dumps: dict keys must be str"); out.clear(); return; }
-            if (!first) {
-              if (opts.indent>0) { out.push_back(','); indent_nl(out, depth+1, opts.indent); }
-              else if (opts.sepItem) { out += opts.sepItem; }
-              else { out.push_back(','); }
-            }
-            first=false;
-            const char* kd = string_data(keys[i]); std::size_t kn = string_len(keys[i]); json_dump_str(kd, kn, out, opts);
-            if (opts.indent>0) { out.push_back(':'); out.push_back(' '); }
-            else if (opts.sepKv) { out += opts.sepKv; }
-            else { out.push_back(':'); }
-            json_dumps_rec(vals[i], out, opts, depth+1);
-          }
-        }
-      }
-      if (!first && opts.indent>0) indent_nl(out, depth, opts.indent);
-      out.push_back('}');
+      detail::json_dump_dict(obj, out, opts, depth, &json_dumps_rec);
       return;
     }
     case TypeTag::Bytes:
@@ -2454,26 +2398,64 @@ struct JsonParser {
   bool consume(char c){ skipws(); if (i<n && s[i]==c) { ++i; return true; } return false; }
   bool match(const char* t){ skipws(); std::size_t j=0; while(t[j]&& i+j<n && s[i+j]==t[j]) ++j; if(!t[j]){ i+=j; return true;} return false; }
   void append_utf8(uint32_t cp, std::string& o){ if (cp<=0x7F) o.push_back(static_cast<char>(cp)); else if (cp<=0x7FF){ o.push_back(static_cast<char>(0xC0|(cp>>6))); o.push_back(static_cast<char>(0x80|(cp&0x3F))); } else if (cp<=0xFFFF){ o.push_back(static_cast<char>(0xE0|(cp>>12))); o.push_back(static_cast<char>(0x80|((cp>>6)&0x3F))); o.push_back(static_cast<char>(0x80|(cp&0x3F))); } else { o.push_back(static_cast<char>(0xF0|(cp>>18))); o.push_back(static_cast<char>(0x80|((cp>>12)&0x3F))); o.push_back(static_cast<char>(0x80|((cp>>6)&0x3F))); o.push_back(static_cast<char>(0x80|(cp&0x3F))); } }
+  static inline int hexval(char c){ if(c>='0'&&c<='9') return c-'0'; if(c>='a'&&c<='f') return 10+(c-'a'); if(c>='A'&&c<='F') return 10+(c-'A'); return -1; }
+  bool read_u4(uint32_t& cp){
+    if (i + 4 > n) return false;
+    int h1 = hexval(s[i]), h2 = hexval(s[i+1]), h3 = hexval(s[i+2]), h4 = hexval(s[i+3]);
+    if (h1 < 0 || h2 < 0 || h3 < 0 || h4 < 0) return false;
+    cp = static_cast<uint32_t>((h1 << 12) | (h2 << 8) | (h3 << 4) | h4);
+    i += 4;
+    return true;
+  }
+  bool read_surrogate_pair(uint32_t hi, uint32_t& out_cp){
+    if (!(i + 6 <= n && s[i] == '\\' && s[i+1] == 'u')) return false;
+    i += 2;
+    uint32_t low = 0;
+    if (!read_u4(low)) return false;
+    if (!(low >= 0xDC00 && low <= 0xDFFF)) return false;
+    out_cp = 0x10000 + (((hi - 0xD800) << 10) | (low - 0xDC00));
+    return true;
+  }
+  bool parse_unicode_after_u(std::string& out){
+    uint32_t cp = 0;
+    if (!read_u4(cp)) { rt_raise("ValueError", "json: invalid unicode escape"); return false; }
+    if (cp >= 0xD800 && cp <= 0xDBFF) {
+      uint32_t full = 0;
+      if (!read_surrogate_pair(cp, full)) { rt_raise("ValueError", "json: invalid unicode surrogate"); return false; }
+      cp = full;
+    }
+    append_utf8(cp, out);
+    return true;
+  }
+  bool parse_escape(std::string& out){
+    if (i >= n) { rt_raise("ValueError", "json: invalid escape"); return false; }
+    char e = s[i++];
+    switch (e) {
+      case '"': out.push_back('"'); break;
+      case '\\': out.push_back('\\'); break;
+      case '/': out.push_back('/'); break;
+      case 'b': out.push_back('\b'); break;
+      case 'f': out.push_back('\f'); break;
+      case 'n': out.push_back('\n'); break;
+      case 'r': out.push_back('\r'); break;
+      case 't': out.push_back('\t'); break;
+      case 'u': return parse_unicode_after_u(out);
+      default: out.push_back(e); break;
+    }
+    return true;
+  }
   void* parseString(){
-    auto hexval=[&](char c)->int{ if(c>='0'&&c<='9') return c-'0'; if(c>='a'&&c<='f') return 10+(c-'a'); if(c>='A'&&c<='F') return 10+(c-'A'); return -1; };
-    skipws(); if (i>=n || s[i] != '"') { rt_raise("ValueError","json: expected string"); return nullptr; } ++i; std::string out;
-    while(i<n){ char c=s[i++]; if(c=='"') break; if(c=='\\'&& i<n){ char e=s[i++]; switch(e){ case '"': out.push_back('"'); break; case '\\': out.push_back('\\'); break; case '/': out.push_back('/'); break; case 'b': out.push_back('\b'); break; case 'f': out.push_back('\f'); break; case 'n': out.push_back('\n'); break; case 'r': out.push_back('\r'); break; case 't': out.push_back('\t'); break; case 'u': {
-              if (i+4>n) { rt_raise("ValueError","json: invalid unicode escape"); return nullptr; }
-              int h1=hexval(s[i]),h2=hexval(s[i+1]),h3=hexval(s[i+2]),h4=hexval(s[i+3]);
-              if (h1<0||h2<0||h3<0||h4<0) { rt_raise("ValueError","json: invalid unicode escape"); return nullptr; }
-              uint32_t cp = static_cast<uint32_t>((h1<<12)|(h2<<8)|(h3<<4)|h4);
-              i+=4;
-              if (cp>=0xD800 && cp<=0xDBFF) {
-                if (!(i+6<=n && s[i]=='\\' && s[i+1]=='u')) { rt_raise("ValueError","json: invalid unicode surrogate"); return nullptr; }
-                i+=2; int h5=hexval(s[i]),h6=hexval(s[i+1]),h7=hexval(s[i+2]),h8=hexval(s[i+3]);
-                if (h5<0||h6<0||h7<0||h8<0) { rt_raise("ValueError","json: invalid unicode surrogate"); return nullptr; }
-                uint32_t low = static_cast<uint32_t>((h5<<12)|(h6<<8)|(h7<<4)|h8); i+=4;
-                if (!(low>=0xDC00 && low<=0xDFFF)) { rt_raise("ValueError","json: invalid unicode surrogate"); return nullptr; }
-                cp = 0x10000 + (((cp-0xD800)<<10) | (low-0xDC00));
-              }
-              append_utf8(cp,out); break; }
-            default: out.push_back(e); break; }
-          } else { out.push_back(c);} }
+    skipws(); if (i>=n || s[i] != '"') { rt_raise("ValueError","json: expected string"); return nullptr; }
+    ++i; std::string out;
+    while (i < n) {
+      char c = s[i++];
+      if (c == '"') break;
+      if (c == '\\') {
+        if (!parse_escape(out)) return nullptr;
+      } else {
+        out.push_back(c);
+      }
+    }
     return string_new(out.data(), out.size());
   }
   void* parseNumber(){ skipws(); std::size_t start=i; if(i<n && (s[i]=='-'||s[i]=='+')) ++i; bool hasDot=false, hasExp=false; while(i<n){ char c=s[i]; if(c>='0'&&c<='9'){ ++i; continue; } if(c=='.'){ hasDot=true; ++i; continue; } if(c=='e'||c=='E'){ hasExp=true; ++i; if(i<n && (s[i]=='+'||s[i]=='-')) ++i; while(i<n && s[i]>='0'&&s[i]<='9') ++i; break;} break; }
@@ -4277,39 +4259,12 @@ void* html_escape(void* str, int32_t quote) {
   return string_new(out.data(), out.size());
 }
 
-static int from_hex_digit(char c) {
-  if (c>='0'&&c<='9') return c-'0';
-  if (c>='a'&&c<='f') return 10+(c-'a');
-  if (c>='A'&&c<='F') return 10+(c-'A');
-  return -1;
-}
+// (from_hex_digit moved to HTML unescape handler)
 
 void* html_unescape(void* str) {
   if (!str) return string_from_cstr("");
   const char* d = string_data(str); std::size_t n = string_len(str);
-  std::string out; out.reserve(n);
-  for (std::size_t i=0;i<n;) {
-    char c = d[i];
-    if (c == '&') {
-      // try named
-      if (i+5<=n && std::memcmp(d+i, "&amp;", 5)==0) { out.push_back('&'); i+=5; continue; }
-      if (i+4<=n && std::memcmp(d+i, "&lt;", 4)==0) { out.push_back('<'); i+=4; continue; }
-      if (i+4<=n && std::memcmp(d+i, "&gt;", 4)==0) { out.push_back('>'); i+=4; continue; }
-      if (i+6<=n && std::memcmp(d+i, "&quot;", 6)==0) { out.push_back('"'); i+=6; continue; }
-      if (i+6<=n && std::memcmp(d+i, "&#x27;", 6)==0) { out.push_back('\''); i+=6; continue; }
-      // numeric: &#NNN; or &#xHH;
-      if (i+3<n && d[i+1]=='#') {
-        std::size_t j = i+2; int base = 10; if (j<n && (d[j]=='x' || d[j]=='X')) { base = 16; ++j; }
-        int val = 0; bool ok=false;
-        for (; j<n && d[j] != ';'; ++j) {
-          if (base==10) { if (!(d[j]>='0'&&d[j]<='9')) break; ok=true; val = val*10 + (d[j]-'0'); }
-          else { int hv = from_hex_digit(d[j]); if (hv<0) break; ok=true; val = val*16 + hv; }
-        }
-        if (ok && j<n && d[j]==';') { out.push_back(static_cast<char>(val)); i = j+1; continue; }
-      }
-    }
-    out.push_back(c); ++i;
-  }
+  std::string out; detail::html_unescape_impl(d, n, out);
   return string_new(out.data(), out.size());
 }
 
@@ -4949,62 +4904,18 @@ static bool parse_struct_fmt(const std::string& fmt, std::vector<FmtItem>& out, 
   return true;
 }
 
-static inline void append_u32(std::vector<unsigned char>& buf, uint32_t v, bool little) {
-  if (little) { buf.push_back(v & 0xFFU); buf.push_back((v>>8) & 0xFFU); buf.push_back((v>>16) & 0xFFU); buf.push_back((v>>24) & 0xFFU); }
-  else { buf.push_back((v>>24) & 0xFFU); buf.push_back((v>>16) & 0xFFU); buf.push_back((v>>8) & 0xFFU); buf.push_back(v & 0xFFU); }
-}
-static inline uint32_t read_u32(const unsigned char* p, bool little) {
-  if (little) return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
-  return ((uint32_t)p[0]<<24) | ((uint32_t)p[1]<<16) | ((uint32_t)p[2]<<8) | (uint32_t)p[3];
-}
+// append_u32/read_u32 moved to detail helpers
 
 void* struct_pack(void* fmt_str, void* values_list) {
   if (!fmt_str) return bytes_new(nullptr, 0);
   std::string fmt(string_data(fmt_str), string_len(fmt_str));
   std::vector<FmtItem> items; bool little;
   if (!parse_struct_fmt(fmt, items, little)) { rt_raise("ValueError", "struct.pack: invalid format"); return nullptr; }
+  std::vector<detail::StructItem> parsed; parsed.reserve(items.size());
+  for (const auto& it : items) parsed.push_back(detail::StructItem{it.code, it.count});
   std::vector<unsigned char> out; out.reserve(16);
-  std::size_t vi = 0; std::size_t vcount = values_list ? list_len(values_list) : 0;
-  auto needValue = [&](const char* what){ if (vi >= vcount) { rt_raise("ValueError", what); return (void*)nullptr; } return list_get(values_list, vi++); };
-  for (const auto& it : items) {
-    for (int k=0;k<it.count;++k) {
-      if (it.code == 'b' || it.code == 'B') {
-        void* v = needValue("struct.pack: insufficient values"); if (rt_has_exception()) return nullptr;
-        long long iv = 0; // to_int_like
-        if (v) {
-          auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
-          if (static_cast<TypeTag>(h->tag) == TypeTag::Int) iv = box_int_value(v);
-          else if (static_cast<TypeTag>(h->tag) == TypeTag::Float) iv = static_cast<long long>(box_float_value(v));
-          else if (static_cast<TypeTag>(h->tag) == TypeTag::Bool) iv = box_bool_value(v) ? 1 : 0;
-        }
-        if (it.code == 'b') { if (iv < -128) iv = -128; if (iv > 127) iv = 127; out.push_back(static_cast<unsigned char>(iv & 0xFF)); }
-        else { if (iv < 0) iv = 0; if (iv > 255) iv = 255; out.push_back(static_cast<unsigned char>(iv)); }
-      } else if (it.code == 'i' || it.code == 'I') {
-        void* v = needValue("struct.pack: insufficient values"); if (rt_has_exception()) return nullptr;
-        long long iv = 0;
-        if (v) {
-          auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
-          if (static_cast<TypeTag>(h->tag) == TypeTag::Int) iv = box_int_value(v);
-          else if (static_cast<TypeTag>(h->tag) == TypeTag::Float) iv = static_cast<long long>(box_float_value(v));
-          else if (static_cast<TypeTag>(h->tag) == TypeTag::Bool) iv = box_bool_value(v) ? 1 : 0;
-        }
-        uint32_t u = static_cast<uint32_t>(iv);
-        append_u32(out, u, little);
-      } else if (it.code == 'f') {
-        void* v = needValue("struct.pack: insufficient values"); if (rt_has_exception()) return nullptr;
-        double dv = 0.0;
-        if (v) {
-          auto* h = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(v) - sizeof(ObjectHeader));
-          if (static_cast<TypeTag>(h->tag) == TypeTag::Float) dv = box_float_value(v);
-          else if (static_cast<TypeTag>(h->tag) == TypeTag::Int) dv = static_cast<double>(box_int_value(v));
-          else if (static_cast<TypeTag>(h->tag) == TypeTag::Bool) dv = box_bool_value(v) ? 1.0 : 0.0;
-        }
-        float fv = static_cast<float>(dv);
-        uint32_t u; static_assert(sizeof(float)==4); std::memcpy(&u, &fv, sizeof(float));
-        append_u32(out, u, little);
-      }
-    }
-  }
+  detail::struct_pack_impl(parsed, little, values_list, out);
+  if (rt_has_exception()) return nullptr;
   return bytes_new(out.data(), out.size());
 }
 
@@ -5015,33 +4926,12 @@ void* struct_unpack(void* fmt_str, void* data_bytes) {
   if (!parse_struct_fmt(fmt, items, little)) { rt_raise("ValueError", "struct.unpack: invalid format"); return nullptr; }
   const unsigned char* p = bytes_data(data_bytes);
   std::size_t nb = bytes_len(data_bytes);
-  // Compute required size
   std::size_t need = 0; for (const auto& it: items){ int w=(it.code=='f'||it.code=='i'||it.code=='I')?4:1; need += static_cast<std::size_t>(it.count)*w; }
   if (nb != need) { rt_raise("ValueError", "struct.unpack: wrong size"); return nullptr; }
+  std::vector<detail::StructItem> parsed; parsed.reserve(items.size());
+  for (const auto& it : items) parsed.push_back(detail::StructItem{it.code, it.count});
   void* out = list_new(0);
-  std::size_t idx = 0;
-  for (const auto& it : items) {
-    for (int k=0;k<it.count;++k) {
-      if (it.code == 'b') {
-        int8_t v = static_cast<int8_t>(p[idx++]);
-        list_push_slot(&out, box_int(static_cast<long long>(v)));
-      } else if (it.code == 'B') {
-        uint8_t v = p[idx++];
-        list_push_slot(&out, box_int(static_cast<long long>(v)));
-      } else if (it.code == 'i' || it.code == 'I') {
-        uint32_t u = read_u32(p + idx, little); idx += 4;
-        if (it.code == 'i') {
-          int32_t s; std::memcpy(&s, &u, sizeof(uint32_t));
-          list_push_slot(&out, box_int(static_cast<long long>(s)));
-        } else {
-          list_push_slot(&out, box_int(static_cast<long long>(u)));
-        }
-      } else if (it.code == 'f') {
-        uint32_t u = read_u32(p + idx, little); idx += 4; float fv; std::memcpy(&fv, &u, sizeof(uint32_t));
-        list_push_slot(&out, box_float(static_cast<double>(fv)));
-      }
-    }
-  }
+  detail::struct_unpack_impl(parsed, little, p, nb, out);
   return out;
 }
 
@@ -5050,8 +4940,9 @@ int32_t struct_calcsize(void* fmt_str) {
   std::string fmt(string_data(fmt_str), string_len(fmt_str));
   std::vector<FmtItem> items; bool little;
   if (!parse_struct_fmt(fmt, items, little)) return 0;
-  std::size_t need = 0; for (const auto& it: items){ int w=(it.code=='f'||it.code=='i'||it.code=='I')?4:1; need += static_cast<std::size_t>(it.count)*w; }
-  return static_cast<int32_t>(need);
+  std::vector<detail::StructItem> parsed; parsed.reserve(items.size());
+  for (const auto& it : items) parsed.push_back(detail::StructItem{it.code, it.count});
+  return detail::struct_calcsize_impl(parsed);
 }
 
 } // namespace pycc::rt
@@ -5118,59 +5009,19 @@ void* argparse_parse_args(void* parser, void* args_list) {
   void* result = dict_new(8);
   void* optmap = ap_opt_map(parser);
   void* actmap = ap_act_map(parser);
-  std::size_t n = (args_list ? list_len(args_list) : 0);
-  for (std::size_t i=0; i<n; ++i) {
+  const std::size_t n = (args_list ? list_len(args_list) : 0);
+  for (std::size_t i = 0; i < n; ++i) {
     void* tok = list_get(args_list, i);
     if (!tok) continue;
     std::string t(string_data(tok), string_len(tok));
-    if (!t.empty() && t[0]=='-') {
-      // Support --name=value
-      std::string opt = t, val;
-      std::size_t eq = t.find('=');
-      if (eq != std::string::npos) { opt = t.substr(0, eq); val = t.substr(eq+1); }
-      // Lookup in optmap by string contents, since dict keys are pointer-identity based.
-      void* canon = nullptr;
-      {
-        void* it = pycc_dict_iter_new(optmap);
-        for (;;) {
-          void* k = pycc_dict_iter_next(it);
-          if (!k) break;
-          std::string ks(string_data(k), string_len(k));
-          if (ks == opt) { canon = dict_get(optmap, k); break; }
-        }
-      }
-      if (!canon) continue; // unknown option: skip
-      void* act = dict_get(actmap, canon);
-      if (!act) continue;
-      std::string an(string_data(act), string_len(act));
-      std::string keyS(string_data(canon), string_len(canon));
-      void* key = canon; // reuse
-      if (an == "store_true") {
-        dict_set(&result, key, box_bool(true));
-      } else if (an == "store") {
-        if (val.empty()) {
-          if (i + 1 >= n) { rt_raise("ValueError", "argparse: missing value"); return nullptr; }
-          void* nv = list_get(args_list, ++i);
-          dict_set(&result, key, nv);
-        } else {
-          dict_set(&result, key, string_new(val.data(), val.size()));
-        }
-      } else if (an == "store_int") {
-        std::string sval;
-        if (val.empty()) {
-          if (i + 1 >= n) { rt_raise("ValueError", "argparse: missing int value"); return nullptr; }
-          void* nv = list_get(args_list, ++i);
-          sval.assign(string_data(nv), string_len(nv));
-        } else {
-          sval = val;
-        }
-        // parse integer
-        long long v = 0; bool neg=false; std::size_t j=0; if(!sval.empty() && (sval[0]=='+'||sval[0]=='-')){neg=(sval[0]=='-'); j=1;}
-        for (; j<sval.size(); ++j) { if (!std::isdigit(static_cast<unsigned char>(sval[j]))) { rt_raise("ValueError", "argparse: invalid int"); return nullptr; } v = v*10 + (sval[j]-'0'); }
-        if (neg) v = -v;
-        dict_set(&result, key, box_int(v));
-      }
-    }
+    if (t.empty() || t[0] != '-') continue;
+    detail::OptVal ov = detail::argparse_split_optval(t);
+    void* canon = detail::argparse_lookup_canon(optmap, ov.opt);
+    if (!canon) continue;
+    void* act = dict_get(actmap, canon);
+    if (!act) continue;
+    std::string an(string_data(act), string_len(act));
+    if (!detail::argparse_apply_action(an, canon, ov, args_list, i, result)) return nullptr;
   }
   return result;
 }

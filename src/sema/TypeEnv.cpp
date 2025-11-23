@@ -3,6 +3,7 @@
  * Purpose: Implement methods for tracking type sets, provenance, and shapes.
  */
 #include "sema/TypeEnv.h"
+#include "sema/detail/types/IntersectOps.h"
 
 namespace pycc::sema {
     /*** Name: TypeEnv::maskForKind */
@@ -156,79 +157,10 @@ namespace pycc::sema {
 
     /*** Name: TypeEnv::intersectFrom */
     void TypeEnv::intersectFrom(const TypeEnv &a, const TypeEnv &b) {
-        // ReSharper disable once CppUseStructuredBinding
-        for (const auto &kv: a.sets_) {
-            const std::string &name = kv.first;
-            const uint32_t am = kv.second;
-            if (const uint32_t bm = b.getSet(name); am != 0U && bm != 0U) {
-                const uint32_t inter = am & bm;
-                sets_[name] = inter; // may be zero: contradictory
-                if (inter != 0U && isSingle(inter)) { types_[name] = kindFor(inter); }
-                auto lit = a.listElemSets_.find(name);
-                if (auto lit2 = b.listElemSets_.find(name);
-                    lit != a.listElemSets_.end() && lit2 != b.listElemSets_.end()) {
-                    listElemSets_[name] = (lit->second & lit2->second);
-                }
-                auto tit = a.tupleElemSets_.find(name);
-                if (auto tit2 = b.tupleElemSets_.find(name);
-                    tit != a.tupleElemSets_.end() && tit2 != b.tupleElemSets_.end()) {
-                    const auto &va = tit->second;
-                    const auto &vb = tit2->second;
-                    const size_t n = std::min(va.size(), vb.size());
-                    std::vector<uint32_t> out;
-                    out.reserve(n);
-                    for (size_t i = 0; i < n; ++i) { out.push_back(va[i] & vb[i]); }
-                    tupleElemSets_[name] = std::move(out);
-                }
-                auto ditk = a.dictKeySets_.find(name);
-                auto ditk2 = b.dictKeySets_.find(name);
-                auto ditv = a.dictValSets_.find(name);
-                auto ditv2 = b.dictValSets_.find(name);
-                if (ditk != a.dictKeySets_.end() && ditk2 != b.dictKeySets_.end()) {
-                    dictKeySets_[name] = (ditk->second & ditk2->second);
-                }
-                if (ditv != a.dictValSets_.end() && ditv2 != b.dictValSets_.end()) {
-                    dictValSets_[name] = (ditv->second & ditv2->second);
-                }
-            }
-        }
-        // ReSharper disable once CppUseStructuredBinding
-        for (const auto &kv: b.sets_) {
-            const std::string &name = kv.first;
-            if (a.sets_.contains(name)) continue; // already handled
-            const uint32_t bm = kv.second;
-            if (const uint32_t am = a.getSet(name); am != 0U && bm != 0U) {
-                const uint32_t inter = am & bm;
-                sets_[name] = inter;
-                if (inter != 0U && isSingle(inter)) { types_[name] = kindFor(inter); }
-                auto lit = a.listElemSets_.find(name);
-                if (auto lit2 = b.listElemSets_.find(name);
-                    lit != a.listElemSets_.end() && lit2 != b.listElemSets_.end()) {
-                    listElemSets_[name] = (lit->second & lit2->second);
-                }
-                auto tit = a.tupleElemSets_.find(name);
-                if (auto tit2 = b.tupleElemSets_.find(name);
-                    tit != a.tupleElemSets_.end() && tit2 != b.tupleElemSets_.end()) {
-                    const auto &va = tit->second;
-                    const auto &vb = tit2->second;
-                    const size_t n = std::min(va.size(), vb.size());
-                    std::vector<uint32_t> out;
-                    out.reserve(n);
-                    for (size_t i = 0; i < n; ++i) out.push_back(va[i] & vb[i]);
-                    tupleElemSets_[name] = std::move(out);
-                }
-                auto ditk = a.dictKeySets_.find(name);
-                auto ditk2 = b.dictKeySets_.find(name);
-                auto ditv = a.dictValSets_.find(name);
-                auto ditv2 = b.dictValSets_.find(name);
-                if (ditk != a.dictKeySets_.end() && ditk2 != b.dictKeySets_.end()) {
-                    dictKeySets_[name] = (ditk->second & ditk2->second);
-                }
-                if (ditv != a.dictValSets_.end() && ditv2 != b.dictValSets_.end()) {
-                    dictValSets_[name] = (ditv->second & ditv2->second);
-                }
-            }
-        }
+        detail::IntersectOps::setsAndTypes(*this, a, b);
+        detail::IntersectOps::listElems(*this, a, b);
+        detail::IntersectOps::tupleElems(*this, a, b);
+        detail::IntersectOps::dictKeyVals(*this, a, b);
     }
 
     /*** Name: TypeEnv::where */
