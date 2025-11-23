@@ -10,27 +10,27 @@
 
 
 TEST(SecurityE2E, AcceptsLiteralEval) {
-  const char* srcPath = "sec_eval.py";
+  const char* srcPath = "../Testing/sec_eval.py";
   {
     std::ofstream out(srcPath);
     out << "def main() -> int:\n";
     out << "  x = eval(\"1+2\")\n";
     out << "  return 0\n";
   }
-  const char* cmd = "../pycc --color=never -o out sec_eval.py 2> sec_eval.txt";
+  const char* cmd = "../pycc --color=never -o ../Testing/sec_eval_out ../Testing/sec_eval.py 2> ../Testing/sec_eval.txt";
   int rc = std::system(cmd);
   ASSERT_EQ(rc, 0);
 }
 
 TEST(SecurityE2E, AcceptsLiteralExec) {
-  const char* srcPath = "sec_exec.py";
+  const char* srcPath = "../Testing/sec_exec.py";
   {
     std::ofstream out(srcPath);
     out << "def main() -> int:\n";
     out << "  exec(\"print(1)\")\n";
     out << "  return 0\n";
   }
-  const char* cmd = "../pycc --color=never -o out sec_exec.py 2> sec_exec.txt";
+  const char* cmd = "../pycc --color=never -o ../Testing/sec_exec_out ../Testing/sec_exec.py 2> ../Testing/sec_exec.txt";
   int rc = std::system(cmd);
   ASSERT_EQ(rc, 0);
 }

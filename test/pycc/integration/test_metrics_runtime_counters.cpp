@@ -13,16 +13,15 @@ static std::string readAll(const std::string& p) {
 }
 
 TEST(RuntimeMetrics, JsonContainsRtCounters) {
-  const char* src = "metrics_rt.py";
+  const char* src = "../Testing/metrics_rt.py";
   {
     std::ofstream out(src);
     out << "def main() -> int:\n";
     out << "  return 1\n";
   }
-  int rc = std::system("./pycc --metrics-json -o out_rt metrics_rt.py > metrics_rt.json 2>/dev/null");
+  int rc = std::system("./pycc --metrics-json -o ../Testing/out_rt ../Testing/metrics_rt.py > ../Testing/metrics_rt.json 2>/dev/null");
   ASSERT_EQ(rc, 0);
-  auto js = readAll("metrics_rt.json");
+  auto js = readAll("../Testing/metrics_rt.json");
   ASSERT_NE(js.find("\"rt.bytes_live\""), std::string::npos);
   ASSERT_NE(js.find("\"rt.collections\""), std::string::npos);
 }
-

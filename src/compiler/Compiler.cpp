@@ -537,6 +537,12 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
   if (hasDefine("OPT_ELIDE_GCBARRIER")) {
     setenv("PYCC_OPT_ELIDE_GCBARRIER", "1", /*overwrite*/1);
   }
+  // Disable llvm.global_ctors emission during AOT compilation to keep IR minimal and avoid toolchain quirks
+#ifdef __APPLE__
+  setenv("PYCC_DISABLE_GLOBAL_CTORS", "1", 1);
+#else
+  setenv("PYCC_DISABLE_GLOBAL_CTORS", "1", 1);
+#endif
   const std::string err = codegenDriver.emit(*mod, outBase, opts.emitAssemblyOnly, opts.compileOnly, res);
   metrics.stop("EmitIR");
   if (!err.empty()) {

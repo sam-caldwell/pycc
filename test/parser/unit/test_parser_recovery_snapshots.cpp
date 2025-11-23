@@ -10,7 +10,7 @@
 using namespace pycc;
 
 TEST(ParserRecoverySnapshots, MalformedDecoratorThenValidDef) {
-  const char* path = "demos/snap_deco.py";
+  const char* path = "Testing/snap_deco.py";
   const char* src =
       "@decor(\n"      // malformed decorator expression (missing ')')
       "def ok() -> int:\n"
@@ -32,7 +32,7 @@ TEST(ParserRecoverySnapshots, MalformedDecoratorThenValidDef) {
 }
 
 TEST(ParserRecoverySnapshots, ImportFromMissingIdentAfterDot) {
-  const char* path = "demos/snap_import.py";
+  const char* path = "Testing/snap_import.py";
   const char* src =
       "from pkg. import x\n"  // error: missing ident after '.'
       "def main() -> int:\n"

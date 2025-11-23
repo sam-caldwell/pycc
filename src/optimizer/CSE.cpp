@@ -206,6 +206,8 @@ static std::size_t cseSubexprInStmt(std::vector<std::unique_ptr<Stmt>>& body, st
   auto tempAssign = std::make_unique<AssignStmt>(tempName, cloneExpr(candExpr));
   auto insertPos = it - body.begin();
   body.insert(body.begin() + static_cast<long>(insertPos), std::move(tempAssign));
+  // Insertion may invalidate iterators; re-establish iterator pointing to the original statement
+  it = body.begin() + static_cast<long>(insertPos + 1);
   // Rewrite occurrences after the first
   struct Replacer : public ast::VisitorBase {
     const std::string& key; const Expr* exemplar; const std::string& tempName; int seen{0}; std::unique_ptr<Expr>* slot{nullptr};

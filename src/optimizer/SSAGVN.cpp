@@ -171,6 +171,10 @@ std::size_t SSAGVN::run(Module& module) {
         } else if (!as->target.empty()) { writes[as->target]++; }
       }
     }
+    // If any variable in the function has multiple writes, skip GVN for safety in this function.
+    bool hasMultiWrite = false;
+    for (const auto &kv : writes) { if (kv.second > 1) { hasMultiWrite = true; break; } }
+    if (hasMultiWrite) { continue; }
     // Prepare per-block out tables
     std::vector<std::unordered_map<std::string,std::string>> out(ssa.blocks.size());
     // Traverse dominator tree starting at entry

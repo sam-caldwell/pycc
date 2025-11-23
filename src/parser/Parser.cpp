@@ -356,6 +356,10 @@ std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
   expect(TK::Indent, "indent");
 
   auto func = std::make_unique<ast::FunctionDef>(nameTok.text, retKind);
+  // Stamp function node with source location from the def name token
+  func->file = nameTok.file;
+  func->line = nameTok.line;
+  func->col = nameTok.col;
   func->params = std::move(params);
   while (peek().kind != TK::Dedent && peek().kind != TK::End) {
     if (peek().kind == TK::Newline) { get(); continue; }
@@ -639,7 +643,9 @@ void Parser::parseOptionalParamType(ast::Param& param) {
 std::unique_ptr<ast::Stmt> Parser::parseIfStmt() {
   get();
   auto cond = parseExpr();
-  expect(TK::Colon, ":'");
+  // Tolerate a missing ':' before the function body in demos; record an error but continue.
+  if (peek().kind == TK::Colon) { get(); }
+  else { addError("expected ':'"); }
   expect(TK::Newline, "newline");
   if (peek().kind == TK::Indent) { get(); }
   auto ifs = std::make_unique<ast::IfStmt>(std::move(cond));
@@ -1740,7 +1746,11 @@ std::unique_ptr<ast::Stmt> Parser::parseImportStmt() {
   if (peek().kind == TK::Ident) {
     const auto& id = get(); module = id.text;
     while (peek().kind == TK::Dot) {
-      get(); const auto& nxt = get(); if (nxt.kind != TK::Ident) throw std::runtime_error("Parse error: expected ident after '.' in from");
+      get();
+      // Allow a trailing dot before 'import' (e.g., 'from pkg. import x') by stopping here.
+      if (peek().kind == TK::Import) { break; }
+      const auto& nxt = get();
+      if (nxt.kind != TK::Ident) throw std::runtime_error("Parse error: expected ident after '.' in from");
       module += "."; module += nxt.text;
     }
   }

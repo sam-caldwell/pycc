@@ -17,7 +17,7 @@ TEST(LexerFileInput, MissingFileProducesEOF) {
 }
 
 TEST(LexerFileInput, ReadsSimpleFile) {
-  const char* path = "_lex_tmp.py";
+  const char* path = "Testing/_lex_tmp.py";
   {
     FILE* f = std::fopen(path, "wb");
     ASSERT_NE(f, nullptr);
@@ -34,4 +34,3 @@ TEST(LexerFileInput, ReadsSimpleFile) {
   EXPECT_TRUE(sawReturn);
   std::remove(path);
 }
-

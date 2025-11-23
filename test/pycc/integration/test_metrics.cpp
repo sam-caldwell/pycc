@@ -15,18 +15,17 @@ static std::string readFileAll(const std::string& p) {
 }
 
 TEST(Metrics, JsonOutput) {
-  const char* src = "metrics_tmp.py";
+  const char* src = "../Testing/metrics_tmp.py";
   {
     std::ofstream out(src);
     out << "def main() -> int:\n";
     out << "  return 5\n";
   }
-  const char* cmd = "./pycc --metrics-json -o out metrics_tmp.py > metrics.json 2>/dev/null";
+  const char* cmd = "./pycc --metrics-json -o ../Testing/metrics_out ../Testing/metrics_tmp.py > ../Testing/metrics.json 2>/dev/null";
   int rc = std::system(cmd);
   ASSERT_EQ(rc, 0);
-  auto js = readFileAll("metrics.json");
+  auto js = readFileAll("../Testing/metrics.json");
   // Minimal checks for JSON structure and keys
   ASSERT_NE(js.find("\"durations_ms\""), std::string::npos);
   ASSERT_NE(js.find("\"ast\""), std::string::npos);
 }
-

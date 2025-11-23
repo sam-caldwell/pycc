@@ -7,7 +7,7 @@
 #include <cstdlib>
 
 TEST(EvalDynamicE2E, RejectsEvalDynamic) {
-  const char* srcPath = "dyn_eval.py";
+  const char* srcPath = "../Testing/dyn_eval.py";
   {
     std::ofstream out(srcPath);
     out << "def main() -> int:\n";
@@ -15,13 +15,13 @@ TEST(EvalDynamicE2E, RejectsEvalDynamic) {
     out << "  x = eval(s)\n";
     out << "  return 0\n";
   }
-  const char* cmd = "../pycc --color=never -o out dyn_eval.py 2> dyn_eval.txt";
+  const char* cmd = "../pycc --color=never -o ../Testing/dyn_eval_out ../Testing/dyn_eval.py 2> ../Testing/dyn_eval.txt";
   int rc = std::system(cmd);
   ASSERT_NE(rc, 0);
 }
 
 TEST(EvalDynamicE2E, RejectsExecDynamic) {
-  const char* srcPath = "dyn_exec.py";
+  const char* srcPath = "../Testing/dyn_exec.py";
   {
     std::ofstream out(srcPath);
     out << "def main() -> int:\n";
@@ -29,8 +29,7 @@ TEST(EvalDynamicE2E, RejectsExecDynamic) {
     out << "  exec(s)\n";
     out << "  return 0\n";
   }
-  const char* cmd = "../pycc --color=never -o out dyn_exec.py 2> dyn_exec.txt";
+  const char* cmd = "../pycc --color=never -o ../Testing/dyn_exec_out ../Testing/dyn_exec.py 2> ../Testing/dyn_exec.txt";
   int rc = std::system(cmd);
   ASSERT_NE(rc, 0);
 }
-

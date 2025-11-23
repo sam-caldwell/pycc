@@ -21,69 +21,69 @@ static std::string read_all(const std::string& path) {
 
 TEST(CLI_EndToEnd, HelpPrintsUsage) {
   // Ensure pycc is available in the working directory (ctest sets it for e2e target).
-  int rc = std::system("../pycc --help > help.txt 2>/dev/null");
+  int rc = std::system("../pycc --help > ../Testing/help.txt 2>/dev/null");
   ASSERT_EQ(rc, 0);
-  auto u = read_all("help.txt");
+  auto u = read_all("../Testing/help.txt");
   ASSERT_NE(u.find("pycc [options] file"), std::string::npos);
 }
 
 TEST(CLI_EndToEnd, ShortHelpAlsoPrintsUsage) {
-  int rc = std::system("../pycc -h > help2.txt 2>/dev/null");
+  int rc = std::system("../pycc -h > ../Testing/help2.txt 2>/dev/null");
   ASSERT_EQ(rc, 0);
-  auto u = read_all("help2.txt");
+  auto u = read_all("../Testing/help2.txt");
   ASSERT_NE(u.find("pycc [options] file"), std::string::npos);
 }
 
 TEST(CLI_EndToEnd, MetricsTextAndJson) {
-  write_file("m.py", "def main() -> int:\n  return 1\n");
-  int rc1 = std::system("../pycc --metrics -o m_out m.py > metrics.txt 2>/dev/null");
+  write_file("../Testing/m.py", "def main() -> int:\n  return 1\n");
+  int rc1 = std::system("../pycc --metrics -o ../Testing/m_out ../Testing/m.py > ../Testing/metrics.txt 2>/dev/null");
   ASSERT_EQ(rc1, 0);
-  auto txt = read_all("metrics.txt");
+  auto txt = read_all("../Testing/metrics.txt");
   ASSERT_NE(txt.find("Lex"), std::string::npos);
   ASSERT_NE(txt.find("Parse"), std::string::npos);
 
-  int rc2 = std::system("../pycc --metrics-json -o mj_out m.py > metrics.json 2>/dev/null");
+  int rc2 = std::system("../pycc --metrics-json -o ../Testing/mj_out ../Testing/m.py > ../Testing/metrics.json 2>/dev/null");
   ASSERT_EQ(rc2, 0);
-  auto js = read_all("metrics.json");
+  auto js = read_all("../Testing/metrics.json");
   ASSERT_NE(js.find("\"lex\""), std::string::npos);
   ASSERT_NE(js.find("\"parse\""), std::string::npos);
 }
 
 TEST(CLI_EndToEnd, AssemblyAndObjectOnlyModes) {
-  write_file("a.py", "def main() -> int:\n  return 5\n");
+  write_file("../Testing/a.py", "def main() -> int:\n  return 5\n");
   // -S assembly only
-  int rcS = std::system("../pycc -S -o out.s a.py > /dev/null 2>&1");
+  int rcS = std::system("../pycc -S -o ../Testing/out.s ../Testing/a.py > /dev/null 2>&1");
   ASSERT_EQ(rcS, 0);
-  ASSERT_TRUE(fs::exists("out.s"));
+  ASSERT_TRUE(fs::exists("../Testing/out.s"));
   // -c object only
-  int rcC = std::system("../pycc -c -o out.o a.py > /dev/null 2>&1");
+  int rcC = std::system("../pycc -c -o ../Testing/out.o ../Testing/a.py > /dev/null 2>&1");
   ASSERT_EQ(rcC, 0);
-  ASSERT_TRUE(fs::exists("out.o"));
+  ASSERT_TRUE(fs::exists("../Testing/out.o"));
 }
 
 TEST(CLI_EndToEnd, DDefineElideGCBarrierAccepted) {
-  write_file("d.py", "def main() -> int:\n  return 3\n");
-  int rc = std::system("../pycc -DOPT_ELIDE_GCBARRIER -o d_out d.py > /dev/null 2>&1");
+  write_file("../Testing/d.py", "def main() -> int:\n  return 3\n");
+  int rc = std::system("../pycc -DOPT_ELIDE_GCBARRIER -o ../Testing/d_out ../Testing/d.py > /dev/null 2>&1");
   ASSERT_EQ(rc, 0);
-  ASSERT_TRUE(fs::exists("d_out"));
+  ASSERT_TRUE(fs::exists("../Testing/d_out"));
 }
 
 TEST(CLI_EndToEnd, IRContainsSourceComments) {
-  write_file("src.py", "def main() -> int:\n  return 2\n");
-  int rc = std::system("../pycc -o out src.py > /dev/null 2>&1");
+  write_file("../Testing/src.py", "def main() -> int:\n  return 2\n");
+  int rc = std::system("../pycc -o ../Testing/out ../Testing/src.py > /dev/null 2>&1");
   ASSERT_EQ(rc, 0);
-  ASSERT_TRUE(fs::exists("out.ll"));
-  auto ir = read_all("out.ll");
+  ASSERT_TRUE(fs::exists("../Testing/out.ll"));
+  auto ir = read_all("../Testing/out.ll");
   // Header demarcation and at least one original source line
   ASSERT_NE(ir.find("; ---- PY SOURCE: src.py ----"), std::string::npos);
   ASSERT_NE(ir.find("; def main() -> int"), std::string::npos);
 }
 
 TEST(CLI_EndToEnd, LogsAreWritten) {
-  write_file("l.py", "def main() -> int:\n  x = 1\n  return x\n");
+  write_file("../Testing/l.py", "def main() -> int:\n  x = 1\n  return x\n");
   // Use a local logs directory in the run dir
   fs::create_directory("logs");
-  const char* cmd = "../pycc --log-path=logs --log-lexer --log-ast --log-codegen --ast-log=both -o l_out l.py > /dev/null 2>&1";
+  const char* cmd = "../pycc --log-path=logs --log-lexer --log-ast --log-codegen --ast-log=both -o ../Testing/l_out ../Testing/l.py > /dev/null 2>&1";
   int rc = std::system(cmd);
   ASSERT_EQ(rc, 0);
   // Find timestamped log files by suffix

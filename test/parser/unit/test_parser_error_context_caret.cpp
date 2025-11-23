@@ -10,7 +10,7 @@
 using namespace pycc;
 
 TEST(ParserErrorContext, CaretAndSourceLineShown) {
-  const char* path = "demos/snap_errs.py";
+  const char* path = "Testing/snap_errs.py";
   // Intentionally missing ':' after return type to trigger expect() failure
   const char* src = "def f() -> int\n  return 0\n";
   {

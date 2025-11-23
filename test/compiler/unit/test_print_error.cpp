@@ -19,7 +19,7 @@ static std::string readFile(const std::string& p) {
 }
 
 TEST(PrintError, WritesHeaderLabelCaret) {
-  const char* srcPath = "pe_tmp.py";
+  const char* srcPath = "Testing/pe_tmp.py";
   {
     std::ofstream out(srcPath);
     out << "abc\n";
@@ -29,7 +29,7 @@ TEST(PrintError, WritesHeaderLabelCaret) {
   pycc::sema::Diagnostic d; d.file = srcPath; d.line = 2; d.col = 3; d.message = "oops";
 
   // Redirect stderr to a temp file
-  const char* outPath = "pe_out.txt";
+  const char* outPath = "Testing/pe_out.txt";
   int saved = dup(2);
   FILE* fp = std::fopen(outPath, "w");
   ASSERT_NE(fp, nullptr);
@@ -55,10 +55,10 @@ TEST(PrintError, WritesHeaderLabelCaret) {
 }
 
 TEST(PrintError, ColorAddsAnsiSequences) {
-  const char* srcPath = "pe_tmp2.py";
+  const char* srcPath = "Testing/pe_tmp2.py";
   { std::ofstream out(srcPath); out << "x\n"; }
   pycc::sema::Diagnostic d; d.file = srcPath; d.line = 1; d.col = 1; d.message = "oops";
-  const char* outPath = "pe_out2.txt";
+  const char* outPath = "Testing/pe_out2.txt";
   int saved = dup(2);
   FILE* fp = std::fopen(outPath, "w");
   ASSERT_NE(fp, nullptr);
@@ -77,10 +77,10 @@ TEST(PrintError, ColorAddsAnsiSequences) {
 }
 
 TEST(PrintError, EmptyFileNoCaret) {
-  const char* srcPath = "pe_empty.py";
+  const char* srcPath = "Testing/pe_empty.py";
   { std::ofstream out(srcPath); /* empty file */ }
   pycc::sema::Diagnostic d; d.file = srcPath; d.line = 1; d.col = 1; d.message = "msg";
-  const char* outPath = "pe_empty_out.txt";
+  const char* outPath = "Testing/pe_empty_out.txt";
   int saved = dup(2);
   FILE* fp = std::fopen(outPath, "w"); ASSERT_NE(fp, nullptr); int fd = fileno(fp); ASSERT_GE(fd, 0);
   dup2(fd, 2);
@@ -95,7 +95,7 @@ TEST(PrintError, EmptyFileNoCaret) {
 
 TEST(PrintError, MissingFilePathPrintsLabelAndMessageOnly) {
   pycc::sema::Diagnostic d; d.file = ""; d.line = 1; d.col = 1; d.message = "oops";
-  const char* outPath = "pe_nofile_out.txt";
+  const char* outPath = "Testing/pe_nofile_out.txt";
   int saved = dup(2);
   FILE* fp = std::fopen(outPath, "w"); ASSERT_NE(fp, nullptr); int fd = fileno(fp); ASSERT_GE(fd, 0);
   dup2(fd, 2);
@@ -108,10 +108,10 @@ TEST(PrintError, MissingFilePathPrintsLabelAndMessageOnly) {
 }
 
 TEST(PrintError, CaretAtCol1Printed) {
-  const char* srcPath = "pe_col1.py";
+  const char* srcPath = "Testing/pe_col1.py";
   { std::ofstream out(srcPath); out << "line" << '\n'; }
   pycc::sema::Diagnostic d; d.file = srcPath; d.line = 1; d.col = 1; d.message = "m";
-  const char* outPath = "pe_col1_out.txt";
+  const char* outPath = "Testing/pe_col1_out.txt";
   int saved = dup(2);
   FILE* fp = std::fopen(outPath, "w"); ASSERT_NE(fp, nullptr); int fd = fileno(fp); ASSERT_GE(fd, 0);
   dup2(fd, 2);
