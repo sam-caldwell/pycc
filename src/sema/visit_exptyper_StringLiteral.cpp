@@ -10,7 +10,7 @@ using namespace pycc;
 using namespace pycc::sema;
 
 void ExpressionTyper::visit(const ast::Literal<std::string, ast::NodeKind::StringLiteral>& n) {
-  auto r = expr::handleStringLiteral(reinterpret_cast<const ast::StringLiteral&>(n));
+  // StringLiteral is a type alias of the same literal template; pass directly.
+  auto r = expr::handleStringLiteral(n);
   out = r.out; outSet = r.outSet;
 }
-

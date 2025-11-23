@@ -21,9 +21,8 @@ bool inferExprType(const ast::Expr* expr,
   expr->accept(exprTyper);
   if (!exprTyper.ok) { return false; }
   outType = exprTyper.out;
-  const_cast<ast::Expr*>(expr)->setType(outType);
+  expr->setType(outType);
   return true;
 }
 
 } // namespace pycc::sema
-

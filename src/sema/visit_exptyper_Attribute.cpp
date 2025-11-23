@@ -22,6 +22,5 @@ void ExpressionTyper::visit(const ast::Attribute& attr) {
     const uint32_t msk = env->getAttr(base->id, attr.attr);
     if (msk != 0U) { outSet = msk; if (TypeEnv::isSingleMask(msk)) out = TypeEnv::kindFromMask(msk); }
   }
-  auto& m = const_cast<ast::Attribute&>(attr); m.setType(out);
+  attr.setType(out);
 }
-

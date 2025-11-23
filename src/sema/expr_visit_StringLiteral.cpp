@@ -10,9 +10,7 @@ using namespace pycc;
 using namespace pycc::sema;
 
 expr::VisitResult expr::handleStringLiteral(const ast::StringLiteral& n) {
-  auto& mutableString = const_cast<ast::StringLiteral&>(n);
-  mutableString.setType(ast::TypeKind::Str);
-  mutableString.setCanonicalKey(std::string("s:") + std::to_string(n.value.size()));
+  n.setType(ast::TypeKind::Str);
+  n.setCanonicalKey(std::string("s:") + std::to_string(n.value.size()));
   return expr::VisitResult{ast::TypeKind::Str, TypeEnv::maskForKind(ast::TypeKind::Str)};
 }
-

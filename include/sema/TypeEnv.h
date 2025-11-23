@@ -45,7 +45,7 @@ namespace pycc::sema {
         void unionSet(const std::string &name, uint32_t mask, Provenance p);
 
         // Record that a name is an instance of a known class (by class name string)
-        void defineInstanceOf(const std::string &name, const std::string &className);
+        void defineInstanceOf(const std::string &name, const std::string_view &className);
 
         std::optional<std::string> instanceOf(const std::string &name) const;
 

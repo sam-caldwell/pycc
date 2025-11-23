@@ -10,7 +10,8 @@ using namespace pycc;
 using namespace pycc::sema;
 
 void ExpressionTyper::visit(const ast::Literal<double, ast::NodeKind::FloatLiteral>& n) {
-  auto r = expr::handleFloatLiteral(reinterpret_cast<const ast::FloatLiteral&>(n));
+    // ReSharper disable once CppUseStructuredBinding
+    const auto r = expr::handleFloatLiteral(reinterpret_cast<const ast::FloatLiteral&>(n));
   out = r.out; outSet = r.outSet;
 }
 

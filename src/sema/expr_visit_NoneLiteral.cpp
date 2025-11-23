@@ -10,9 +10,7 @@ using namespace pycc;
 using namespace pycc::sema;
 
 expr::VisitResult expr::handleNoneLiteral(const ast::NoneLiteral& n) {
-  auto& mutableNone = const_cast<ast::NoneLiteral&>(n);
-  mutableNone.setType(ast::TypeKind::NoneType);
-  mutableNone.setCanonicalKey("none");
+  n.setType(ast::TypeKind::NoneType);
+  n.setCanonicalKey("none");
   return expr::VisitResult{ast::TypeKind::NoneType, TypeEnv::maskForKind(ast::TypeKind::NoneType)};
 }
-

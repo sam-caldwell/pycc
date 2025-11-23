@@ -9,8 +9,9 @@
 using namespace pycc;
 using namespace pycc::sema;
 
-void ExpressionTyper::visit(const ast::NoneLiteral& n) {
-  auto r = expr::handleNoneLiteral(n);
-  out = r.out; outSet = r.outSet;
+void ExpressionTyper::visit(const ast::NoneLiteral &n) {
+    // ReSharper disable once CppUseStructuredBinding
+    const auto r = expr::handleNoneLiteral(n);
+    out = r.out;
+    outSet = r.outSet;
 }
-

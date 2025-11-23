@@ -9,11 +9,15 @@
 using namespace pycc;
 using namespace pycc::sema;
 
-void ExpressionTyper::visit(const ast::ListLiteral& listLiteral) {
-  auto visitChild = [&](const ast::Expr* e){
-    ExpressionTyper et{*env, *sigs, *retParamIdxs, *diags, polyTargets};
-    e->accept(et); if (!et.ok) return false; return true;
-  };
-  if (!expr::handleListLiteral(listLiteral, out, outSet, visitChild)) { ok = false; return; }
+void ExpressionTyper::visit(const ast::ListLiteral &listLiteral) {
+    auto visitChild = [&](const ast::Expr *e) {
+        ExpressionTyper et{*env, *sigs, *retParamIdxs, *diags, polyTargets};
+        e->accept(et);
+        if (!et.ok) return false;
+        return true;
+    };
+    if (!expr::handleListLiteral(listLiteral, out, outSet, visitChild)) {
+        ok = false;
+        return;
+    }
 }
-

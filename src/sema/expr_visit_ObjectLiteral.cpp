@@ -13,9 +13,7 @@ bool expr::handleObjectLiteral(const ast::ObjectLiteral& obj, ast::TypeKind& out
                                const std::function<bool(const ast::Expr*)>& visitChild) {
   for (const auto& field : obj.fields) { if (!field) continue; if (!visitChild(field.get())) return false; }
   out = ast::TypeKind::NoneType; outSet = 0U;
-  auto& m = const_cast<ast::ObjectLiteral&>(obj);
-  m.setType(out);
-  m.setCanonicalKey("obj");
+  obj.setType(out);
+  obj.setCanonicalKey("obj");
   return true;
 }
-

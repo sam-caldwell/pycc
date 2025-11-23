@@ -13,8 +13,7 @@ bool expr::handleListLiteral(const ast::ListLiteral& lst, ast::TypeKind& out, ui
                              const std::function<bool(const ast::Expr*)>& visitChild) {
   for (const auto& el : lst.elements) { if (!el) continue; if (!visitChild(el.get())) return false; }
   out = ast::TypeKind::List; outSet = TypeEnv::maskForKind(out);
-  auto& mutableList = const_cast<ast::ListLiteral&>(lst);
-  mutableList.setType(out);
+  lst.setType(out);
   std::string key = "list:(";
   for (size_t i = 0; i < lst.elements.size(); ++i) {
     const auto& element = lst.elements[i];
@@ -22,7 +21,6 @@ bool expr::handleListLiteral(const ast::ListLiteral& lst, ast::TypeKind& out, ui
     if (element && element->canonical()) key += *element->canonical(); else key += "?";
   }
   key += ")";
-  mutableList.setCanonicalKey(key);
+  lst.setCanonicalKey(key);
   return true;
 }
-

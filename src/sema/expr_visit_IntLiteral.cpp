@@ -10,9 +10,7 @@ using namespace pycc;
 using namespace pycc::sema;
 
 expr::VisitResult expr::handleIntLiteral(const ast::IntLiteral& n) {
-  auto& mutableInt = const_cast<ast::IntLiteral&>(n);
-  mutableInt.setType(ast::TypeKind::Int);
-  mutableInt.setCanonicalKey(std::string("i:") + std::to_string(static_cast<long long>(n.value)));
+  n.setType(ast::TypeKind::Int);
+  n.setCanonicalKey(std::string("i:") + std::to_string(static_cast<long long>(n.value)));
   return expr::VisitResult{ast::TypeKind::Int, TypeEnv::maskForKind(ast::TypeKind::Int)};
 }
-

@@ -13,8 +13,7 @@ bool expr::handleTupleLiteral(const ast::TupleLiteral& tup, ast::TypeKind& out, 
                               const std::function<bool(const ast::Expr*)>& visitChild) {
   for (const auto& el : tup.elements) { if (!el) continue; if (!visitChild(el.get())) return false; }
   out = ast::TypeKind::Tuple; outSet = TypeEnv::maskForKind(out);
-  auto& mutableTuple = const_cast<ast::TupleLiteral&>(tup);
-  mutableTuple.setType(out);
+  tup.setType(out);
   std::string key = "tuple:(";
   for (size_t i = 0; i < tup.elements.size(); ++i) {
     const auto& element = tup.elements[i];
@@ -22,7 +21,6 @@ bool expr::handleTupleLiteral(const ast::TupleLiteral& tup, ast::TypeKind& out, 
     if (element && element->canonical()) key += *element->canonical(); else key += "?";
   }
   key += ")";
-  mutableTuple.setCanonicalKey(key);
+  tup.setCanonicalKey(key);
   return true;
 }
-

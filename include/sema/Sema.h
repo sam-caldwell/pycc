@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ast/Nodes.h"
-#include "sema/TypeEnv.h"
 #include "sema/Diagnostic.h"
 #include "sema/FuncFlags.h"
 #include <string>

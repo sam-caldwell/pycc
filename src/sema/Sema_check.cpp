@@ -12,14 +12,12 @@
 #include "sema/detail/SemaImpl.h"
 
 namespace pycc::sema {
+    /***
+     * Name: sema_check_impl (declaration)
+     * Purpose: Internal implementation referenced by Sema::check.
+     */
 
-/***
- * Name: sema_check_impl (declaration)
- * Purpose: Internal implementation referenced by Sema::check.
- */
-
-bool Sema::check(ast::Module& mod, std::vector<Diagnostic>& diags) {
-  return sema_check_impl(this, mod, diags);
-}
-
+    bool Sema::check(ast::Module &mod, std::vector<Diagnostic> &diags) {
+        return sema_check_impl(this, mod, diags);
+    }
 } // namespace pycc::sema
