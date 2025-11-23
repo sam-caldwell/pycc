@@ -12,6 +12,7 @@
 #include <functional>
 #include "ast/AssignStmt.h"
 #include "ast/Name.h"
+#include <iostream>
 
 namespace pycc::opt {
 using namespace pycc::ast;
@@ -170,6 +171,17 @@ SSAFunction SSABuilder::build(FunctionDef& fn) {
     for (int b : outs) connect(b, joinB);
   }
 
+  // Debug dump CFG if requested
+  if (std::getenv("PYCC_SSA_GVN_DEBUG") != nullptr) {
+    std::cerr << "[SSABuilder] CFG blocks: " << f.blocks.size() << "\n";
+    for (const auto& bb : f.blocks) {
+      std::cerr << "  B" << bb.id << ": pred=";
+      for (size_t i=0;i<bb.pred.size();++i){ std::cerr << bb.pred[i] << (i+1<bb.pred.size()?",":""); }
+      std::cerr << " succ=";
+      for (size_t i=0;i<bb.succ.size();++i){ std::cerr << bb.succ[i] << (i+1<bb.succ.size()?",":""); }
+      std::cerr << " stmts=" << bb.stmts.size() << "\n";
+    }
+  }
   // Populate defs (simple: names assigned in this block)
   for (auto& bb : f.blocks) {
     for (auto* s : bb.stmts) {
@@ -243,9 +255,9 @@ SSABuilder::DomTree SSABuilder::computeDominators(const SSAFunction& fn) const {
     for (int d : dom[n]) if (d != n) cand.push_back(d);
     int best = -1;
     for (int d : cand) {
-      bool dominatedByOther = false;
-      for (int e : cand) { if (e == d) continue; if (dom[d].count(e)) { dominatedByOther = true; break; } }
-      if (!dominatedByOther) { best = d; break; }
+      bool dominatedByAllOthers = true;
+      for (int e : cand) { if (e == d) continue; if (!dom[d].count(e)) { dominatedByAllOthers = false; break; } }
+      if (dominatedByAllOthers) { best = d; break; }
     }
     dt.idom[n] = best;
   }

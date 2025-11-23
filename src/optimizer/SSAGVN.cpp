@@ -22,6 +22,8 @@
 #include "ast/Name.h"
 #include <unordered_map>
 #include <functional>
+#include <cstdlib>
+#include <iostream>
 
 namespace pycc::opt {
 using namespace pycc::ast;
@@ -60,6 +62,7 @@ static std::size_t gvnBlock(SSABlock& bb,
                              std::unordered_map<std::string,std::string>& valTable,
                              const std::unordered_map<std::string,int>& writeCount) {
   std::size_t changes = 0;
+  const bool dbg = (std::getenv("PYCC_SSA_GVN_DEBUG") != nullptr);
   struct Rewriter : public ast::VisitorBase {
     std::unordered_map<std::string,std::string>& valTable;
     std::size_t& changes;
@@ -126,16 +129,40 @@ static std::size_t gvnBlock(SSABlock& bb,
     if (!s) continue;
     if (s->kind == NodeKind::AssignStmt) {
       auto* as = static_cast<AssignStmt*>(s);
-      // First, rewrite RHS via existing table from dominating statements only
-      if (as->value) { Rewriter rw{valTable, changes}; rw.rw(as->value); }
+      // Compute value-number key of current RHS (before insertion) and the simple LHS name.
+      std::string selfKey;
+      std::string lhsName;
+      if (as->value && EffectAlias::isPureExpr(as->value.get())) { hashExpr(as->value.get(), selfKey); }
+      if (!as->targets.empty() && as->targets.size() == 1 && as->targets[0] && as->targets[0]->kind == NodeKind::Name) {
+        lhsName = static_cast<Name*>(as->targets[0].get())->id;
+      } else if (as->targets.empty() && !as->target.empty()) { lhsName = as->target; }
+      if (dbg) {
+        std::cerr << "[SSAGVN] Assign in block " << bb.id << ": lhs='" << lhsName << "'";
+        if (!selfKey.empty()) std::cerr << ", key='" << selfKey << "'";
+        std::cerr << ", table size=" << valTable.size() << "\n";
+      }
+      // Rewrite RHS via table from dominating statements, but avoid rewriting the entire RHS
+      // to the same name as the LHS (which would create `x = x`). Preserve dominating mappings
+      // for the same value number that point to other names (e.g., `x`).
+      if (as->value) {
+        auto local = valTable;
+        if (!selfKey.empty()) {
+          auto it = local.find(selfKey);
+          if (it != local.end() && !lhsName.empty() && it->second == lhsName) {
+            local.erase(it);
+          }
+        }
+        const std::size_t before = changes;
+        Rewriter rw{local, changes}; rw.rw(as->value);
+        if (dbg && changes > before) {
+          std::cerr << "[SSAGVN] Rewrote RHS of '" << lhsName << "' using table (now changes=" << changes << ")\n";
+        }
+      }
       // Then, if RHS is a pure expression, record its value number for downstream uses
       if (as->value && EffectAlias::isPureExpr(as->value.get())) {
         std::string k; hashExpr(as->value.get(), k);
         // map to the LHS name if simple
-        std::string lhs;
-        if (!as->targets.empty() && as->targets.size() == 1 && as->targets[0] && as->targets[0]->kind == NodeKind::Name) {
-          lhs = static_cast<Name*>(as->targets[0].get())->id;
-        } else if (as->targets.empty() && !as->target.empty()) { lhs = as->target; }
+        const std::string& lhs = lhsName;
         // Only propagate names that are single-assignment in the function to ensure safety across blocks.
         if (!lhs.empty() && !k.empty()) {
           auto itc = writeCount.find(lhs);
@@ -143,6 +170,9 @@ static std::size_t gvnBlock(SSABlock& bb,
             auto existing = valTable.find(k);
             if (existing == valTable.end()) valTable.emplace(k, lhs);
             else if (!isCSENamed(existing->second) && isCSENamed(lhs)) existing->second = lhs; // prefer CSE temps
+            if (dbg) {
+              std::cerr << "[SSAGVN] Record key->name mapping: '" << k << "' -> '" << lhs << "'\n";
+            }
           }
         }
       }
@@ -161,6 +191,7 @@ std::size_t SSAGVN::run(Module& module) {
   for (auto& fn : module.functions) {
     auto ssa = builder.build(*fn);
     auto dom = builder.computeDominators(ssa);
+    const bool dbg = (std::getenv("PYCC_SSA_GVN_DEBUG") != nullptr);
     // Compute writes per name to restrict cross-block reuse to single-assignment names
     std::unordered_map<std::string,int> writes;
     for (const auto& bb : ssa.blocks) {
@@ -182,6 +213,9 @@ std::size_t SSAGVN::run(Module& module) {
     std::function<void(int)> walk = [&](int b) {
       std::unordered_map<std::string,std::string> valTable;
       int id = (b >= 0 && b < static_cast<int>(dom.idom.size())) ? dom.idom[b] : -1;
+      if (dbg) {
+        std::cerr << "[SSAGVN] Enter block " << b << ", idom=" << id << "\n";
+      }
       if (id >= 0) {
         // inherit from idom, filter to single-assignment
         for (const auto& kv : out[id]) {
@@ -189,6 +223,7 @@ std::size_t SSAGVN::run(Module& module) {
           auto itc = writes.find(name);
           if (itc != writes.end() && itc->second == 1) valTable.emplace(kv.first, kv.second);
         }
+        if (dbg) { std::cerr << "[SSAGVN] Inherited from idom " << id << ": table size=" << valTable.size() << "\n"; }
       }
       total += gvnBlock(ssa.blocks[b], valTable, writes);
       out[b] = std::move(valTable);

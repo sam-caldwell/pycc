@@ -77,6 +77,15 @@ void ExpressionTyper::visit(const ast::Call& callNode) {
   // 1) Direct name: resolve against signatures and attribute polymorphism maps
   if (callNode.callee && callNode.callee->kind == ast::NodeKind::Name) {
     const auto* nameNode = static_cast<const ast::Name*>(callNode.callee.get());
+    // Builtin: eval/exec on literal string only (compile-time only in this subset)
+    if (nameNode->id == "eval" || nameNode->id == "exec") {
+      if (callNode.args.size() != 1 || !callNode.args[0] || callNode.args[0]->kind != ast::NodeKind::StringLiteral) {
+        addDiag(*diags, std::string(nameNode->id) + "() only accepts a compile-time literal string in this subset", &callNode);
+        ok = false; return;
+      }
+      out = ast::TypeKind::NoneType; const_cast<ast::Call&>(callNode).setType(out);
+      return;
+    }
     // Builtin: len(x) -> int for str/list/tuple/dict
     if (nameNode->id == "len") {
       if (callNode.args.size() != 1) { addDiag(*diags, "len() takes exactly one argument", &callNode); ok = false; return; }

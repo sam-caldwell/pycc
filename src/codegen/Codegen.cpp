@@ -1151,26 +1151,19 @@ namespace pycc::codegen {
                 }
 
                 void visit(const ast::StringLiteral &s) override {
-                    // Compute the same name used during global emission
-                    auto hash = [&](const std::string &str) {
-                        constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ULL;
-                        constexpr uint64_t kFnvPrime = 1099511628211ULL;
-                        uint64_t hv = kFnvOffsetBasis;
-                        for (unsigned char ch: str) {
-                            hv ^= ch;
-                            hv *= kFnvPrime;
-                        }
-                        return hv;
-                    };
-                    const uint64_t h = hash(s.value);
-                    std::ostringstream gname;
-                    gname << ".str_" << std::hex << h;
-                    // length is available from global table; compute GEP to start
+                    // Ensure global exists and retrieve length
+                    ensureStrConst(s.value);
+                    auto it = strGlobals.find(s.value);
+                    const std::string &gname = it->second.first;
+                    const size_t glen = it->second.second - 1; // stored with NUL
+                    // Compute pointer to constant data
+                    std::ostringstream dataPtr;
+                    dataPtr << "%t" << temp++;
+                    ir << "  " << dataPtr.str() << " = getelementptr inbounds i8, ptr @" << gname << ", i64 0\n";
+                    // Call runtime to create managed string object
                     std::ostringstream reg;
                     reg << "%t" << temp++;
-                    // Allow toggling between opaque-pointer and typed-pointer GEP styles
-                    // Use opaque-pointer friendly GEP form
-                    ir << "  " << reg.str() << " = getelementptr inbounds i8, ptr @" << gname.str() << ", i64 0\n";
+                    ir << "  " << reg.str() << " = call ptr @pycc_string_new(ptr " << dataPtr.str() << ", i64 " << glen << ")\n";
                     out = Value{reg.str(), ValKind::Ptr};
                 }
 

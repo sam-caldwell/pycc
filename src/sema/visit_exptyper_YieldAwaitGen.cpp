@@ -15,11 +15,11 @@ using namespace pycc;
 using namespace pycc::sema;
 
 void ExpressionTyper::visit(const ast::YieldExpr& y) {
-  (void)y; out = ast::TypeKind::NoneType; outSet = TypeEnv::maskForKind(out); ok = true;
+  (void)y; addDiag(*diags, "'yield' not supported in this subset", &y); ok = false;
 }
 
 void ExpressionTyper::visit(const ast::AwaitExpr& a) {
-  (void)a; out = ast::TypeKind::NoneType; outSet = TypeEnv::maskForKind(out); ok = true;
+  (void)a; addDiag(*diags, "'await' not supported in this subset", &a); ok = false;
 }
 
 void ExpressionTyper::visit(const ast::GeneratorExpr& ge) {
