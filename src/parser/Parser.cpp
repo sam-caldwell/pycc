@@ -92,7 +92,7 @@ const lex::Token& Parser::peek() const {
   return tokens_[pos_ < tokens_.size() ? pos_ : (tokens_.size() - 1)];
 }
 const lex::Token& Parser::peekNext() const {
-  size_t idx = pos_ + 1;
+  const size_t idx = pos_ + 1;
   return tokens_[idx < tokens_.size() ? idx : (tokens_.size() - 1)];
 }
 lex::Token Parser::get() {
@@ -124,7 +124,9 @@ void Parser::addError(const std::string& msg) {
 
 void Parser::synchronize() {
   // Delimiter-aware synchronization: balance (), [], {} while skipping ahead.
-  int paren = 0, bracket = 0, brace = 0;
+  int paren = 0;
+  int bracket = 0;
+  int brace = 0;
   for (;;) {
     const auto& t = peek();
     if (t.kind == TK::End) break;
@@ -144,7 +146,9 @@ void Parser::synchronize() {
 }
 
 void Parser::synchronizeUntil(std::initializer_list<lex::TokenKind> terms) {
-  int paren = 0, bracket = 0, brace = 0;
+  int paren = 0;
+  int bracket = 0;
+  int brace = 0;
   auto isTerm = [&](lex::TokenKind k) {
     for (auto x : terms) if (x == k) return true; return false;
   };
@@ -231,7 +235,7 @@ std::unique_ptr<ast::Module> Parser::parseModule() {
     // Build a primary message at the farthest point, with context
     std::ostringstream oss;
     if (!farthestExpected_.empty() && !tokens_.empty()) {
-      size_t idx = (farthestPos_ < tokens_.size()) ? farthestPos_ : (tokens_.size() - 1);
+      const size_t idx = (farthestPos_ < tokens_.size()) ? farthestPos_ : (tokens_.size() - 1);
       const auto& tok = tokens_[idx];
       std::ostringstream head;
       head << "expected " << farthestExpected_ << ", got " << to_string(tok.kind) << " '" << tok.text << "'";
@@ -289,7 +293,7 @@ std::string Parser::formatContext(const lex::Token& tok, const std::string& head
       caret.assign(static_cast<size_t>(col - 1), ' ');
       caret.push_back('^');
       // underline token length if available
-      size_t len = tok.text.size();
+      const size_t len = tok.text.size();
       if (len > 1) caret.append(len - 1, '~');
       out << "\n" << caret;
     }

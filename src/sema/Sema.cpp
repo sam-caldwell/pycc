@@ -71,50 +71,8 @@ using pycc::sema::addDiag;
 
 // ExpressionTyper implementation moved to individual compilation units (see sema/detail/ExpressionTyper.h)
 // Core visit methods are defined in src/sema/visit_exptyper_*.cpp
-/* struct ExpressionTyper final : public ast::VisitorBase {
-  // retParamIdxs: mapping of function name -> parameter index when return is trivially forwarded
-  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-  // Back-compat constructor without classes map
-  ExpressionTyper(const TypeEnv& env_, const std::unordered_map<std::string, Sig>& sigs_,
-                  const std::unordered_map<std::string, int>& retParamIdxs_, std::vector<Diagnostic>& diags_,
-                  PolyPtrs polyIn = {}, const std::vector<const TypeEnv*>* outerScopes_ = nullptr)
-    : env(&env_), sigs(&sigs_), retParamIdxs(&retParamIdxs_), diags(&diags_), polyTargets(polyIn), outers(outerScopes_), classes(nullptr) {}
-  // Extended constructor with classes map
-  ExpressionTyper(const TypeEnv& env_, const std::unordered_map<std::string, Sig>& sigs_,
-                  const std::unordered_map<std::string, int>& retParamIdxs_, std::vector<Diagnostic>& diags_,
-                  PolyPtrs polyIn, const std::vector<const TypeEnv*>* outerScopes_,
-                  const std::unordered_map<std::string, ClassInfo>* classes_)
-    : env(&env_), sigs(&sigs_), retParamIdxs(&retParamIdxs_), diags(&diags_), polyTargets(polyIn), outers(outerScopes_), classes(classes_) {}
-  const TypeEnv* env{nullptr};
-  const std::unordered_map<std::string, Sig>* sigs{nullptr};
-  const std::unordered_map<std::string, int>* retParamIdxs{nullptr};
-  std::vector<Diagnostic>* diags{nullptr};
-  PolyPtrs polyTargets{};
-  const std::vector<const TypeEnv*>* outers{nullptr};
-  const std::unordered_map<std::string, ClassInfo>* classes{nullptr};
-  Type out{Type::NoneType};
-  uint32_t outSet{0};
-  bool ok{true};
-
-  void visit(const ast::IntLiteral& n) override { auto r = expr::handleIntLiteral(n); out = r.out; outSet = r.outSet; }
-  void visit(const ast::BoolLiteral& n) override { auto r = expr::handleBoolLiteral(n); out = r.out; outSet = r.outSet; }
-  void visit(const ast::FloatLiteral& n) override { auto r = expr::handleFloatLiteral(n); out = r.out; outSet = r.outSet; }
-  void visit(const ast::NoneLiteral& n) override { auto r = expr::handleNoneLiteral(n); out = r.out; outSet = r.outSet; }
-  void visit(const ast::StringLiteral& n) override { auto r = expr::handleStringLiteral(n); out = r.out; outSet = r.outSet; }
-  void visit(const ast::Attribute& attr) override {
-    if (attr.value) {
-      ExpressionTyper v{*env, *sigs, *retParamIdxs, *diags, polyTargets, outers};
-      attr.value->accept(v); if (!v.ok) { ok = false; return; }
-    }
-    // If base is a simple name and we have a recorded attribute type, use it; else keep opaque
-    out = Type::NoneType; outSet = 0U;
-    if (attr.value && attr.value->kind == ast::NodeKind::Name) {
-      const auto* base = static_cast<const ast::Name*>(attr.value.get());
-      const uint32_t msk = env->getAttr(base->id, attr.attr);
-      if (msk != 0U) { outSet = msk; if (TypeEnv::isSingleMask(msk)) out = TypeEnv::kindFromMask(msk); }
-    }
-    auto& m = const_cast<ast::Attribute&>(attr); m.setType(out);
-  }
+// (legacy inline ExpressionTyper definition removed; implemented in separate files)
+#if 0
   void visit(const ast::Subscript& sub) override {
     // value[index] typing for list/str/tuple/dict; sets are not subscriptable
     if (!sub.value) { addDiag(*diags, "null subscript", &sub); ok = false; return; }
@@ -2330,7 +2288,8 @@ using pycc::sema::addDiag;
   void visit(const ast::IfStmt& ifStmt) override { addDiag(*diags, "internal error: if is not expression", &ifStmt); ok = false; }
   void visit(const ast::FunctionDef& functionDef) override { addDiag(*diags, "internal error: function is not expression", &functionDef); ok = false; }
   void visit(const ast::Module& module) override { addDiag(*diags, "internal error: module is not expression", &module); ok = false; }
-}; */
+// end legacy block
+#endif
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static bool inferExprType(const ast::Expr* expr,

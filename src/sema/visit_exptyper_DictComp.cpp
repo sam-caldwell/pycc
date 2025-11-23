@@ -4,7 +4,9 @@
  */
 #include "sema/detail/ExpressionTyper.h"
 #include "sema/TypeEnv.h"
-#include "ast/DictComp.h"
+#include "ast/Nodes.h"
+#include <functional>
+#include <cstdint>
 #include "ast/ListLiteral.h"
 #include "ast/TupleLiteral.h"
 #include "ast/Name.h"
@@ -74,4 +76,3 @@ void ExpressionTyper::visit(const ast::DictComp& dc) {
   if (dc.value) { ExpressionTyper et{local, *sigs, *retParamIdxs, *diags, polyTargets, outers, classes}; dc.value->accept(et); if (!et.ok) { ok = false; return; } }
   out = ast::TypeKind::Dict; outSet = TypeEnv::maskForKind(out);
 }
-

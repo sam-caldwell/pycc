@@ -1063,9 +1063,10 @@ namespace pycc::codegen {
                                   const std::unordered_map<std::string, int> &retParamIdxs_,
                                   std::unordered_set<std::string> &spawnWrappers_,
                                   std::unordered_map<std::string, std::pair<std::string, size_t> > &strGlobals_,
-                                  std::function<uint64_t(const std::string &)> hasher_)
+                                  std::function<uint64_t(const std::string &)> hasher_,
+                                  const std::unordered_map<std::string, std::string> *nestedEnv_)
                     : ir(ir_), temp(temp_), slots(slots_), sigs(sigs_), retParamIdxs(retParamIdxs_),
-                      spawnWrappers(spawnWrappers_), strGlobals(strGlobals_), hasher(std::move(hasher_)) {
+                      spawnWrappers(spawnWrappers_), strGlobals(strGlobals_), hasher(std::move(hasher_)), nestedEnv(nestedEnv_) {
                 }
 
                 std::ostringstream &ir; // NOLINT
@@ -1076,6 +1077,7 @@ namespace pycc::codegen {
                 std::unordered_set<std::string> &spawnWrappers; // NOLINT
                 std::unordered_map<std::string, std::pair<std::string, size_t> > &strGlobals; // NOLINT
                 std::function<uint64_t(const std::string &)> hasher; // NOLINT
+                const std::unordered_map<std::string, std::string> *nestedEnv{nullptr}; // NOLINT
                 Value out{{}, ValKind::I32};
 
                 void ensureStrConst(const std::string &s) {
@@ -1478,6 +1480,37 @@ namespace pycc::codegen {
 
                 void visit(const ast::Call &call) override { // NOLINT(readability-function-cognitive-complexity)
                     if (call.callee == nullptr) { throw std::runtime_error("unsupported callee expression"); }
+                    // General helpers used across call lowering
+                    auto needPtr = [&](const ast::Expr *e) -> Value {
+                        auto v = run(*e);
+                        if (v.k == ValKind::Ptr) return v;
+                        if (v.k == ValKind::I32) {
+                            std::ostringstream z, w;
+                            z << "%t" << temp++;
+                            ir << "  " << z.str() << " = sext i32 " << v.s << " to i64\n";
+                            w << "%t" << temp++;
+                            ir << "  " << w.str() << " = call ptr @pycc_box_int(i64 " << z.str() << ")\n";
+                            return Value{w.str(), ValKind::Ptr};
+                        }
+                        if (v.k == ValKind::F64) {
+                            std::ostringstream w;
+                            w << "%t" << temp++;
+                            ir << "  " << w.str() << " = call ptr @pycc_box_float(double " << v.s << ")\n";
+                            return Value{w.str(), ValKind::Ptr};
+                        }
+                        if (v.k == ValKind::I1) {
+                            std::ostringstream w;
+                            w << "%t" << temp++;
+                            ir << "  " << w.str() << " = call ptr @pycc_box_bool(i1 " << v.s << ")\n";
+                            return Value{w.str(), ValKind::Ptr};
+                        }
+                        throw std::runtime_error("expected pointer-compatible value");
+                    };
+                    auto needList = [&](const ast::Expr *e) -> Value {
+                        auto v = run(*e);
+                        if (v.k != ValKind::Ptr) throw std::runtime_error("list expected");
+                        return v;
+                    };
                     // Encoding/decoding: str.encode(...), bytes.decode(...)
                     if (call.callee->kind == ast::NodeKind::Attribute) {
                         const auto *at = static_cast<const ast::Attribute *>(call.callee.get());
@@ -3662,7 +3695,6 @@ namespace pycc::codegen {
                             }
                         }
                     }
-                    }
                     // Polymorphic list.append(x) and other attribute calls
                     if (call.callee->kind == ast::NodeKind::Attribute) {
                         const auto *at = static_cast<const ast::Attribute *>(call.callee.get());
@@ -4340,6 +4372,12 @@ namespace pycc::codegen {
                                                              : "ptr";
                         ir << argStr << " " << argsSSA[i];
                     }
+                    // If this is a nested function with captured env, append the hidden env pointer.
+                    if (nestedEnv && nestedEnv->contains(nmCall->id)) {
+                        if (!argsSSA.empty()) ir << ", ";
+                        const auto &envPtr = nestedEnv->at(nmCall->id);
+                        ir << "ptr " << envPtr;
+                    }
                     ir << ")\n";
                     ValKind rk = (retT == ast::TypeKind::Int)
                                      ? ValKind::I32
@@ -4819,9 +4857,12 @@ namespace pycc::codegen {
             }; // struct ExpressionLowerer
             // NOLINTEND
 
+            // Per-function map of nested function name -> env pointer SSA (if captures exist)
+            std::unordered_map<std::string, std::string> nestedEnv;
+
             auto evalExpr = [&](const ast::Expr *e) -> Value {
                 if (!e) throw std::runtime_error("null expr");
-                ExpressionLowerer V{irStream, temp, slots, sigs, retParamIdxs, spawnWrappers, strGlobals, hash64};
+                ExpressionLowerer V{irStream, temp, slots, sigs, retParamIdxs, spawnWrappers, strGlobals, hash64, &nestedEnv};
                 return V.run(*e);
             };
 
@@ -4829,111 +4870,144 @@ namespace pycc::codegen {
             int ifCounter = 0;
 
             // Basic capture analysis using 'nonlocal' statements as a starting signal.
-            std::vector<std::string> capturedNames;
-            struct CaptureScan : public ast::VisitorBase {
-                std::vector<std::string> &out;
+            // Collect nonlocal captures for nested function definitions within this function's body.
+            struct NestedCaptureScan : public ast::VisitorBase {
+                struct Captures { std::string fn; std::vector<std::string> names; };
+                std::vector<Captures> results;
+                std::vector<const ast::FunctionDef*> nestedFns;
 
-                explicit CaptureScan(std::vector<std::string> &o) : out(o) {
-                }
-
-                void visit(const ast::NonlocalStmt &ns) override {
-                    for (const auto &n: ns.names) out.push_back(n);
-                }
-
-                // Default traversal for body-containing nodes
-                void visit(const ast::FunctionDef &) override {
-                }
-
-                void visit(const ast::Module &) override {
-                }
-
-                void visit(const ast::ReturnStmt &) override {
-                }
-
-                void visit(const ast::AssignStmt &) override {
-                }
-
-                void visit(const ast::IfStmt &) override {
-                }
-
-                void visit(const ast::ExprStmt &) override {
-                }
-
-                void visit(const ast::WhileStmt &) override {
-                }
-
-                void visit(const ast::ForStmt &) override {
-                }
-
-                void visit(const ast::TryStmt &) override {
-                }
-
-                void visit(const ast::IntLiteral &) override {
-                }
-
-                void visit(const ast::BoolLiteral &) override {
-                }
-
-                void visit(const ast::FloatLiteral &) override {
-                }
-
-                void visit(const ast::Name &) override {
-                }
-
-                void visit(const ast::Call &) override {
-                }
-
-                void visit(const ast::Binary &) override {
-                }
-
-                void visit(const ast::Unary &) override {
-                }
-
-                void visit(const ast::StringLiteral &) override {
-                }
-
-                void visit(const ast::NoneLiteral &) override {
-                }
-
-                void visit(const ast::TupleLiteral &) override {
-                }
-
-                void visit(const ast::ListLiteral &) override {
-                }
-
-                void visit(const ast::ObjectLiteral &) override {
-                }
-            };
-            {
-                CaptureScan scan{capturedNames};
-                for (const auto &st: func->body) { if (st) st->accept(scan); }
-                if (!capturedNames.empty()) {
-                    // Emit a simple env struct alloca holding pointers to captured variables, if available
-                    irStream << "  ; env for function '" << func->name << "' captures: ";
-                    for (size_t i = 0; i < capturedNames.size(); ++i) {
-                        if (i) irStream << ", ";
-                        irStream << capturedNames[i];
+                // Visitor that walks a single function body and records Nonlocal names.
+                struct InnerScan : public ast::VisitorBase {
+                    std::vector<std::string> &out;
+                    explicit InnerScan(std::vector<std::string> &o) : out(o) {}
+                    void visit(const ast::NonlocalStmt &ns) override { for (const auto &n : ns.names) out.push_back(n); }
+                    void visit(const ast::FunctionDef &) override {}
+                    void visit(const ast::Module &) override {}
+                    void visit(const ast::ReturnStmt &) override {}
+                    void visit(const ast::AssignStmt &) override {}
+                    void visit(const ast::ExprStmt &) override {}
+                    void visit(const ast::IntLiteral &) override {}
+                    void visit(const ast::BoolLiteral &) override {}
+                    void visit(const ast::FloatLiteral &) override {}
+                    void visit(const ast::Name &) override {}
+                    void visit(const ast::Call &) override {}
+                    void visit(const ast::Binary &) override {}
+                    void visit(const ast::Unary &) override {}
+                    void visit(const ast::StringLiteral &) override {}
+                    void visit(const ast::NoneLiteral &) override {}
+                    void visit(const ast::TupleLiteral &) override {}
+                    void visit(const ast::ListLiteral &) override {}
+                    void visit(const ast::ObjectLiteral &) override {}
+                    void visit(const ast::IfStmt &ifs) override {
+                        for (const auto &st : ifs.thenBody) { if (st) st->accept(*this); }
+                        for (const auto &st : ifs.elseBody) { if (st) st->accept(*this); }
                     }
-                    irStream << "\n";
-                    std::ostringstream envTy;
-                    envTy << "{ ";
-                    for (size_t i = 0; i < capturedNames.size(); ++i) {
-                        if (i) envTy << ", ";
-                        envTy << "ptr";
+                    void visit(const ast::WhileStmt &ws) override {
+                        for (const auto &st : ws.thenBody) { if (st) st->accept(*this); }
+                        for (const auto &st : ws.elseBody) { if (st) st->accept(*this); }
                     }
-                    envTy << " }";
-                    std::ostringstream env;
-                    env << "%env." << func->name;
-                    irStream << "  " << env.str() << " = alloca " << envTy.str() << "\n";
-                    for (size_t i = 0; i < capturedNames.size(); ++i) {
-                        auto it = slots.find(capturedNames[i]);
-                        if (it == slots.end()) continue;
-                        std::ostringstream gep;
-                        gep << "%t" << temp++;
-                        irStream << "  " << gep.str() << " = getelementptr inbounds " << envTy.str() << ", ptr " << env.
-                                str() << ", i32 0, i32 " << i << "\n";
-                        irStream << "  store ptr " << it->second.ptr << ", ptr " << gep.str() << "\n";
+                    void visit(const ast::ForStmt &fs) override {
+                        for (const auto &st : fs.thenBody) { if (st) st->accept(*this); }
+                        for (const auto &st : fs.elseBody) { if (st) st->accept(*this); }
                     }
+                    void visit(const ast::TryStmt &ts) override {
+                        for (const auto &st : ts.body) { if (st) st->accept(*this); }
+                        for (const auto &h : ts.handlers) {
+                            if (!h) continue;
+                            for (const auto &st : h->body) { if (st) st->accept(*this); }
+                        }
+                        for (const auto &st : ts.orelse) { if (st) st->accept(*this); }
+                        for (const auto &st : ts.finalbody) { if (st) st->accept(*this); }
+                    }
+                    void visit(const ast::WithStmt &ws) override {
+                        for (const auto &st : ws.body) { if (st) st->accept(*this); }
+                    }
+                };
+
+                void visit(const ast::Module &) override {}
+                void visit(const ast::FunctionDef &) override {}
+                void visit(const ast::ReturnStmt &) override {}
+                void visit(const ast::AssignStmt &) override {}
+                void visit(const ast::ExprStmt &) override {}
+                void visit(const ast::IntLiteral &) override {}
+                void visit(const ast::BoolLiteral &) override {}
+                void visit(const ast::FloatLiteral &) override {}
+                void visit(const ast::Name &) override {}
+                void visit(const ast::Call &) override {}
+                void visit(const ast::Binary &) override {}
+                void visit(const ast::Unary &) override {}
+                void visit(const ast::StringLiteral &) override {}
+                void visit(const ast::NoneLiteral &) override {}
+                void visit(const ast::TupleLiteral &) override {}
+                void visit(const ast::ListLiteral &) override {}
+                void visit(const ast::ObjectLiteral &) override {}
+                void visit(const ast::IfStmt &ifs) override {
+                    for (const auto &st : ifs.thenBody) { if (st) st->accept(*this); }
+                    for (const auto &st : ifs.elseBody) { if (st) st->accept(*this); }
+                }
+                void visit(const ast::WhileStmt &ws) override {
+                    for (const auto &st : ws.thenBody) { if (st) st->accept(*this); }
+                    for (const auto &st : ws.elseBody) { if (st) st->accept(*this); }
+                }
+                void visit(const ast::ForStmt &fs) override {
+                    for (const auto &st : fs.thenBody) { if (st) st->accept(*this); }
+                    for (const auto &st : fs.elseBody) { if (st) st->accept(*this); }
+                }
+                void visit(const ast::TryStmt &ts) override {
+                    for (const auto &st : ts.body) { if (st) st->accept(*this); }
+                    for (const auto &h : ts.handlers) {
+                        if (!h) continue;
+                        for (const auto &st : h->body) { if (st) st->accept(*this); }
+                    }
+                    for (const auto &st : ts.orelse) { if (st) st->accept(*this); }
+                    for (const auto &st : ts.finalbody) { if (st) st->accept(*this); }
+                }
+                void visit(const ast::WithStmt &ws) override {
+                    for (const auto &st : ws.body) { if (st) st->accept(*this); }
+                }
+                // Core: detect nested function statements and scan their bodies
+                void visit(const ast::DefStmt &ds) override {
+                    if (!ds.func) return;
+                    Captures cap{ds.func->name, {}};
+                    InnerScan inner{cap.names};
+                    for (const auto &st : ds.func->body) { if (st) st->accept(inner); }
+                    if (!cap.names.empty()) results.push_back(std::move(cap));
+                    nestedFns.push_back(ds.func.get());
+                }
+            } nestedScan;
+            for (const auto &st : func->body) { if (st) st->accept(nestedScan); }
+            // Emit env allocas for each nested function with captures
+            for (const auto &cap : nestedScan.results) {
+                // Emit a simple env struct alloca holding pointers to captured variables, if available
+                irStream << "  ; env for function '" << cap.fn << "' captures: ";
+                for (size_t i = 0; i < cap.names.size(); ++i) { if (i) irStream << ", "; irStream << cap.names[i]; }
+                irStream << "\n";
+                std::ostringstream envTy;
+                envTy << "{ ";
+                for (size_t i = 0; i < cap.names.size(); ++i) { if (i) envTy << ", "; envTy << "ptr"; }
+                envTy << " }";
+                std::ostringstream env;
+                env << "%env." << cap.fn;
+                nestedEnv[cap.fn] = env.str();
+                irStream << "  " << env.str() << " = alloca " << envTy.str() << "\n";
+                for (size_t i = 0; i < cap.names.size(); ++i) {
+                    auto it = slots.find(cap.names[i]);
+                    if (it == slots.end()) continue;
+                    std::ostringstream gep;
+                    gep << "%t" << temp++;
+                    irStream << "  " << gep.str() << " = getelementptr inbounds " << envTy.str() << ", ptr " << env.str()
+                            << ", i32 0, i32 " << i << "\n";
+                    irStream << "  store ptr " << it->second.ptr << ", ptr " << gep.str() << "\n";
+                }
+            }
+            // Register nested function signatures so calls can resolve by name
+            for (const auto *nf : nestedScan.nestedFns) {
+                if (!nf) continue;
+                if (!sigs.contains(nf->name)) {
+                    Sig sig;
+                    sig.ret = nf->returnType;
+                    for (const auto &p : nf->params) sig.params.push_back(p.type);
+                    sigs[nf->name] = std::move(sig);
                 }
             }
 

@@ -4,7 +4,9 @@
  */
 #include "sema/detail/ExpressionTyper.h"
 #include "sema/TypeEnv.h"
-#include "ast/ListComp.h"
+#include "ast/Nodes.h"
+#include <functional>
+#include <cstdint>
 #include "ast/ListLiteral.h"
 #include "ast/TupleLiteral.h"
 #include "ast/Name.h"
@@ -79,4 +81,3 @@ void ExpressionTyper::visit(const ast::ListComp& lc) {
   out = ast::TypeKind::List; outSet = TypeEnv::maskForKind(out);
   auto& m = const_cast<ast::ListComp&>(lc); m.setType(out);
 }
-

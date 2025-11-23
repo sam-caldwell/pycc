@@ -3464,7 +3464,7 @@ extern "C" void* pycc_platform_version() { return ::pycc::rt::platform_version()
 // ===== errno module =====
 namespace pycc::rt {
 
-static inline int32_t errno_val_or(int v, int dflt) { return static_cast<int32_t>(v ? v : dflt); }
+// removed unused errno_val_or (avoid -Werror unused)
 
 int32_t errno_EPERM() {
 #ifdef EPERM
@@ -4021,8 +4021,8 @@ static std::string pformat_impl(void* obj, int depth) {
       out.push_back(']'); return out;
     }
     case TypeTag::Dict: {
-      void* it = dict_iter_new(obj);
-      std::string out = "{"; bool first=true; for (;;) { void* k = dict_iter_next(it); if (!k) break; void* v = dict_get(obj, k); if (!first) out += ", "; first=false; out += pformat_impl(k, depth+1); out += ": "; out += pformat_impl(v, depth+1); }
+      void* it = pycc_dict_iter_new(obj);
+      std::string out = "{"; bool first=true; for (;;) { void* k = pycc_dict_iter_next(it); if (!k) break; void* v = dict_get(obj, k); if (!first) out += ", "; first=false; out += pformat_impl(k, depth+1); out += ": "; out += pformat_impl(v, depth+1); }
       out.push_back('}'); return out;
     }
     default: return std::string("<object>");
@@ -4401,8 +4401,8 @@ static void* shallow_copy_obj(void* obj) {
     }
     case TypeTag::Dict: {
       void* out = dict_new(8);
-      void* it = dict_iter_new(obj);
-      for (;;) { void* k = dict_iter_next(it); if (!k) break; void* v = dict_get(obj, k); dict_set(&out, k, v); }
+      void* it = pycc_dict_iter_new(obj);
+      for (;;) { void* k = pycc_dict_iter_next(it); if (!k) break; void* v = dict_get(obj, k); dict_set(&out, k, v); }
       return out;
     }
     default: return obj;
@@ -4427,8 +4427,8 @@ static void* deep_copy_obj(void* obj) {
     }
     case TypeTag::Dict: {
       void* out = dict_new(8);
-      void* it = dict_iter_new(obj);
-      for (;;) { void* k = dict_iter_next(it); if (!k) break; void* v = dict_get(obj, k); dict_set(&out, deep_copy_obj(k), deep_copy_obj(v)); }
+      void* it = pycc_dict_iter_new(obj);
+      for (;;) { void* k = pycc_dict_iter_next(it); if (!k) break; void* v = dict_get(obj, k); dict_set(&out, deep_copy_obj(k), deep_copy_obj(v)); }
       return out;
     }
     default: return obj;

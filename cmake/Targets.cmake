@@ -20,7 +20,8 @@ if(PYCC_WITH_ICU)
 endif()
 
 add_executable(pycc ${PYCC_MAIN})
-target_link_libraries(pycc PRIVATE pycc_core)
+# Link whole-archive of core to satisfy intra-archive deps; also link runtime explicitly
+target_link_libraries(pycc PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pycc_core> pycc_runtime)
 target_include_directories(pycc PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 # Toggle IR emission style for GEP based on opaque-pointer preference

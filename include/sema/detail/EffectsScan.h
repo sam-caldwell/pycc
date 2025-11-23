@@ -26,6 +26,7 @@ struct EffectsScan : public ast::VisitorBase {
   void visit(const ast::Unary& u) override;
   void visit(const ast::TupleLiteral& t) override;
   void visit(const ast::ListLiteral& l) override;
+  void visit(const ast::ObjectLiteral&) override;
   void visit(const ast::Name&) override;
   void visit(const ast::Literal<long long, ast::NodeKind::IntLiteral>&) override;
   void visit(const ast::Literal<bool, ast::NodeKind::BoolLiteral>&) override;
