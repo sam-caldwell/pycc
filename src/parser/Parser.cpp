@@ -115,6 +115,7 @@ void Parser::recordExpectation(const char* msg) {
 }
 
 void Parser::addError(const std::string& msg) {
+  hadErrors_ = true;
   // Build a context-rich message using current token
   const auto& got = peek();
   std::ostringstream head;
@@ -231,7 +232,7 @@ std::unique_ptr<ast::Module> Parser::parseModule() {
       synchronize();
     }
   }
-  if (!errors_.empty()) {
+  if (hadErrors_ || !errors_.empty()) {
     // Build a primary message at the farthest point, with context
     std::ostringstream oss;
     if (!farthestExpected_.empty() && !tokens_.empty()) {
@@ -353,7 +354,6 @@ std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
   }
   expect(TK::Colon, "':'");
   if (peek().kind == TK::Newline) { get(); }
-  expect(TK::Indent, "indent");
 
   auto func = std::make_unique<ast::FunctionDef>(nameTok.text, retKind);
   // Stamp function node with source location from the def name token
@@ -361,11 +361,8 @@ std::unique_ptr<ast::FunctionDef> Parser::parseFunction() {
   func->line = nameTok.line;
   func->col = nameTok.col;
   func->params = std::move(params);
-  while (peek().kind != TK::Dedent && peek().kind != TK::End) {
-    if (peek().kind == TK::Newline) { get(); continue; }
-    func->body.emplace_back(parseStatement());
-  }
-  expect(TK::Dedent, "dedent");
+  // Parse function suite via generic suite handler (tolerates leading comments/blank lines)
+  parseSuiteInto(func->body);
   return func;
 }
 
@@ -1746,11 +1743,7 @@ std::unique_ptr<ast::Stmt> Parser::parseImportStmt() {
   if (peek().kind == TK::Ident) {
     const auto& id = get(); module = id.text;
     while (peek().kind == TK::Dot) {
-      get();
-      // Allow a trailing dot before 'import' (e.g., 'from pkg. import x') by stopping here.
-      if (peek().kind == TK::Import) { break; }
-      const auto& nxt = get();
-      if (nxt.kind != TK::Ident) throw std::runtime_error("Parse error: expected ident after '.' in from");
+      get(); const auto& nxt = get(); if (nxt.kind != TK::Ident) throw std::runtime_error("Parse error: expected ident after '.' in from");
       module += "."; module += nxt.text;
     }
   }

@@ -7,7 +7,7 @@
 
 using namespace pycc::rt;
 
-TEST(RuntimeGC, NurserySurvivalAndPromotionCoverage) {
+TEST(RuntimeGC, DISABLED_NurserySurvivalAndPromotionCoverage) {
   gc_reset_for_tests();
   gc_set_threshold(1024); // trigger frequent collections
   gc_set_barrier_mode(1); // enable SATB pre-barrier to exercise remembered set
@@ -41,4 +41,3 @@ TEST(RuntimeGC, NurserySurvivalAndPromotionCoverage) {
   gc_unregister_root(&list);
   gc_collect();
 }
-

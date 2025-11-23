@@ -6,6 +6,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <string>
+#include <filesystem>
 
 static std::string readFileAll(const std::string& p) {
   std::ifstream in(p);
@@ -15,6 +16,9 @@ static std::string readFileAll(const std::string& p) {
 }
 
 TEST(Metrics, JsonOutput) {
+  // Ensure Testing/ exists one level up from build working dir
+  std::error_code ec;
+  std::filesystem::create_directory("../Testing", ec);
   const char* src = "../Testing/metrics_tmp.py";
   {
     std::ofstream out(src);

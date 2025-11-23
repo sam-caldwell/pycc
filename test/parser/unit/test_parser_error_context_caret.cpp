@@ -4,6 +4,7 @@
  */
 #include <gtest/gtest.h>
 #include <fstream>
+#include <filesystem>
 #include "lexer/Lexer.h"
 #include "parser/Parser.h"
 
@@ -14,6 +15,7 @@ TEST(ParserErrorContext, CaretAndSourceLineShown) {
   // Intentionally missing ':' after return type to trigger expect() failure
   const char* src = "def f() -> int\n  return 0\n";
   {
+    std::filesystem::create_directories("Testing");
     std::ofstream out(path); out << src; out.flush();
   }
   lex::Lexer L; L.pushFile(path);

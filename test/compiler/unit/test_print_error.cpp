@@ -8,6 +8,7 @@
 #include <string>
 #include <fstream>
 #include <unistd.h>
+#include <filesystem>
 #include "compiler/Compiler.h"
 #include "sema/Sema.h"
 
@@ -21,6 +22,7 @@ static std::string readFile(const std::string& p) {
 TEST(PrintError, WritesHeaderLabelCaret) {
   const char* srcPath = "Testing/pe_tmp.py";
   {
+    std::filesystem::create_directories("Testing");
     std::ofstream out(srcPath);
     out << "abc\n";
     out << "xyZ\n";
@@ -56,7 +58,7 @@ TEST(PrintError, WritesHeaderLabelCaret) {
 
 TEST(PrintError, ColorAddsAnsiSequences) {
   const char* srcPath = "Testing/pe_tmp2.py";
-  { std::ofstream out(srcPath); out << "x\n"; }
+  { std::filesystem::create_directories("Testing"); std::ofstream out(srcPath); out << "x\n"; }
   pycc::sema::Diagnostic d; d.file = srcPath; d.line = 1; d.col = 1; d.message = "oops";
   const char* outPath = "Testing/pe_out2.txt";
   int saved = dup(2);
@@ -78,7 +80,7 @@ TEST(PrintError, ColorAddsAnsiSequences) {
 
 TEST(PrintError, EmptyFileNoCaret) {
   const char* srcPath = "Testing/pe_empty.py";
-  { std::ofstream out(srcPath); /* empty file */ }
+  { std::filesystem::create_directories("Testing"); std::ofstream out(srcPath); /* empty file */ }
   pycc::sema::Diagnostic d; d.file = srcPath; d.line = 1; d.col = 1; d.message = "msg";
   const char* outPath = "Testing/pe_empty_out.txt";
   int saved = dup(2);
@@ -109,7 +111,7 @@ TEST(PrintError, MissingFilePathPrintsLabelAndMessageOnly) {
 
 TEST(PrintError, CaretAtCol1Printed) {
   const char* srcPath = "Testing/pe_col1.py";
-  { std::ofstream out(srcPath); out << "line" << '\n'; }
+  { std::filesystem::create_directories("Testing"); std::ofstream out(srcPath); out << "line" << '\n'; }
   pycc::sema::Diagnostic d; d.file = srcPath; d.line = 1; d.col = 1; d.message = "m";
   const char* outPath = "Testing/pe_col1_out.txt";
   int saved = dup(2);

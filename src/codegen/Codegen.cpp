@@ -4455,6 +4455,52 @@ namespace pycc::codegen {
                     out = Value{reg.str(), rk};
                 }
 
+                void visit(const ast::IfExpr& x) override {
+                    // Lower Python conditional expression: <body> if <test> else <orelse>
+                    auto toBool = [&](const Value &vin) -> Value {
+                        if (vin.k == ValKind::I1) { return vin; }
+                        std::ostringstream r;
+                        r << "%t" << temp++;
+                        switch (vin.k) {
+                            case ValKind::I32: ir << "  " << r.str() << " = icmp ne i32 " << vin.s << ", 0\n"; return Value{r.str(), ValKind::I1};
+                            case ValKind::F64: ir << "  " << r.str() << " = fcmp one double " << vin.s << ", 0.0\n"; return Value{r.str(), ValKind::I1};
+                            case ValKind::Ptr: ir << "  " << r.str() << " = icmp ne ptr " << vin.s << ", null\n"; return Value{r.str(), ValKind::I1};
+                            default: throw std::runtime_error("unsupported truthiness conversion in if-expr");
+                        }
+                    };
+                    auto cv = run(*x.test);
+                    cv = toBool(cv);
+                    static int ifeCounter = 0; int id = ifeCounter++;
+                    std::string thenLbl = std::string("ife.then") + std::to_string(id);
+                    std::string elseLbl = std::string("ife.else") + std::to_string(id);
+                    std::string endLbl = std::string("ife.end") + std::to_string(id);
+                    ir << "  br i1 " << cv.s << ", label %" << thenLbl << ", label %" << elseLbl << "\n";
+                    // then
+                    ir << thenLbl << ":\n";
+                    auto bv = run(*x.body);
+                    ir << "  br label %" << endLbl << "\n";
+                    // else
+                    ir << elseLbl << ":\n";
+                    auto ev = run(*x.orelse);
+                    ir << "  br label %" << endLbl << "\n";
+                    // merge
+                    ir << endLbl << ":\n";
+                    std::ostringstream phi;
+                    phi << "%t" << temp++;
+                    const char* ty = nullptr;
+                    if (bv.k == ev.k) {
+                        switch (bv.k) {
+                            case ValKind::I32: ty = "i32"; break;
+                            case ValKind::I1: ty = "i1"; break;
+                            case ValKind::F64: ty = "double"; break;
+                            case ValKind::Ptr: ty = "ptr"; break;
+                        }
+                    }
+                    if (ty == nullptr) { throw std::runtime_error("if-expr branches must have same type"); }
+                    ir << "  " << phi.str() << " = phi " << ty << " [ " << bv.s << ", %" << thenLbl << " ], [ " << ev.s << ", %" << elseLbl << " ]\n";
+                    out = Value{phi.str(), bv.k};
+                }
+
                 void visit(const ast::Unary &u) override {
                     auto V = run(*u.operand);
                     auto toBool = [&](const Value &vin) -> Value {
@@ -5302,9 +5348,14 @@ namespace pycc::codegen {
                         }
                     }
                     auto val = eval(asg.value.get());
-                    auto it = slots.find(asg.target);
+                    // Prefer legacy simple name, else derive name from single-name target
+                    std::string varName = asg.target;
+                    if (varName.empty() && asg.targets.size() == 1 && asg.targets[0] && asg.targets[0]->kind == ast::NodeKind::Name) {
+                        varName = static_cast<const ast::Name*>(asg.targets[0].get())->id;
+                    }
+                    auto it = slots.find(varName);
                     if (it == slots.end()) {
-                        std::string ptr = "%" + asg.target + ".addr";
+                        std::string ptr = "%" + varName + ".addr";
                         if (val.k == ValKind::I32) ir << "  " << ptr << " = alloca i32\n";
                         else if (val.k == ValKind::I1) ir << "  " << ptr << " = alloca i1\n";
                         else if (val.k == ValKind::F64) ir << "  " << ptr << " = alloca double\n";
@@ -5312,14 +5363,14 @@ namespace pycc::codegen {
                             ir << "  " << ptr << " = alloca ptr\n";
                             ir << "  call void @llvm.gcroot(ptr " << ptr << ", ptr null)\n";
                         }
-                        slots[asg.target] = Slot{ptr, val.k};
-                        it = slots.find(asg.target);
+                        slots[varName] = Slot{ptr, val.k};
+                        it = slots.find(varName);
                         // Emit local variable debug declaration at first definition
                         int varId = 0;
-                        auto itMd = varMdId.find(asg.target);
+                        auto itMd = varMdId.find(varName);
                         if (itMd == varMdId.end()) {
                             varId = nextDbgId++;
-                            varMdId[asg.target] = varId;
+                            varMdId[varName] = varId;
                         } else { varId = itMd->second; }
                         const int tyId = (val.k == ValKind::I32)
                                              ? diIntId
@@ -5328,7 +5379,7 @@ namespace pycc::codegen {
                                                    : (val.k == ValKind::F64)
                                                          ? diDoubleId
                                                          : diPtrId;
-                        dbgVars.push_back(DbgVar{varId, asg.target, subDbgId, asg.line, asg.col, tyId, 0, false});
+                        dbgVars.push_back(DbgVar{varId, varName, subDbgId, asg.line, asg.col, tyId, 0, false});
                         ir << "  call void @llvm.dbg.declare(metadata ptr " << ptr << ", metadata !" << varId <<
                                 ", metadata !" << diExprId << ")" << dbg() << "\n";
                     }

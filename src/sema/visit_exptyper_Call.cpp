@@ -77,6 +77,17 @@ void ExpressionTyper::visit(const ast::Call& callNode) {
   // 1) Direct name: resolve against signatures and attribute polymorphism maps
   if (callNode.callee && callNode.callee->kind == ast::NodeKind::Name) {
     const auto* nameNode = static_cast<const ast::Name*>(callNode.callee.get());
+    // Builtin: len(x) -> int for str/list/tuple/dict
+    if (nameNode->id == "len") {
+      if (callNode.args.size() != 1) { addDiag(*diags, "len() takes exactly one argument", &callNode); ok = false; return; }
+      ExpressionTyper argTyper{*env, *sigs, *retParamIdxs, *diags, polyTargets}; callNode.args[0]->accept(argTyper); if (!argTyper.ok) { ok = false; return; }
+      const ast::TypeKind k = argTyper.out;
+      if (!(k == ast::TypeKind::Str || k == ast::TypeKind::List || k == ast::TypeKind::Tuple || k == ast::TypeKind::Dict)) {
+        addDiag(*diags, "len() argument must be str/list/tuple/dict", callNode.args[0].get()); ok = false; return;
+      }
+      out = ast::TypeKind::Int; const_cast<ast::Call&>(callNode).setType(out);
+      return;
+    }
     auto it = sigs->find(nameNode->id);
     if (it == sigs->end()) {
       // Could be a variable alias to multiple polymorphic targets
@@ -247,4 +258,3 @@ void ExpressionTyper::visit(const ast::Call& callNode) {
 
   addDiag(*diags, "unknown call target", &callNode); ok = false; return;
 }
-

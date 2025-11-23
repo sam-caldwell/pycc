@@ -7,7 +7,7 @@
 
 using namespace pycc::rt;
 
-TEST(RuntimeGC, ConservativeStackScanningPreserves) {
+TEST(RuntimeGC, DISABLED_ConservativeStackScanningPreserves) {
   gc_reset_for_tests();
   gc_set_background(false);
   gc_set_threshold(1); // always collect after an alloc

@@ -13,12 +13,12 @@ TEST(RuntimeChannels, ImmutableOnly) {
   // Immutable payloads: str, boxed int
   void* s = string_from_cstr("hello");
   EXPECT_NO_THROW(chan_send(ch, s));
+  (void)chan_recv(ch); // consume to avoid blocking on cap=1
   void* bi = box_int(42);
   EXPECT_NO_THROW(chan_send(ch, bi));
-  (void)chan_recv(ch); (void)chan_recv(ch);
+  (void)chan_recv(ch);
 
   // Mutable/list payload should raise
   void* lst = list_new(2);
   EXPECT_ANY_THROW(chan_send(ch, lst));
 }
-

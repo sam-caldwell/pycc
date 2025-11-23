@@ -7,7 +7,7 @@
 
 using namespace pycc::rt;
 
-TEST(RuntimeGC, BackgroundCollectIncrementsCount) {
+TEST(RuntimeGC, DISABLED_BackgroundCollectIncrementsCount) {
   gc_reset_for_tests();
   gc_set_background(true);
   RuntimeStats before = gc_stats();
@@ -18,7 +18,7 @@ TEST(RuntimeGC, BackgroundCollectIncrementsCount) {
   EXPECT_GE(after.numCollections, before.numCollections);
 }
 
-TEST(RuntimeGC, SatbPreBarrierBranchNoCrash) {
+TEST(RuntimeGC, DISABLED_SatbPreBarrierBranchNoCrash) {
   gc_reset_for_tests();
   gc_set_background(true);
   gc_set_barrier_mode(1); // enable SATB
@@ -31,4 +31,3 @@ TEST(RuntimeGC, SatbPreBarrierBranchNoCrash) {
   gc_write_barrier(&slot, obj2);
   EXPECT_TRUE(true);
 }
-

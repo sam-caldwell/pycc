@@ -30,7 +30,7 @@ TEST(RuntimeChannels, BackpressureAndClose) {
   RtThreadHandle* th = rt_spawn(entry_send_two, &pay, sizeof(pay));
 
   // Wait until first send completed (prog == 2)
-  for (int spins = 0; spins < 100000 && atomic_int_load(prog) < 2; ++spins) { /* spin */ }
+  for (int spins = 0; spins < 1000000 && atomic_int_load(prog) < 2; ++spins) { /* spin */ }
   ASSERT_GE(atomic_int_load(prog), 2);
 
   // Receive first; this should unblock sender's second send eventually
@@ -39,7 +39,7 @@ TEST(RuntimeChannels, BackpressureAndClose) {
   EXPECT_EQ(box_int_value(v1), 1);
 
   // Wait for second send to complete (prog == 3)
-  for (int spins = 0; spins < 100000 && atomic_int_load(prog) < 3; ++spins) { /* spin */ }
+  for (int spins = 0; spins < 1000000 && atomic_int_load(prog) < 3; ++spins) { /* spin */ }
   ASSERT_GE(atomic_int_load(prog), 3);
   void* v2 = chan_recv(ch);
   ASSERT_NE(v2, nullptr);
@@ -53,4 +53,3 @@ TEST(RuntimeChannels, BackpressureAndClose) {
   (void)rt_join(th, nullptr, nullptr);
   rt_thread_handle_destroy(th);
 }
-

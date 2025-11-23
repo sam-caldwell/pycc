@@ -2510,6 +2510,21 @@ bool sema_check_impl(pycc::sema::Sema* self, ast::Module& mod, std::vector<pycc:
   #endif
   scanFunctionTraits(mod, funcFlags_);
 
+  // Reject coroutine/generator constructs in this subset: any use of await/yield fails check()
+  for (const auto& func : mod.functions) {
+    auto itF = funcFlags_.find(func.get());
+    if (itF != funcFlags_.end()) {
+      if (itF->second.isCoroutine) {
+        Diagnostic d; d.message = "'await' not supported in this subset"; d.file = func->file; d.line = func->line; d.col = func->col; diags.push_back(std::move(d));
+        return false;
+      }
+      if (itF->second.isGenerator) {
+        Diagnostic d; d.message = "'yield' not supported in this subset"; d.file = func->file; d.line = func->line; d.col = func->col; diags.push_back(std::move(d));
+        return false;
+      }
+    }
+  }
+
   for (const auto& func : mod.functions) {
     if (!(typeIsInt(func->returnType) || typeIsBool(func->returnType) || typeIsFloat(func->returnType) || typeIsStr(func->returnType) || func->returnType == Type::Tuple)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/tuple returns supported"; diags.push_back(std::move(diagVar)); return false; }
     TypeEnv env;
@@ -2562,7 +2577,9 @@ bool sema_check_impl(pycc::sema::Sema* self, ast::Module& mod, std::vector<pycc:
     for (const auto& st : func->body) { if (st) st->accept(lscan); }
     pycc::sema::detail::ScopedLocalsAssigned localsGuard(&lscan.locals);
     for (const auto& param : func->params) {
-      if (!(typeIsInt(param.type) || typeIsBool(param.type) || typeIsFloat(param.type) || typeIsStr(param.type) || param.type == Type::List)) { Diagnostic diagVar; diagVar.message = "only int/bool/float/str/list params supported"; diags.push_back(std::move(diagVar)); return false; }
+      if (!(typeIsInt(param.type) || typeIsBool(param.type) || typeIsFloat(param.type) || typeIsStr(param.type) || param.type == Type::List || param.type == Type::Dict)) {
+        Diagnostic diagVar; diagVar.message = "only int/bool/float/str/list/dict params supported"; diags.push_back(std::move(diagVar)); return false;
+      }
       // Apply union/optional modeling via type sets
       uint32_t mask = 0U;
       if (!param.unionTypes.empty()) {

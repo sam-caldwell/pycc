@@ -664,6 +664,13 @@ RuntimeStats gc_stats() {
 }
 
 void gc_reset_for_tests() {
+  // Quiesce background GC and reset internal state for deterministic tests
+  g_bg_enabled.store(false, std::memory_order_relaxed);
+  g_barrier_mode.store(0, std::memory_order_relaxed);
+  {
+    const std::lock_guard<std::mutex> remLock(g_rem_mu);
+    g_remembered.clear();
+  }
   const std::lock_guard<std::mutex> lock(g_mu);
   // free all
   ObjectHeader* cur = g_head; g_head = nullptr;
@@ -1007,12 +1014,30 @@ void* dict_get(void* dict, void* key) {
   const std::size_t cap = meta[1];
   auto** keys = reinterpret_cast<void**>(meta + 2);
   auto** vals = keys + cap;
+  // Fast path: pointer-identity lookup via open addressing
   std::size_t idx = ptr_hash(key) & (cap - 1);
   for (;;) {
-    if (keys[idx] == nullptr) { return nullptr; }
-    if (keys[idx] == key) { return vals[idx]; }
+    void* k = keys[idx];
+    if (k == nullptr) { break; }
+    if (k == key) { return vals[idx]; }
     idx = (idx + 1) & (cap - 1);
   }
+  // Fallback for string keys: allow lookup by string contents to interoperate with fresh string objects
+  // Inspect header tag to detect string keys without relying on later helper
+  bool key_is_string = false;
+  if (key != nullptr) {
+    auto* hk = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(key) - sizeof(ObjectHeader));
+    key_is_string = (static_cast<TypeTag>(hk->tag) == TypeTag::String);
+  }
+  if (key_is_string) {
+    for (std::size_t i = 0; i < cap; ++i) {
+      void* kk = keys[i];
+      if (kk == nullptr) { continue; }
+      auto* hk2 = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(kk) - sizeof(ObjectHeader));
+      if (static_cast<TypeTag>(hk2->tag) == TypeTag::String && string_eq(kk, key)) { return vals[i]; }
+    }
+  }
+  return nullptr;
 }
 
 std::size_t dict_len(void* dict) {
@@ -1022,7 +1047,7 @@ std::size_t dict_len(void* dict) {
 }
 
 extern "C" void* pycc_dict_iter_new(void* dict) {
-  const std::lock_guard<std::mutex> lock(g_mu);
+  // Avoid holding g_mu here: object_new/box_int acquire it internally.
   void* it = object_new(2);
   auto* meta = reinterpret_cast<std::size_t*>(it);
   auto** vals = reinterpret_cast<void**>(meta + 1);
@@ -1034,7 +1059,7 @@ extern "C" void* pycc_dict_iter_new(void* dict) {
 
 extern "C" void* pycc_dict_iter_next(void* it) {
   if (it == nullptr) { return nullptr; }
-  const std::lock_guard<std::mutex> lock(g_mu);
+  // Do not hold g_mu while allocating box_int; read dictionary snapshot non-atomically.
   auto* meta_it = reinterpret_cast<std::size_t*>(it);
   auto** vals_it = reinterpret_cast<void**>(meta_it + 1);
   void* dict = vals_it[0]; if (dict == nullptr) return nullptr;
@@ -1045,9 +1070,18 @@ extern "C" void* pycc_dict_iter_next(void* it) {
   while (idx < cap) {
     void* k = keys[idx];
     ++idx;
-    if (k != nullptr) { vals_it[1] = box_int(static_cast<int64_t>(idx)); return k; }
+    if (k != nullptr) {
+      void* nextIdx = box_int(static_cast<int64_t>(idx));
+      gc_pre_barrier(&vals_it[1]);
+      vals_it[1] = nextIdx;
+      gc_write_barrier(&vals_it[1], nextIdx);
+      return k;
+    }
   }
-  vals_it[1] = box_int(static_cast<int64_t>(cap));
+  void* endIdx = box_int(static_cast<int64_t>(cap));
+  gc_pre_barrier(&vals_it[1]);
+  vals_it[1] = endIdx;
+  gc_write_barrier(&vals_it[1], endIdx);
   return nullptr;
 }
 
@@ -1113,16 +1147,19 @@ void* object_get_attr_dict(void* obj) {
 
 void object_set_attr(void* obj, void* key_string, void* value) {
   if (obj == nullptr || key_string == nullptr) { return; }
-  const std::lock_guard<std::mutex> lock(g_mu);
   auto** slot = object_attrs_slot(obj);
-  if (*slot == nullptr) {
-    // lazily create dict
-    void* d = dict_new_locked(8);
-    gc_pre_barrier(slot);
-    gc_write_barrier(slot, d);
-    *slot = d;
+  // Ensure attribute dict exists under g_mu, but perform dict_set without holding it to avoid re-entrant deadlock
+  {
+    const std::lock_guard<std::mutex> lock(g_mu);
+    if (*slot == nullptr) {
+      // lazily create dict
+      void* d = dict_new_locked(8);
+      gc_pre_barrier(slot);
+      gc_write_barrier(slot, d);
+      *slot = d;
+    }
   }
-  // set into dict
+  // set into dict (dict_set acquires g_mu internally)
   dict_set(slot, key_string, value);
 }
 
@@ -1188,8 +1225,7 @@ static void adapt_controller() {
 
 // Exceptions implementation: minimal per-thread exception object with type and message
 void rt_raise(const char* type_name, const char* message) {
-  // allocate objects under lock to integrate with GC lists
-  const std::lock_guard<std::mutex> lock(g_mu);
+  // Allocate exception components; allocation helpers manage their own locking
   void* t = string_from_cstr(type_name);
   void* m = string_from_cstr(message);
   void* exc = object_new(2);
@@ -2187,19 +2223,23 @@ void chan_send(RtChannelHandle* handle, void* value) {
     }
   }
   std::unique_lock<std::mutex> lk(ch->mu);
+  //
   ch->cv_not_full.wait(lk, [&]{ return ch->closed || ch->q.size() < ch->cap; });
   if (ch->closed) return;
   ch->q.push_back(value);
   lk.unlock();
   ch->cv_not_empty.notify_one();
+  //
 }
 void* chan_recv(RtChannelHandle* handle) {
   auto* ch = reinterpret_cast<Chan*>(handle); if (!ch) return nullptr;
   std::unique_lock<std::mutex> lk(ch->mu);
+  //
   ch->cv_not_empty.wait(lk, [&]{ return ch->closed || !ch->q.empty(); });
   if (ch->q.empty()) return nullptr; // closed
   void* v = ch->q.front(); ch->q.pop_front();
   lk.unlock(); ch->cv_not_full.notify_one();
+  //
   return v;
 }
 
@@ -5070,7 +5110,17 @@ void* argparse_parse_args(void* parser, void* args_list) {
       std::string opt = t, val;
       std::size_t eq = t.find('=');
       if (eq != std::string::npos) { opt = t.substr(0, eq); val = t.substr(eq+1); }
-      void* canon = dict_get(optmap, string_new(opt.data(), opt.size()));
+      // Lookup in optmap by string contents, since dict keys are pointer-identity based.
+      void* canon = nullptr;
+      {
+        void* it = pycc_dict_iter_new(optmap);
+        for (;;) {
+          void* k = pycc_dict_iter_next(it);
+          if (!k) break;
+          std::string ks(string_data(k), string_len(k));
+          if (ks == opt) { canon = dict_get(optmap, k); break; }
+        }
+      }
       if (!canon) continue; // unknown option: skip
       void* act = dict_get(actmap, canon);
       if (!act) continue;

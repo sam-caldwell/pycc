@@ -4,6 +4,7 @@
  */
 #include <gtest/gtest.h>
 #include "lexer/Lexer.h"
+#include <filesystem>
 #include <cstdio>
 
 using namespace pycc;
@@ -19,6 +20,7 @@ TEST(LexerFileInput, MissingFileProducesEOF) {
 TEST(LexerFileInput, ReadsSimpleFile) {
   const char* path = "Testing/_lex_tmp.py";
   {
+    std::filesystem::create_directories("Testing");
     FILE* f = std::fopen(path, "wb");
     ASSERT_NE(f, nullptr);
     const char* src = "def f():\n  return 1\n";

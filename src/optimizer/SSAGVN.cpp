@@ -126,6 +126,9 @@ static std::size_t gvnBlock(SSABlock& bb,
     if (!s) continue;
     if (s->kind == NodeKind::AssignStmt) {
       auto* as = static_cast<AssignStmt*>(s);
+      // First, rewrite RHS via existing table from dominating statements only
+      if (as->value) { Rewriter rw{valTable, changes}; rw.rw(as->value); }
+      // Then, if RHS is a pure expression, record its value number for downstream uses
       if (as->value && EffectAlias::isPureExpr(as->value.get())) {
         std::string k; hashExpr(as->value.get(), k);
         // map to the LHS name if simple
@@ -143,8 +146,6 @@ static std::size_t gvnBlock(SSABlock& bb,
           }
         }
       }
-      // Also rewrite RHS via table
-      if (as->value) { Rewriter rw{valTable, changes}; rw.rw(as->value); }
     } else if (s->kind == NodeKind::ExprStmt) {
       auto* es = static_cast<ExprStmt*>(s);
       if (es->value) { Rewriter rw{valTable, changes}; rw.rw(es->value); }

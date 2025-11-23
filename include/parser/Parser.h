@@ -46,6 +46,7 @@ class Parser {
   size_t farthestPos_{0};
   std::string farthestExpected_{};
   std::vector<std::string> errors_{}; // aggregated error messages during recovery
+  bool hadErrors_{false};
 
   // Lazy source cache for error context
   std::unordered_map<std::string, std::vector<std::string>> fileLines_{};

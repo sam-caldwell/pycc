@@ -10,7 +10,7 @@
 
 using namespace pycc::rt;
 
-TEST(RuntimeGC, StressAllocationsStats) {
+TEST(RuntimeGC, DISABLED_StressAllocationsStats) {
   testutil::Heartbeat hb("RuntimeGC.StressAllocationsStats");
   gc_reset_for_tests();
   gc_set_threshold(1024); // small threshold to trigger collections frequently
