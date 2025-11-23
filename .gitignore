@@ -60,6 +60,7 @@ log/
 out/
 bin/
 CMakePresets.json
+Testing/
 
 # Compiled objects and libraries
 *.o
