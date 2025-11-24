@@ -769,6 +769,9 @@ void* string_concat(void* a, void* b) {
   return string_new(tmp.data(), tmp.size());
 }
 
+// C ABI wrapper for string concatenation
+extern "C" void* pycc_string_concat(void* a, void* b) { return ::pycc::rt::string_concat(a, b); }
+
 void* string_slice(void* s, std::size_t start, std::size_t len) {
   const char* d = string_data(s);
   const std::size_t nb = string_len(s);

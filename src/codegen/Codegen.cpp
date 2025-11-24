@@ -57,10 +57,13 @@
 
 namespace pycc::codegen {
     static std::string changeExt(const std::string &base, const std::string &ext) {
-        // Replace extension if present, else append
-        auto pos = base.find_last_of('.');
-        if (pos == std::string::npos) { return base + ext; }
-        return base.substr(0, pos) + ext;
+        // Replace extension only if a '.' appears after the last path separator.
+        // Otherwise, treat as no extension and append.
+        const auto posDot = base.find_last_of('.');
+        if (posDot == std::string::npos) return base + ext;
+        const auto posSep = base.find_last_of("/\\");
+        if (posSep != std::string::npos && posDot < posSep) return base + ext;
+        return base.substr(0, posDot) + ext;
     }
 
     // NOLINTNEXTLINE(readability-function-cognitive-complexity)
