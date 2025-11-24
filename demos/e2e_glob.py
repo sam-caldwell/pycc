@@ -1,6 +1,5 @@
 # demos/e2e_glob.py
 def main() -> int:
-    import os, io, glob
     base = '_glob_e2e'
     os.mkdir(base)
     io.write_file(base + '/a.py', 'x')
@@ -17,4 +16,3 @@ def main() -> int:
     os.remove(base + '/c.py')
     os.remove(base)
     return len(m)
-
