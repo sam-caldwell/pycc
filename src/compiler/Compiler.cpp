@@ -20,6 +20,7 @@
 #include "optimizer/SimplifyCFG.h"
 #include "optimizer/Optimizer.h"
 #include "optimizer/LICM.h"
+#include "optimizer/LoopUnroll.h"
 #include "optimizer/GVN.h"
 #include "optimizer/RangeAnalysis.h"
 #include "optimizer/SSA.h"
@@ -468,6 +469,15 @@ int Compiler::run(const cli::Options& opts) { // NOLINT(readability-function-siz
     auto hoisted = licm.run(*mod);
     metrics.setOptimizerStat("licm_hoisted", static_cast<uint64_t>(hoisted));
     metrics.stop("LICM");
+  }
+
+  // Loop unrolling for small constant-trip loops (after LICM)
+  if (opts.optCFG) {
+    metrics.start("Unroll");
+    opt::LoopUnroll un; // NOLINT(misc-const-correctness)
+    auto unrolled = un.run(*mod);
+    metrics.setOptimizerStat("unroll_loops", static_cast<uint64_t>(unrolled));
+    metrics.stop("Unroll");
   }
 
   if (opts.optCFG) {

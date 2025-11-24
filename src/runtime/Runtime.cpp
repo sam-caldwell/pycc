@@ -1512,6 +1512,19 @@ void* bytes_concat(void* a, void* b) {
   return bytes_new(tmp.data(), tmp.size());
 }
 
+int64_t bytes_find(void* haystack, void* needle) {
+  if (!haystack || !needle) return -1;
+  const unsigned char* h = bytes_data(haystack);
+  const unsigned char* n = bytes_data(needle);
+  const std::size_t lh = bytes_len(haystack), ln = bytes_len(needle);
+  if (ln == 0) return 0;
+  if (ln > lh) return -1;
+  for (std::size_t i = 0; i + ln <= lh; ++i) {
+    if (std::memcmp(h + i, n, ln) == 0) return static_cast<int64_t>(i);
+  }
+  return -1;
+}
+
 // Encoding/decoding helpers (basic utf-8/ascii)
 static const char* nonnull(const char* p, const char* defv) { return (p && *p) ? p : defv; }
 void* string_encode(void* s, const char* encoding, const char* errors) {
@@ -1624,7 +1637,16 @@ void* string_casefold(void* s) {
   if (U_FAILURE(status)) { return string_new(data, nb); }
   return string_new(out.data(), static_cast<std::size_t>(outLen));
 #else
-  return string_new(string_data(s), string_len(s));
+  // ASCII-only fallback: map A-Z to a-z; leave other bytes unchanged
+  const char* data = string_data(s);
+  const std::size_t n = string_len(s);
+  std::string out; out.resize(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    unsigned char c = static_cast<unsigned char>(data[i]);
+    if (c >= 'A' && c <= 'Z') out[i] = static_cast<char>(c - 'A' + 'a');
+    else out[i] = static_cast<char>(c);
+  }
+  return string_new(out.data(), out.size());
 #endif
 }
 
@@ -1670,14 +1692,24 @@ void bytearray_append(void* obj, int value) {
     auto* nbuf = reinterpret_cast<unsigned char*>(nhdr + 2);
     std::memcpy(nbuf, buf, len);
     // replace header in-place: this object identity changes; for simplicity, we just mutate hdr fields and keep existing buffer if space permits
-    // In this minimal runtime, allocate a new array object and leave old to be GC'd.
-    // Copy back to caller by updating fields and pointer content is not possible without moving references; so we fallback to simple push when cap allows.
-    // To avoid identity change, we conservatively cap appends to capacity in this subset.
-    // If full, do nothing.
+    // In this minimal runtime, do not grow beyond capacity; ignore append when full.
     free_obj(reinterpret_cast<ObjectHeader*>(bytes));
     return;
   }
   buf[len] = static_cast<unsigned char>(value & 0xFF); hdr[0] = len + 1;
+}
+
+void bytearray_extend_from_bytes(void* obj, void* bytes) {
+  if (!obj || !bytes) return;
+  auto* hdr = reinterpret_cast<std::size_t*>(obj);
+  auto* buf = bytearray_buf(obj);
+  std::size_t len = hdr[0], cap = hdr[1];
+  const unsigned char* src = bytes_data(bytes);
+  std::size_t n = bytes_len(bytes);
+  std::size_t can = (len + n <= cap) ? n : (cap > len ? (cap - len) : 0);
+  if (can == 0) return;
+  std::memcpy(buf + len, src, can);
+  hdr[0] = len + can;
 }
 
 // Filesystem helpers

@@ -40,6 +40,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <ios>
@@ -215,6 +216,7 @@ namespace pycc::codegen {
         struct DebugSub {
             std::string name;
             int id;
+            int line;
         };
         std::vector<DebugSub> dbgSubs;
         struct DebugLoc {
@@ -976,7 +978,8 @@ namespace pycc::codegen {
                 irStream << typeStr(func->params[i].type) << " %" << func->params[i].name;
             }
             // Attach a simple DISubprogram for function-level debug info
-            dbgSubs.push_back(DebugSub{func->name, nextDbgId});
+            int fnLine = (func->line > 0 ? func->line : 1);
+            dbgSubs.push_back(DebugSub{func->name, nextDbgId, fnLine});
             const int subDbgId = nextDbgId;
             irStream << ") gc \"shadow-stack\" personality ptr @__gxx_personality_v0 !dbg !" << subDbgId << " {\n";
             nextDbgId++;
@@ -4127,6 +4130,23 @@ namespace pycc::codegen {
                                             v.i = L.i / R.i;
                                             return v;
                                         }
+                                        case BO::Pow: {
+                                            // exponentiation
+                                            CTVal v;
+                                            if (anyFloat(L, R)) {
+                                                L = toFloat(L);
+                                                R = toFloat(R);
+                                                v.k = CTVal::K::F;
+                                                v.f = std::pow(L.f, R.f);
+                                                return v;
+                                            }
+                                            if (!bothInt(L, R)) throw std::runtime_error("eval(): '**' only for int/float");
+                                            v.k = CTVal::K::I;
+                                            if (R.i < 0) throw std::runtime_error("eval(): negative exponent not supported for int");
+                                            long long base = L.i; long long exp = R.i; long long res = 1;
+                                            while (exp > 0) { if (exp & 1LL) res *= base; base *= base; exp >>= 1LL; }
+                                            v.i = res; return v;
+                                        }
                                         case BO::Mod: {
                                             if (!bothInt(L, R)) throw std::runtime_error("eval(): '%' only for int");
                                             CTVal v;
@@ -6281,9 +6301,17 @@ namespace pycc::codegen {
         irStream << "\n!llvm.dbg.cu = !{!0}\n";
         irStream <<
                 "!0 = distinct !DICompileUnit(language: DW_LANG_Python, file: !1, producer: \"pycc\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)\n";
-        // Prefer the module's file name if present
+        // Prefer the module's file name if present and provide real directory if available
         std::string diFileName = mod.file.empty() ? std::string("pycc") : mod.file;
-        irStream << "!1 = !DIFile(filename: \"" << diFileName << "\", directory: \".\")\n";
+        std::string diDir = ".";
+        try {
+            if (!mod.file.empty()) {
+                std::filesystem::path p(mod.file);
+                if (p.has_parent_path()) diDir = p.parent_path().string();
+                diFileName = p.filename().string();
+            }
+        } catch (...) { /* fall back to defaults */ }
+        irStream << "!1 = !DIFile(filename: \"" << diFileName << "\", directory: \"" << diDir << "\")\n";
         // Basic types and DIExpression
         irStream << "!" << diIntId << " = !DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)\n";
         irStream << "!" << diBoolId << " = !DIBasicType(name: \"bool\", size: 1, encoding: DW_ATE_boolean)\n";
@@ -6293,7 +6321,8 @@ namespace pycc::codegen {
         for (const auto &ds: dbgSubs) {
             irStream << "!" << ds.id << " = distinct !DISubprogram(name: \"" << ds.name
                     << "\", linkageName: \"" << ds.name
-                    << "\", scope: !1, file: !1, line: 1, unit: !0, spFlags: DISPFlagDefinition)\n";
+                    << "\", scope: !1, file: !1, line: " << ds.line << ", scopeLine: " << ds.line
+                    << ", unit: !0, spFlags: DISPFlagDefinition)\n";
         }
         for (const auto &dv: dbgVars) {
             irStream << "!" << dv.id << " = !DILocalVariable(name: \"" << dv.name << "\", scope: !" << dv.scope

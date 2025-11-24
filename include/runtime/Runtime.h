@@ -68,6 +68,9 @@ namespace pycc::rt {
 
     void *bytes_concat(void *a, void *b);
 
+    // Find subsequence; returns index or -1 if not found
+    int64_t bytes_find(void *haystack, void *needle);
+
     void *bytearray_new(std::size_t len);
 
     void *bytearray_from_bytes(void *bytes);
@@ -78,6 +81,9 @@ namespace pycc::rt {
     void bytearray_set(void *obj, std::size_t index, int value);
 
     void bytearray_append(void *obj, int value);
+
+    // Append bytes content to bytearray up to capacity (no reallocation in this subset)
+    void bytearray_extend_from_bytes(void *obj, void *bytes);
 
     // Boxed primitives (opaque heap objects with value payloads)
     void *box_int(int64_t value);
@@ -156,6 +162,12 @@ namespace pycc::rt {
     void *rt_exception_type(void *exc);
 
     void *rt_exception_message(void *exc);
+
+    // Optional chaining/context for richer exceptions
+    void rt_exception_set_cause(void *exc, void *cause_exc);
+    void *rt_exception_cause(void *exc);
+    void rt_exception_set_context(void *exc, void *ctx_exc);
+    void *rt_exception_context(void *exc);
 
     // Basic I/O and OS interop
     void io_write_stdout(void *str);
