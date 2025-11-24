@@ -100,6 +100,7 @@ if(BUILD_TESTING)
       RuntimeIOFailures.*:
       RuntimeOSFS.*:
       RuntimeGlob.*:
+      RuntimeFnmatch.*:
       RuntimeSubprocess.*:
       RuntimeTempfile.*)
     # Shorter default timeout for runtime-only tests

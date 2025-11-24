@@ -3021,18 +3021,37 @@ static std::string regex_escape_lit(char c) {
 
 static std::string fnmatch_to_regex(const std::string& pat) {
   std::string out; out.reserve(pat.size() * 2);
-  bool inClass = false;
   for (size_t i = 0; i < pat.size(); ++i) {
     char c = pat[i];
-    if (!inClass) {
-      if (c == '*') { out += ".*"; continue; }
-      if (c == '?') { out += "."; continue; }
-      if (c == '[') { inClass = true; out.push_back('['); continue; }
-      out += regex_escape_lit(c);
-    } else {
-      out.push_back(c);
-      if (c == ']') inClass = false;
+    if (c == '*') { out += ".*"; continue; }
+    if (c == '?') { out += "."; continue; }
+    if (c == '[') {
+      // Find closing ']' to decide if this is a class; if not found, treat '[' literally
+      size_t j = i + 1;
+      bool hasClose = false;
+      for (size_t k = j; k < pat.size(); ++k) {
+        if (pat[k] == ']') { hasClose = true; break; }
+      }
+      if (!hasClose) { out += "\\["; continue; }
+      // Build character class with support for leading '!' or '^' negation and literal ']' as first char
+      out.push_back('[');
+      bool negate = false;
+      if (j < pat.size() && (pat[j] == '!' || pat[j] == '^')) { negate = true; ++j; }
+      if (negate) out.push_back('^');
+      // If the next char is ']' it is taken literally inside the class
+      if (j < pat.size() && pat[j] == ']') { out.push_back(']'); ++j; }
+      // Emit the rest of class characters verbatim until closing ']'
+      while (j < pat.size()) {
+        char cc = pat[j];
+        out.push_back(cc);
+        if (cc == ']') { break; }
+        ++j;
+      }
+      // Advance main index to closing ']' (or end if unmatched which shouldn't happen here)
+      i = (j < pat.size() ? j : pat.size() - 1);
+      continue;
     }
+    out += regex_escape_lit(c);
   }
   return std::string("^") + out + std::string("$");
 }
