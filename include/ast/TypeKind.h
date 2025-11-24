@@ -10,6 +10,7 @@ namespace pycc::ast {
         Bool,
         Float,
         Str,
+        Bytes,
         NoneType,
         Tuple,
         List,
@@ -24,6 +25,7 @@ namespace pycc::ast {
             case TypeKind::Bool: return "Bool";
             case TypeKind::Float: return "Float";
             case TypeKind::Str: return "Str";
+            case TypeKind::Bytes: return "Bytes";
             case TypeKind::NoneType: return "NoneType";
             case TypeKind::Tuple: return "Tuple";
             case TypeKind::List: return "List";

@@ -1,7 +1,7 @@
 # demos/e2e_binascii.py
 def main() -> int:
     import binascii, io
-    s = 'Hi'
+    s = b'Hi'
     # Hexlify -> bytes; decode to ASCII for comparison
     h = binascii.hexlify(s).decode('ascii', 'strict')
     ok = (h == '4869')
@@ -14,4 +14,3 @@ def main() -> int:
     else:
         io.write_stdout('BINASCII_BAD\n')
         return 1
-

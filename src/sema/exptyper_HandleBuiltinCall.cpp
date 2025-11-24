@@ -44,8 +44,8 @@ bool handleBuiltinCall(const ast::Call& callNode,
         callNode.args[0]->accept(argTyper);
         if (!argTyper.ok) { ok = false; return true; }
         const ast::TypeKind k = argTyper.out;
-        if (!(k == ast::TypeKind::Str || k == ast::TypeKind::List || k == ast::TypeKind::Tuple || k == ast::TypeKind::Dict)) {
-            std::string msg = std::string("len() argument must be str/list/tuple/dict (got ") + pycc::ast::to_string(k) + ")";
+        if (!(k == ast::TypeKind::Str || k == ast::TypeKind::Bytes || k == ast::TypeKind::List || k == ast::TypeKind::Tuple || k == ast::TypeKind::Dict)) {
+            std::string msg = std::string("len() argument must be str/bytes/list/tuple/dict (got ") + pycc::ast::to_string(k) + ")";
             addDiag(diags, msg, callNode.args[0].get());
             ok = false;
             return true;

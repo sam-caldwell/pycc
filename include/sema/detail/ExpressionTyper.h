@@ -44,6 +44,7 @@ namespace pycc::sema {
         void visit(const ast::Literal<double, ast::NodeKind::FloatLiteral> &) override;
 
         void visit(const ast::Literal<std::string, ast::NodeKind::StringLiteral> &) override;
+        void visit(const ast::Literal<std::string, ast::NodeKind::BytesLiteral> &) override;
 
         void visit(const ast::NoneLiteral &) override;
 

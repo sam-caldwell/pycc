@@ -93,10 +93,11 @@ namespace pycc::sema {
         static constexpr uint32_t kBool = 1U << 2U;
         static constexpr uint32_t kFloat = 1U << 3U;
         static constexpr uint32_t kStr = 1U << 4U;
-        static constexpr uint32_t kList = 1U << 5U;
-        static constexpr uint32_t kTuple = 1U << 6U;
-        static constexpr uint32_t kDict = 1U << 7U;
-        static constexpr uint32_t kAllMask = kNone | kInt | kBool | kFloat | kStr | kList | kTuple | kDict;
+        static constexpr uint32_t kBytes = 1U << 5U;
+        static constexpr uint32_t kList = 1U << 6U;
+        static constexpr uint32_t kTuple = 1U << 7U;
+        static constexpr uint32_t kDict = 1U << 8U;
+        static constexpr uint32_t kAllMask = kNone | kInt | kBool | kFloat | kStr | kBytes | kList | kTuple | kDict;
 
         static uint32_t maskFor(ast::TypeKind k);
 

@@ -1545,6 +1545,9 @@ void* bytes_concat(void* a, void* b) {
   return bytes_new(tmp.data(), tmp.size());
 }
 
+// C ABI: expose bytes length for codegen len(bytes)
+extern "C" uint64_t pycc_bytes_len(void* b) { return static_cast<uint64_t>(bytes_len(b)); }
+
 int64_t bytes_find(void* haystack, void* needle) {
   if (!haystack || !needle) return -1;
   const unsigned char* h = bytes_data(haystack);

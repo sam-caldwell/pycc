@@ -11,6 +11,7 @@
 #include "ast/BoolLiteral.h"
 #include "ast/FloatLiteral.h"
 #include "ast/StringLiteral.h"
+#include "ast/BytesLiteral.h"
 #include "ast/NoneLiteral.h"
 
 namespace pycc::sema::expr {
@@ -31,6 +32,9 @@ namespace pycc::sema::expr {
 
     /*** @brief Handle StringLiteral typing and canonical assignment. */
     VisitResult handleStringLiteral(const ast::StringLiteral &n);
+
+    /*** @brief Handle BytesLiteral typing and canonical assignment. */
+    VisitResult handleBytesLiteral(const ast::BytesLiteral &n);
 
     /*** @brief Handle NoneLiteral typing and canonical assignment. */
     VisitResult handleNoneLiteral(const ast::NoneLiteral &n);

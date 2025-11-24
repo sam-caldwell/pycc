@@ -191,6 +191,7 @@ namespace pycc::sema {
             case Bool: return kBool;
             case Float: return kFloat;
         case Str: return kStr;
+        case Bytes: return kBytes;
             case List: return kList;
             case Tuple: return kTuple;
             case Dict: return kDict;
@@ -208,6 +209,7 @@ namespace pycc::sema {
         if (m == kBool) return ast::TypeKind::Bool;
         if (m == kFloat) return ast::TypeKind::Float;
         if (m == kStr) return ast::TypeKind::Str;
+        if (m == kBytes) return ast::TypeKind::Bytes;
         if (m == kList) return ast::TypeKind::List;
         if (m == kTuple) return ast::TypeKind::Tuple;
         if (m == kDict) return ast::TypeKind::Dict;

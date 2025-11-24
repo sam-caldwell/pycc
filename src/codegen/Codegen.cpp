@@ -276,7 +276,8 @@ namespace pycc::codegen {
                 // String operations
                 << "declare ptr @pycc_string_concat(ptr, ptr)\n"
                 << "declare ptr @pycc_string_slice(ptr, i64, i64)\n"
-                << "declare i64 @pycc_string_charlen(ptr)\n\n"
+                << "declare i64 @pycc_string_charlen(ptr)\n"
+                << "declare i64 @pycc_bytes_len(ptr)\n\n"
                 << "declare ptr @pycc_string_encode(ptr, ptr, ptr)\n"
                 << "declare ptr @pycc_bytes_decode(ptr, ptr, ptr)\n\n"
                 << "declare i1 @pycc_string_contains(ptr, ptr)\n"
@@ -878,6 +879,7 @@ namespace pycc::codegen {
                     case ast::TypeKind::Bool: return "i1";
                     case ast::TypeKind::Float: return "double";
                     case ast::TypeKind::Str: return "ptr";
+                    case ast::TypeKind::Bytes: return "ptr";
                     default: return nullptr;
                 }
             };
@@ -989,7 +991,7 @@ namespace pycc::codegen {
             irStream << "entry:\n";
 
             enum class ValKind : std::uint8_t { I32, I1, F64, Ptr };
-            enum class PtrTag : std::uint8_t { Unknown, Str, List, Dict, Object };
+            enum class PtrTag : std::uint8_t { Unknown, Str, Bytes, List, Dict, Object };
             struct Slot {
                 std::string ptr;
                 ValKind kind{};
@@ -1031,13 +1033,13 @@ namespace pycc::codegen {
                     irStream << "  " << ptr << " = alloca double\n";
                     irStream << "  store double %" << param.name << ", ptr " << ptr << "\n";
                     slots[param.name] = Slot{ptr, ValKind::F64};
-                } else if (param.type == ast::TypeKind::Str) {
+                } else if (param.type == ast::TypeKind::Str || param.type == ast::TypeKind::Bytes) {
                     irStream << "  " << ptr << " = alloca ptr\n";
                     irStream << "  store ptr %" << param.name << ", ptr " << ptr << "\n";
                     irStream << "  call void @pycc_gc_write_barrier(ptr " << ptr << ", ptr %" << param.name << ")\n";
                     irStream << "  call void @llvm.gcroot(ptr " << ptr << ", ptr null)\n";
                     Slot s{ptr, ValKind::Ptr};
-                    s.tag = PtrTag::Str;
+                    s.tag = (param.type == ast::TypeKind::Str) ? PtrTag::Str : PtrTag::Bytes;
                     slots[param.name] = s;
                 } else {
                     throw std::runtime_error("unsupported param type");
@@ -4320,37 +4322,68 @@ namespace pycc::codegen {
                                     std::ostringstream r64, r32;
                                     r64 << "%t" << temp++;
                                     r32 << "%t" << temp++;
-                                    bool isList = false;
-                                    // First, try interprocedural param-forwarding tag inference
-                                    auto itRet = retParamIdxs.find(cname->id);
-                                    if (itRet != retParamIdxs.end()) {
-                                        int rp = itRet->second;
-                                        if (rp >= 0 && static_cast<size_t>(rp) < c->args.size()) {
-                                            const auto *a = c->args[rp].get();
-                                            if (a && a->kind == ast::NodeKind::Name) {
-                                                const auto *an = static_cast<const ast::Name *>(a);
-                                                auto itn = slots.find(an->id);
-                                                if (itn != slots.end()) { isList = (itn->second.tag == PtrTag::List); }
-                                            }
-                                        }
+                            bool isList = false; bool isBytes = false;
+                            // First, try interprocedural param-forwarding tag inference
+                            auto itRet = retParamIdxs.find(cname->id);
+                            if (itRet != retParamIdxs.end()) {
+                                int rp = itRet->second;
+                                if (rp >= 0 && static_cast<size_t>(rp) < c->args.size()) {
+                                    const auto *a = c->args[rp].get();
+                                    if (a && a->kind == ast::NodeKind::Name) {
+                                        const auto *an = static_cast<const ast::Name *>(a);
+                                        auto itn = slots.find(an->id);
+                                        if (itn != slots.end()) { isList = (itn->second.tag == PtrTag::List); isBytes = (itn->second.tag == PtrTag::Bytes); }
                                     }
-                                    // Fallback to return-type based choice
-                                    if (!isList) {
-                                        auto itSig = sigs.find(cname->id);
-                                        if (itSig != sigs.end()) {
-                                            isList = (itSig->second.ret == ast::TypeKind::List);
-                                        }
-                                    }
-                                    if (isList) {
-                                        ir << "  " << r64.str() << " = call i64 @pycc_list_len(ptr " << v.s << ")\n";
-                                    } else {
-                                        ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << v.s <<
-                                                ")\n";
-                                    }
+                                }
+                            }
+                            // Fallback to return-type based choice
+                            if (!isList) {
+                                auto itSig = sigs.find(cname->id);
+                                if (itSig != sigs.end()) {
+                                    isList = (itSig->second.ret == ast::TypeKind::List);
+                                    isBytes = (itSig->second.ret == ast::TypeKind::Bytes);
+                                }
+                            }
+                            if (isList) {
+                                ir << "  " << r64.str() << " = call i64 @pycc_list_len(ptr " << v.s << ")\n";
+                            } else if (isBytes) {
+                                ir << "  " << r64.str() << " = call i64 @pycc_bytes_len(ptr " << v.s << ")\n";
+                            } else {
+                                ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << v.s <<
+                                        ")\n";
+                            }
                                     ir << "  " << r32.str() << " = trunc i64 " << r64.str() << " to i32\n";
                                     out = Value{r32.str(), ValKind::I32};
                                     return;
                                 }
+                            }
+                            if (c && c->callee && c->callee->kind == ast::NodeKind::Attribute) {
+                                const auto *at = dynamic_cast<const ast::Attribute *>(c->callee.get());
+                                // Evaluate and determine appropriate len primitive
+                                auto v = run(*arg0);
+                                if (v.k != ValKind::Ptr) throw std::runtime_error("len(call): callee did not return pointer");
+                                std::ostringstream r64, r32;
+                                r64 << "%t" << temp++;
+                                r32 << "%t" << temp++;
+                                if (at->attr == "encode") {
+                                    ir << "  " << r64.str() << " = call i64 @pycc_bytes_len(ptr " << v.s << ")\n";
+                                } else if (at->attr == "decode") {
+                                    ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << v.s << ")\n";
+                                } else if (at->value && at->value->kind == ast::NodeKind::Name) {
+                                    const auto *bn = static_cast<const ast::Name *>(at->value.get());
+                                    if (bn->id == "glob" || bn->id == "itertools") {
+                                        ir << "  " << r64.str() << " = call i64 @pycc_list_len(ptr " << v.s << ")\n";
+                                    } else if (bn->id == "binascii") {
+                                        ir << "  " << r64.str() << " = call i64 @pycc_bytes_len(ptr " << v.s << ")\n";
+                                    } else {
+                                        ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << v.s << ")\n";
+                                    }
+                                } else {
+                                    ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << v.s << ")\n";
+                                }
+                                ir << "  " << r32.str() << " = trunc i64 " << r64.str() << " to i32\n";
+                                out = Value{r32.str(), ValKind::I32};
+                                return;
                             }
                         }
                         if (arg0->kind == ast::NodeKind::Name) {
@@ -4368,6 +4401,8 @@ namespace pycc::codegen {
                             if (itn->second.tag == PtrTag::Str || itn->second.tag == PtrTag::Unknown) {
                                 ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << regPtr.str() <<
                                         ")\n";
+                            } else if (itn->second.tag == PtrTag::Bytes) {
+                                ir << "  " << r64.str() << " = call i64 @pycc_bytes_len(ptr " << regPtr.str() << ")\n";
                             } else {
                                 ir << "  " << r64.str() << " = call i64 @pycc_list_len(ptr " << regPtr.str() << ")\n";
                             }
@@ -5435,6 +5470,7 @@ namespace pycc::codegen {
                         if (asg.value->kind == ast::NodeKind::ListLiteral) { it->second.tag = PtrTag::List; } else if (
                             asg.value->kind == ast::NodeKind::DictLiteral) { it->second.tag = PtrTag::Dict; } else if (
                             asg.value->kind == ast::NodeKind::StringLiteral) { it->second.tag = PtrTag::Str; } else if (
+                            asg.value->kind == ast::NodeKind::BytesLiteral) { it->second.tag = PtrTag::Bytes; } else if (
                             asg.value->kind == ast::NodeKind::ObjectLiteral) { it->second.tag = PtrTag::Object; }
                         // Propagate tag from name-to-name assignments
                         else if (asg.value->kind == ast::NodeKind::Name) {
@@ -5452,8 +5488,10 @@ namespace pycc::codegen {
                                 if (cname != nullptr) {
                                     auto itSig = sigs.find(cname->id);
                                     if (itSig != sigs.end()) {
-                                        if (itSig->second.ret ==
+                                    if (itSig->second.ret ==
                                             ast::TypeKind::Str) { it->second.tag = PtrTag::Str; } else if (
+                                            itSig->second.ret ==
+                                            ast::TypeKind::Bytes) { it->second.tag = PtrTag::Bytes; } else if (
                                             itSig->second.ret ==
                                             ast::TypeKind::List) { it->second.tag = PtrTag::List; } else if (
                                             itSig->second.ret == ast::TypeKind::Dict) { it->second.tag = PtrTag::Dict; }
@@ -6354,3 +6392,20 @@ namespace pycc::codegen {
         return true;
     }
 } // namespace pycc::codegen
+                        // Attribute-call based tag inference for common patterns
+                        else if (asg.value->kind == ast::NodeKind::Call) {
+                            const auto *c = dynamic_cast<const ast::Call *>(asg.value.get());
+                            if (c && c->callee && c->callee->kind == ast::NodeKind::Attribute) {
+                                const auto *at = dynamic_cast<const ast::Attribute *>(c->callee.get());
+                                if (at) {
+                                    if (at->attr == "encode") it->second.tag = PtrTag::Bytes;
+                                    else if (at->attr == "decode") it->second.tag = PtrTag::Str;
+                                    else if (at->value && at->value->kind == ast::NodeKind::Name) {
+                                        const auto *bn = static_cast<const ast::Name *>(at->value.get());
+                                        if (bn->id == "binascii" && (at->attr == "hexlify" || at->attr == "unhexlify")) {
+                                            it->second.tag = PtrTag::Bytes;
+                                        }
+                                    }
+                                }
+                            }
+                        }
