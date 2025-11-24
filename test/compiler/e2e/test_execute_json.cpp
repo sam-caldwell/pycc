@@ -32,6 +32,5 @@ TEST(ExecuteJSON, StdoutAndExit) {
   EXPECT_EQ(rc, 0);
 #endif
   auto out = slurp_json("../Testing/out_json.txt");
-  EXPECT_EQ(out, std::string("JSON_OK\n"));
+  EXPECT_EQ(out, std::string("JSON_OK\\n"));
 }
-

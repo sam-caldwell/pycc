@@ -22,12 +22,15 @@ namespace pycc::sema::detail {
         if (!callNode.callee || callNode.callee->kind != ast::NodeKind::Attribute)
             return false;
         const auto *at = static_cast<const ast::Attribute *>(callNode.callee.get());
-        if (!at->value || at->value->kind != ast::NodeKind::Name)
-            return false;
-        const auto *base = static_cast<const ast::Name *>(at->value.get());
         const std::string fn = at->attr;
+        // Base may be any expression (for generic attribute methods like encode/decode);
+        // capture name when available for module-dispatch below.
+        const ast::Name *base = nullptr;
+        if (at->value && at->value->kind == ast::NodeKind::Name) {
+            base = static_cast<const ast::Name *>(at->value.get());
+        }
 
-        if (base->id == "math") {
+        if (base && base->id == "math") {
             auto checkUnary = [&](const ast::TypeKind retKind) {
                 if (callNode.args.size() != 1) {
                     addDiag(diags, std::string("math.") + fn + "() takes 1 arg", &callNode);
@@ -96,7 +99,7 @@ namespace pycc::sema::detail {
             }
             return false;
         }
-        if (base->id == "io") {
+        if (base && base->id == "io") {
             if (fn == "write_stdout" || fn == "write_stderr") {
                 if (callNode.args.size() != 1) { addDiag(diags, std::string("io.") + fn + "() takes 1 arg", &callNode); ok = false; return true; }
                 ExpressionTyper a{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(a); if (!a.ok) { ok=false; return true; }
@@ -196,7 +199,7 @@ namespace pycc::sema::detail {
             }
             return false;
         }
-        if (base->id == "fnmatch") {
+        if (base && base->id == "fnmatch") {
             if (fn == "fnmatch" || fn == "fnmatchcase") {
                 if (callNode.args.size() != 2) {
                     addDiag(diags, std::string("fnmatch.") + fn + "() takes 2 args", &callNode);
@@ -258,7 +261,7 @@ namespace pycc::sema::detail {
             }
             return false;
         }
-        if (base->id == "os") {
+        if (base && base->id == "os") {
             if (fn == "mkdir") {
                 if (!(callNode.args.size() == 1 || callNode.args.size() == 2)) { addDiag(diags, "os.mkdir() takes 1 or 2 args", &callNode); ok=false; return true; }
                 ExpressionTyper p{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(p); if (!p.ok) { ok=false; return true; }
@@ -278,7 +281,7 @@ namespace pycc::sema::detail {
             }
             return false;
         }
-        if (base->id == "binascii") {
+        if (base && base->id == "binascii") {
             if (fn == "hexlify") {
                 if (callNode.args.size() != 1) { addDiag(diags, "binascii.hexlify() takes 1 arg", &callNode); ok=false; return true; }
                 ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(a0);
@@ -298,7 +301,7 @@ namespace pycc::sema::detail {
             }
             return false;
         }
-        if (base->id == "glob") {
+        if (base && base->id == "glob") {
             if (fn == "glob" || fn == "iglob") {
                 if (callNode.args.size() != 1) {
                     addDiag(diags, std::string("glob.") + fn + "() takes 1 arg", &callNode);
@@ -374,7 +377,7 @@ namespace pycc::sema::detail {
             out = ast::TypeKind::Bytes; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true;
         }
         // Minimal typing shims for json module
-        if (base->id == "json") {
+        if (base && base->id == "json") {
             if (fn == "dumps") {
                 if (!(callNode.args.size() == 1 || callNode.args.size() == 2)) { addDiag(diags, "json.dumps() takes 1 or 2 args", &callNode); ok=false; return true; }
                 if (callNode.args.size() == 2) {
@@ -395,7 +398,7 @@ namespace pycc::sema::detail {
             return false;
         }
         // Minimal typing for re module
-        if (base->id == "re") {
+        if (base && base->id == "re") {
             if (fn == "search" || fn == "match" || fn == "fullmatch") {
                 if (!(callNode.args.size() == 2 || callNode.args.size() == 3)) { addDiag(diags, std::string("re.") + fn + "() takes 2 or 3 args", &callNode); ok=false; return true; }
                 ExpressionTyper p{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(p); if (!p.ok) { ok=false; return true; }
@@ -420,7 +423,7 @@ namespace pycc::sema::detail {
             return false;
         }
         // Minimal typing for itertools: we treat outputs as lists
-        if (base->id == "itertools") {
+        if (base && base->id == "itertools") {
             if (fn == "permutations" || fn == "combinations" || fn == "combinations_with_replacement") {
                 if (!(callNode.args.size() == 1 || callNode.args.size() == 2) && fn == "permutations") { addDiag(diags, "itertools.permutations() takes 1 or 2 args", &callNode); ok=false; return true; }
                 if (fn != "permutations" && callNode.args.size() != 2) { addDiag(diags, std::string("itertools.") + fn + "() takes 2 args", &callNode); ok=false; return true; }
@@ -437,7 +440,7 @@ namespace pycc::sema::detail {
             return false;
         }
         // Minimal typing for pathlib: paths are strings; booleans for predicates
-        if (base->id == "pathlib") {
+        if (base && base->id == "pathlib") {
             if (fn == "cwd" || fn == "home") { if (!callNode.args.empty()) { addDiag(diags, std::string("pathlib.") + fn + "() takes 0 args", &callNode); ok=false; return true; } out = ast::TypeKind::Str; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true; }
             if (fn == "join") { if (callNode.args.size()!=2) { addDiag(diags, "pathlib.join() takes 2 args", &callNode); ok=false; return true; } ExpressionTyper a{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[0]->accept(a); if (!a.ok) { ok=false; return true; } ExpressionTyper b{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[1]->accept(b); if (!b.ok) { ok=false; return true; } const uint32_t sMask = TypeEnv::maskForKind(ast::TypeKind::Str); if ((maskOf(a.out,a.outSet)&~sMask)!=0U || (maskOf(b.out,b.outSet)&~sMask)!=0U) { addDiag(diags, "pathlib.join: arguments must be str", &callNode); ok=false; return true; } out = ast::TypeKind::Str; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true; }
             if (fn == "parent" || fn == "basename" || fn == "suffix" || fn == "stem" || fn == "as_posix" || fn == "as_uri" || fn == "resolve" || fn == "absolute") { if (callNode.args.size()!=1) { addDiag(diags, std::string("pathlib.")+fn+"() takes 1 arg", &callNode); ok=false; return true; } ExpressionTyper p{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[0]->accept(p); if (!p.ok) { ok=false; return true; } const uint32_t sMask = TypeEnv::maskForKind(ast::TypeKind::Str); if ((maskOf(p.out,p.outSet)&~sMask)!=0U) { addDiag(diags, std::string("pathlib.")+fn+": path must be str", callNode.args[0].get()); ok=false; return true; } out = ast::TypeKind::Str; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true; }

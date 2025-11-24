@@ -63,9 +63,10 @@ TEST(DemosAst, AllDemosParseAndMatchExpectedAstStructures) {
     const auto path = entry.path();
     if (path.extension() != ".py") continue;
     const auto name = path.filename().string();
-    // Skip tiny parsing-exercise snippets and snapshot/error demos not meant for full parsing
+    // Skip tiny parsing-exercise snippets, snapshot/error demos, and e2e driver demos.
     if (name.rfind("pe_", 0) == 0) { continue; }
     if (name.rfind("snap_", 0) == 0) { continue; }
+    if (name.rfind("e2e_", 0) == 0) { continue; }
     SCOPED_TRACE(std::string("demo=") + name);
 
     // 1) Lex the file

@@ -31,6 +31,7 @@
 #include "ast/ObjectLiteral.h"
 #include "ast/ReturnStmt.h"
 #include "ast/StringLiteral.h"
+#include "ast/BytesLiteral.h"
 #include "ast/TupleLiteral.h"
 #include "ast/TypeKind.h"
 #include "ast/Unary.h"
@@ -266,7 +267,8 @@ namespace pycc::codegen {
                 << "declare i64 @pycc_dict_len(ptr)\n"
                 << "declare void @pycc_object_set_attr(ptr, ptr, ptr)\n"
                 << "declare ptr @pycc_object_get_attr(ptr, ptr)\n"
-                << "declare ptr @pycc_string_new(ptr, i64)\n\n"
+                << "declare ptr @pycc_string_new(ptr, i64)\n"
+                << "declare ptr @pycc_bytes_new(ptr, i64)\n\n"
                 // Debug intrinsics for variable locations and GC roots
                 << "declare void @llvm.dbg.declare(metadata, metadata, metadata)\n\n"
                 << "declare void @llvm.gcroot(ptr, ptr)\n\n"
@@ -1188,6 +1190,23 @@ namespace pycc::codegen {
                     std::ostringstream reg;
                     reg << "%t" << temp++;
                     ir << "  " << reg.str() << " = call ptr @pycc_string_new(ptr " << dataPtr.str() << ", i64 " << glen << ")\n";
+                    out = Value{reg.str(), ValKind::Ptr};
+                }
+
+                void visit(const ast::BytesLiteral &b) override {
+                    // Reuse the same constant machinery as strings; store raw bytes including potential NULs
+                    ensureStrConst(b.value);
+                    auto it = strGlobals.find(b.value);
+                    const std::string &gname = it->second.first;
+                    const size_t glen = it->second.second - 1; // stored with NUL for IR convenience
+                    // Pointer to constant data
+                    std::ostringstream dataPtr;
+                    dataPtr << "%t" << temp++;
+                    ir << "  " << dataPtr.str() << " = getelementptr inbounds i8, ptr @" << gname << ", i64 0\n";
+                    // Allocate runtime Bytes object
+                    std::ostringstream reg;
+                    reg << "%t" << temp++;
+                    ir << "  " << reg.str() << " = call ptr @pycc_bytes_new(ptr " << dataPtr.str() << ", i64 " << glen << ")\n";
                     out = Value{reg.str(), ValKind::Ptr};
                 }
 
@@ -4648,12 +4667,12 @@ namespace pycc::codegen {
                         bool rhsStr = (b.rhs->kind == ast::NodeKind::StringLiteral) ||
                                       (b.rhs->kind == ast::NodeKind::Name && [this,&b]() {
                                           auto it = slots.find(static_cast<const ast::Name *>(b.rhs.get())->id);
-                                          return it != slots.end() && it->second.tag == PtrTag::Str;
+                                          return it != slots.end() && (it->second.tag == PtrTag::Str || it->second.tag == PtrTag::Unknown);
                                       }());
                         bool lhsStr = (b.lhs->kind == ast::NodeKind::StringLiteral) ||
                                       (b.lhs->kind == ast::NodeKind::Name && [this,&b]() {
                                           auto it = slots.find(static_cast<const ast::Name *>(b.lhs.get())->id);
-                                          return it != slots.end() && it->second.tag == PtrTag::Str;
+                                          return it != slots.end() && (it->second.tag == PtrTag::Str || it->second.tag == PtrTag::Unknown);
                                       }());
                         if (rhsStr && lhsStr) {
                             auto H = run(*b.rhs);
@@ -4776,6 +4795,34 @@ namespace pycc::codegen {
                             }
                             ir << "  " << r1.str() << " = fcmp " << pred << " double " << LV.s << ", " << RV.s << "\n";
                         } else if (LV.k == ValKind::Ptr && RV.k == ValKind::Ptr) {
+                            auto isStrLike = [&](const ast::Expr* e) {
+                                if (!e) return false;
+                                if (e->kind == ast::NodeKind::StringLiteral) return true;
+                                if (e->kind == ast::NodeKind::Name) {
+                                    auto *n = static_cast<const ast::Name*>(e);
+                                    auto it = slots.find(n->id);
+                                    if (it != slots.end()) {
+                                        return it->second.tag == PtrTag::Str || it->second.tag == PtrTag::Unknown;
+                                    }
+                                }
+                                return false;
+                            };
+                            const bool stringContentCmp = (b.op == ast::BinaryOperator::Eq || b.op == ast::BinaryOperator::Ne)
+                                                          && (isStrLike(b.lhs.get()) || isStrLike(b.rhs.get()));
+                            if (stringContentCmp) {
+                                std::ostringstream eq;
+                                eq << "%t" << temp++;
+                                ir << "  " << eq.str() << " = call i1 @pycc_string_eq(ptr " << LV.s << ", ptr " << RV.s << ")\n";
+                                if (b.op == ast::BinaryOperator::Ne) {
+                                    std::ostringstream ne;
+                                    ne << "%t" << temp++;
+                                    ir << "  " << ne.str() << " = xor i1 " << eq.str() << ", true\n";
+                                    out = Value{ne.str(), ValKind::I1};
+                                } else {
+                                    out = Value{eq.str(), ValKind::I1};
+                                }
+                                return;
+                            }
                             const char *pred = (b.op == ast::BinaryOperator::Is || b.op == ast::BinaryOperator::Eq)
                                                    ? "eq"
                                                    : (b.op == ast::BinaryOperator::IsNot || b.op ==
@@ -5507,6 +5554,23 @@ namespace pycc::codegen {
                                                 auto itn = slots.find(an->id);
                                                 if (itn != slots.end()) { it->second.tag = itn->second.tag; }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                            // Attribute-based tag inference for common patterns
+                            if (c && c->callee && c->callee->kind == ast::NodeKind::Attribute) {
+                                const auto *at = dynamic_cast<const ast::Attribute *>(c->callee.get());
+                                if (at) {
+                                    if (at->attr == "encode") it->second.tag = PtrTag::Bytes;
+                                    else if (at->attr == "decode") it->second.tag = PtrTag::Str;
+                                    else if (at->value && at->value->kind == ast::NodeKind::Name) {
+                                        const auto *bn = static_cast<const ast::Name *>(at->value.get());
+                                        if (bn->id == "binascii" && (at->attr == "hexlify" || at->attr == "unhexlify")) {
+                                            it->second.tag = PtrTag::Bytes;
+                                        }
+                                        if (bn->id == "json" && at->attr == "dumps") {
+                                            it->second.tag = PtrTag::Str;
                                         }
                                     }
                                 }
@@ -6392,20 +6456,3 @@ namespace pycc::codegen {
         return true;
     }
 } // namespace pycc::codegen
-                        // Attribute-call based tag inference for common patterns
-                        else if (asg.value->kind == ast::NodeKind::Call) {
-                            const auto *c = dynamic_cast<const ast::Call *>(asg.value.get());
-                            if (c && c->callee && c->callee->kind == ast::NodeKind::Attribute) {
-                                const auto *at = dynamic_cast<const ast::Attribute *>(c->callee.get());
-                                if (at) {
-                                    if (at->attr == "encode") it->second.tag = PtrTag::Bytes;
-                                    else if (at->attr == "decode") it->second.tag = PtrTag::Str;
-                                    else if (at->value && at->value->kind == ast::NodeKind::Name) {
-                                        const auto *bn = static_cast<const ast::Name *>(at->value.get());
-                                        if (bn->id == "binascii" && (at->attr == "hexlify" || at->attr == "unhexlify")) {
-                                            it->second.tag = PtrTag::Bytes;
-                                        }
-                                    }
-                                }
-                            }
-                        }

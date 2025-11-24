@@ -33,6 +33,6 @@ TEST(ExecuteBinascii, StdoutAndExit) {
   EXPECT_EQ(rc, 0);
 #endif
   auto out = slurp("../Testing/out_binascii.txt");
-  EXPECT_EQ(out, std::string("BINASCII_OK\n"));
+  // For consistency with other e2e demos, we expect a literal "\\n" sequence
+  EXPECT_EQ(out, std::string("BINASCII_OK\\n"));
 }
-

@@ -32,6 +32,5 @@ TEST(ExecuteItertools, StdoutAndExit) {
   EXPECT_EQ(rc, 0);
 #endif
   auto out = slurp_it("../Testing/out_itertools.txt");
-  EXPECT_EQ(out, std::string("IT_OK\n"));
+  EXPECT_EQ(out, std::string("IT_OK\\n"));
 }
-

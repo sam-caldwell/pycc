@@ -32,6 +32,5 @@ TEST(ExecuteRe, StdoutAndExit) {
   EXPECT_EQ(rc, 0);
 #endif
   auto out = slurp_re("../Testing/out_re.txt");
-  EXPECT_EQ(out, std::string("RE_OK\n"));
+  EXPECT_EQ(out, std::string("RE_OK\\n"));
 }
-

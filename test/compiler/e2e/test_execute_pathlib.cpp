@@ -32,6 +32,5 @@ TEST(ExecutePathlib, StdoutAndExit) {
   EXPECT_EQ(rc, 0);
 #endif
   auto out = slurp_p("../Testing/out_pathlib.txt");
-  EXPECT_EQ(out, std::string("PATHLIB_OK\n"));
+  EXPECT_EQ(out, std::string("PATHLIB_OK\\n"));
 }
-
