@@ -43,13 +43,13 @@ TEST(CLI_EndToEnd, ShortHelpAlsoPrintsUsage) {
 TEST(CLI_EndToEnd, MetricsTextAndJson) {
   ensure_testing_dir();
   write_file("../Testing/m.py", "def main() -> int:\n  return 1\n");
-  int rc1 = std::system("../pycc --metrics -o ../Testing/m_out ../Testing/m.py > ../Testing/metrics.txt 2>/dev/null");
+  int rc1 = std::system("PYCC_NO_TOOLCHAIN=1 ../pycc --metrics -o ../Testing/m_out ../Testing/m.py > ../Testing/metrics.txt 2>/dev/null");
   ASSERT_EQ(rc1, 0);
   auto txt = read_all("../Testing/metrics.txt");
   ASSERT_NE(txt.find("Lex"), std::string::npos);
   ASSERT_NE(txt.find("Parse"), std::string::npos);
 
-  int rc2 = std::system("../pycc --metrics-json -o ../Testing/mj_out ../Testing/m.py > ../Testing/metrics.json 2>/dev/null");
+  int rc2 = std::system("PYCC_NO_TOOLCHAIN=1 ../pycc --metrics-json -o ../Testing/mj_out ../Testing/m.py > ../Testing/metrics.json 2>/dev/null");
   ASSERT_EQ(rc2, 0);
   auto js = read_all("../Testing/metrics.json");
   ASSERT_NE(js.find("\"lex\""), std::string::npos);
@@ -113,16 +113,16 @@ TEST(CLI_EndToEnd, LogsAreWritten) {
 }
 
 TEST(CLI_EndToEnd, UnknownOptionPrintsUsageAndReturns2) {
-  int rc = std::system("../pycc --totally-unknown > /dev/null 2> err.txt");
+  int rc = std::system("../pycc --totally-unknown > /dev/null 2> ../Testing/err.txt");
   // Non-zero rc expected; normalize to shell exit code space
   ASSERT_NE(rc, 0);
-  auto err = read_all("err.txt");
+  auto err = read_all("../Testing/err.txt");
   ASSERT_NE(err.find("unknown option"), std::string::npos);
 }
 
 TEST(CLI_EndToEnd, NoInputsReturns2) {
-  int rc = std::system("../pycc -o out 2> err_noin.txt");
+  int rc = std::system("../pycc -o ../Testing/out 2> ../Testing/err_noin.txt");
   ASSERT_NE(rc, 0);
-  auto err = read_all("err_noin.txt");
+  auto err = read_all("../Testing/err_noin.txt");
   ASSERT_NE(err.find("no input files"), std::string::npos);
 }

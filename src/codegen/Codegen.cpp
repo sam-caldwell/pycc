@@ -103,6 +103,11 @@ namespace pycc::codegen {
             outFile << irText;
         }
 
+        // Optional toolchain bypass for hermetic tests: when set, stop after writing IR.
+        if (const char* no_tool = std::getenv("PYCC_NO_TOOLCHAIN"); no_tool && *no_tool) {
+            return {};
+        }
+
         // Optionally, run LLVM IR pass plugin to elide redundant GC barriers on stack writes.
         // This uses the externally built pass plugin and 'opt' tool.
 #ifdef PYCC_LLVM_PASS_PLUGIN_PATH

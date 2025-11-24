@@ -84,6 +84,8 @@ add_library(pycc_runtime
   ${CMAKE_SOURCE_DIR}/src/runtime/argparse_Split.cpp
   ${CMAKE_SOURCE_DIR}/src/runtime/argparse_Lookup.cpp
   ${CMAKE_SOURCE_DIR}/src/runtime/argparse_Apply.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/base64_Decode.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/encoding_Decode.cpp
   ${CMAKE_SOURCE_DIR}/include/runtime/Runtime.h)
 target_include_directories(pycc_runtime PUBLIC ${CMAKE_SOURCE_DIR}/include)
 if(Threads_FOUND)

@@ -4,6 +4,7 @@
  */
 #include <gtest/gtest.h>
 #include <fstream>
+#include <filesystem>
 #include <cstdlib>
 #include <string>
 #include <sys/wait.h>
@@ -17,12 +18,13 @@ TEST(ExecuteExample, ReturnsFive) {
   ASSERT_FALSE(demosDir.empty());
   const auto srcPath = (demosDir / "minimal.py").string();
   // Build the program
-  std::string cmd = std::string("../pycc -o e2e_app ") + srcPath + " > /dev/null 2>&1";
+  std::error_code ec; std::filesystem::create_directory("../Testing", ec);
+  std::string cmd = std::string("../pycc -o ../Testing/e2e_app ") + srcPath + " > /dev/null 2>&1";
   int rc = std::system(cmd.c_str());
   ASSERT_EQ(rc, 0) << "pycc failed to compile example";
 
   // Execute the result and check exit status
-  rc = std::system("./e2e_app > /dev/null 2>&1");
+  rc = std::system("../Testing/e2e_app > /dev/null 2>&1");
 #ifdef WIFEXITED
   ASSERT_TRUE(WIFEXITED(rc));
   int code = WEXITSTATUS(rc);

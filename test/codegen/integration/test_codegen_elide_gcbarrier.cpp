@@ -28,9 +28,8 @@ TEST(CodegenElideGCBarrier, EnvTriggersOptAttempt) {
   setenv("PYCC_LLVM_PASS_PLUGIN_PATH", "/nonexistent/plugin.so", 1);
   codegen::Codegen CG(/*emitLL=*/true, /*emitASM=*/false);
   codegen::EmitResult res;
-  std::string err = CG.emit(*mod, "elide_out", /*assemblyOnly=*/false, /*compileOnly=*/true, res);
+  std::string err = CG.emit(*mod, "../Testing/elide_out", /*assemblyOnly=*/false, /*compileOnly=*/true, res);
   // Even if 'opt' fails, emit() should succeed and produce an object
   ASSERT_TRUE(err.empty());
   ASSERT_FALSE(res.llPath.empty());
 }
-

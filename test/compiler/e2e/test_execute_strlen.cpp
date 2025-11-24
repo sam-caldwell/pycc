@@ -4,6 +4,7 @@
  */
 #include <gtest/gtest.h>
 #include <fstream>
+#include <filesystem>
 #include <cstdlib>
 #include <string>
 #include <sys/wait.h>
@@ -15,11 +16,12 @@ TEST(ExecuteExample, ReturnsStringLen) {
   for (const auto& c : candidates) { if (fs::exists(c)) { demosDir = c; break; } }
   ASSERT_FALSE(demosDir.empty());
   const auto srcPath = (demosDir / "e2e_strlen.py").string();
-  std::string cmd = std::string("../pycc -o e2e_strlen ") + srcPath + " > /dev/null 2>&1";
+  std::error_code ec; std::filesystem::create_directory("../Testing", ec);
+  std::string cmd = std::string("../pycc -o ../Testing/e2e_strlen ") + srcPath + " > /dev/null 2>&1";
   int rc = std::system(cmd.c_str());
   if (rc != 0) { GTEST_SKIP() << "Skipping: pycc failed to compile example"; }
 
-  rc = std::system("./e2e_strlen > /dev/null 2>&1");
+  rc = std::system("../Testing/e2e_strlen > /dev/null 2>&1");
 #ifdef WIFEXITED
   ASSERT_TRUE(WIFEXITED(rc));
   int code = WEXITSTATUS(rc);

@@ -24,42 +24,74 @@ def main():
         if not objs:
             print('[coverage] no binaries found')
             return 0
-        p = run(['llvm-cov', 'export', '--format=json', f'--instr-profile={PROFDB}'] + objs)
-        data = json.loads(p.stdout)
-        # Aggregate by top-level phase directories
-        groups = {
-            'cli':  {'files':[], 'cov':0, 'tot':0},
-            'lexer':{'files':[], 'cov':0, 'tot':0},
-            'parser':{'files':[], 'cov':0, 'tot':0},
-            'sema': {'files':[], 'cov':0, 'tot':0},
-            'codegen':{'files':[], 'cov':0, 'tot':0},
-            'optimizer':{'files':[], 'cov':0, 'tot':0},
-            'observability':{'files':[], 'cov':0, 'tot':0},
-            'runtime':{'files':[], 'cov':0, 'tot':0},
-            'compiler':{'files':[], 'cov':0, 'tot':0},
-            'ast': {'files':[], 'cov':0, 'tot':0},
-            'other':{'files':[], 'cov':0, 'tot':0},
-        }
-        total_cov = 0
-        total_tot = 0
-        files_accum = []  # (path, cov, tot, group)
-        for el in data.get('data', []):
-            for f in el.get('files', []):
-                path = f.get('filename','')
-                summ = f.get('summary',{})
-                lines_cov = summ.get('lines',{}).get('covered',0)
-                lines_tot = summ.get('lines',{}).get('count',0)
-                total_cov += lines_cov
-                total_tot += lines_tot
-                # crude path grouping
+        # Some llvm-cov builds fail when exporting multiple objects in a single invocation.
+        # Fall back to per-binary export and aggregate.
+        data = {'data': [{'files': []}]}
+        for obj in objs:
+            try:
+                p = run(['llvm-cov', 'export', '--format=json', f'--instr-profile={PROFDB}', obj])
+                dobj = json.loads(p.stdout)
+                for el in dobj.get('data', []):
+                    data['data'][0]['files'].extend(el.get('files', []))
+            except subprocess.CalledProcessError as e:
+                print(f"[coverage] warn: llvm-cov export failed for {obj}: {e}")
+        # Aggregate by top-level phase directories (prefer JSON export; fallback to text report parsing)
+        groups = {k:{'files':[], 'cov':0, 'tot':0} for k in [
+            'cli','lexer','parser','sema','codegen','optimizer','observability','runtime','compiler','ast','other']}
+        total_cov = 0; total_tot = 0; files_accum = []
+
+        if data['data'][0]['files']:
+            for el in data.get('data', []):
+                for f in el.get('files', []):
+                    path = f.get('filename','')
+                    summ = f.get('summary',{})
+                    lines_cov = summ.get('lines',{}).get('covered',0)
+                    lines_tot = summ.get('lines',{}).get('count',0)
+                    total_cov += lines_cov; total_tot += lines_tot
+                    grp = 'other'
+                    for g in groups:
+                        if f"/src/{g}/" in path or f"/include/{g}/" in path:
+                            grp = g; break
+                    groups[grp]['cov'] += lines_cov
+                    groups[grp]['tot'] += lines_tot
+                    groups[grp]['files'].append(path)
+                    files_accum.append((path, lines_cov, lines_tot, grp))
+        else:
+            # Fallback: parse llvm-cov report text for each binary, summing by path buckets
+            def parse_report(obj):
+                try:
+                    ptxt = run(['llvm-cov','report',f'--instr-profile={PROFDB}',obj,'--ignore-filename-regex','_deps|gtest'])
+                except subprocess.CalledProcessError:
+                    return []
+                rows = []
+                for line in ptxt.stdout.splitlines():
+                    if not line or line.startswith('Filename') or line.startswith('-') or line.startswith('TOTAL'):
+                        continue
+                    parts = line.split()
+                    if len(parts) < 12: continue
+                    filename = parts[0]
+                    try:
+                        lines_total = int(parts[8])
+                        lines_missed = int(parts[9])
+                    except ValueError:
+                        continue
+                    rows.append((filename, lines_total - lines_missed, lines_total))
+                return rows
+            per_file = {}
+            for obj in objs:
+                for (path, cov, tot) in parse_report(obj):
+                    prev = per_file.get(path, (0,0))
+                    per_file[path] = (prev[0]+cov, prev[1]+tot)
+            for path,(cov,tot) in per_file.items():
+                total_cov += cov; total_tot += tot
                 grp = 'other'
                 for g in groups:
                     if f"/src/{g}/" in path or f"/include/{g}/" in path:
                         grp = g; break
-                groups[grp]['cov'] += lines_cov
-                groups[grp]['tot'] += lines_tot
+                groups[grp]['cov'] += cov
+                groups[grp]['tot'] += tot
                 groups[grp]['files'].append(path)
-                files_accum.append((path, lines_cov, lines_tot, grp))
+                files_accum.append((path, cov, tot, grp))
         # Print ASCII table
         print('\n== Coverage by Phase ==')
         print(f"{'Phase':<15} {'Covered':>10} {'Total':>10} {'Percent':>9}")

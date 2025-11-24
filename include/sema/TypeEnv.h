@@ -81,6 +81,10 @@ namespace pycc::sema {
         // If the intersection is empty (contradictory), record a zero mask so that use sites will flag an error.
         void intersectFrom(const TypeEnv &a, const TypeEnv &b);
 
+        // Merge entries from another environment into this one (overwrite only provided entries).
+        // Used to apply the result of an intersection computed in a temporary env.
+        void applyMerged(const TypeEnv &src);
+
         std::optional<Provenance> where(const std::string &name) const;
 
     private:

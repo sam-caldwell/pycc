@@ -72,6 +72,7 @@ namespace pycc::sema {
                 const std::unordered_map<std::string, ClassInfo> *classes;
                 TypeEnv &env;
                 std::vector<Diagnostic> &diags;
+                ast::TypeKind expectedReturn{ast::TypeKind::NoneType};
                 bool ok{true};
 
                 SimpleStmtChecker(const std::unordered_map<std::string, Sig> &s,
@@ -122,6 +123,12 @@ namespace pycc::sema {
                     if (rs.value) {
                         ast::TypeKind t{};
                         ok &= inferExprType(rs.value.get(), env, sigs, retParamIdxs, t, diags, {}, nullptr, classes);
+                        if (!ok) return;
+                        if (expectedReturn != ast::TypeKind::NoneType && t != expectedReturn) {
+                            addDiag(diags, "return type mismatch", &rs);
+                            ok = false;
+                            return;
+                        }
                     }
                 }
 
@@ -130,17 +137,27 @@ namespace pycc::sema {
                     if (is.cond) {
                         ast::TypeKind t{};
                         ok &= inferExprType(is.cond.get(), env, sigs, retParamIdxs, t, diags, {}, nullptr, classes);
-                    }
-                    for (const auto &s: is.thenBody) {
-                        if (!s) continue;
-                        s->accept(*this);
                         if (!ok) return;
                     }
-                    for (const auto &s: is.elseBody) {
-                        if (!s) continue;
-                        s->accept(*this);
-                        if (!ok) return;
+                    // Branch under copies, then intersect resulting envs to refine deep merges
+                    TypeEnv envThen = env;
+                    TypeEnv envElse = env;
+                    // Recurse into then
+                    {
+                        SimpleStmtChecker thenC{sigs, retParamIdxs, classes, envThen, diags};
+                        thenC.expectedReturn = expectedReturn; // propagate expected return type
+                        for (const auto &s: is.thenBody) { if (!s) continue; s->accept(thenC); if (!thenC.ok) { ok = false; return; } }
                     }
+                    // Recurse into else
+                    {
+                        SimpleStmtChecker elseC{sigs, retParamIdxs, classes, envElse, diags};
+                        elseC.expectedReturn = expectedReturn;
+                        for (const auto &s: is.elseBody) { if (!s) continue; s->accept(elseC); if (!elseC.ok) { ok = false; return; } }
+                    }
+                    // Intersect and write back into current env (names present in both branches)
+                    TypeEnv merged;
+                    merged.intersectFrom(envThen, envElse);
+                    env.applyMerged(merged);
                 }
 
                 // minimal stubs
@@ -194,6 +211,7 @@ namespace pycc::sema {
                 }
             };
             SimpleStmtChecker checker{sigs, retParamIdxs, &classes, env, diags};
+            checker.expectedReturn = func->returnType;
             for (const auto &stmt: func->body) {
                 if (!stmt) continue;
                 stmt->accept(checker);

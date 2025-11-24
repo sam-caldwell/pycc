@@ -69,5 +69,28 @@ coverage:
 	@echo "[coverage] Generating report (no gating)"
 	@PYCC_BUILD_DIR=$(OUTDIR) PYCC_COVERAGE_MIN=0 python3 tools/coverage.py || { rc=$$?; if [ $$rc -eq 1 ]; then echo "[coverage] skipped (requires llvm-cov/llvm-profdata)"; else exit $$rc; fi; }
 
+.PHONY: runtime-cover
+runtime-cover:
+	@echo "[runtime-cover] Reconfiguring with coverage flags in $(OUTDIR)"
+	@$(CMAKE) -S . -B $(OUTDIR) -G Ninja -DPYCC_COVERAGE=ON
+	@$(CMAKE) --build $(OUTDIR) --parallel $(JOBS)
+	@echo "[runtime-cover] Running runtime-only tests with coverage"
+	@$(CMAKE) -E rm -f $(OUTDIR)/*.profraw || true
+	@LLVM_PROFILE_FILE=$(OUTDIR)/coverage-%p.profraw $(OUTDIR)/test_runtime_only --gtest_color=yes --gtest_filter=Runtime* || true
+	@echo "[runtime-cover] Merging + reporting for runtime phase (min 96%)"
+	@PYCC_BUILD_DIR=$(OUTDIR) PYCC_COVERAGE_MIN=100 PYCC_COVERAGE_PHASES=runtime python3 tools/coverage.py || { rc=$$?; if [ $$rc -eq 1 ]; then echo "[runtime-cover] skipped (requires llvm-cov/llvm-profdata)"; else exit $$rc; fi; }
+
 # Short alias per user request
 cover: coverage
+.PHONY: sema-cover
+sema-cover:
+	@echo "[sema-cover] Configuring with coverage flags in $(OUTDIR)"
+	@$(CMAKE) -S . -B $(OUTDIR) -G Ninja -DPYCC_COVERAGE=ON
+	@$(CMAKE) --build $(OUTDIR) --parallel $(JOBS)
+	@echo "[sema-cover] Running all tests with coverage"
+	@$(CMAKE) -E rm -f $(OUTDIR)/*.profraw || true
+	@LLVM_PROFILE_FILE=$(OUTDIR)/coverage-%p.profraw $(OUTDIR)/test_unit --gtest_color=yes || true
+	@LLVM_PROFILE_FILE=$(OUTDIR)/coverage-%p.profraw $(OUTDIR)/test_integration --gtest_color=yes || true
+	@LLVM_PROFILE_FILE=$(OUTDIR)/coverage-%p.profraw $(OUTDIR)/test_e2e --gtest_color=yes || true
+	@echo "[sema-cover] Enforcing sema phase at 100%"
+	@PYCC_BUILD_DIR=$(OUTDIR) PYCC_COVERAGE_MIN=100 PYCC_COVERAGE_PHASES=sema python3 tools/coverage.py || { rc=$$?; if [ $$rc -eq 1 ]; then echo "[sema-cover] skipped (requires llvm-cov/llvm-profdata)"; else exit $$rc; fi; }

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <string>
+#include <filesystem>
 
 static std::string readAll(const std::string& p) {
   std::ifstream in(p);
@@ -13,13 +14,16 @@ static std::string readAll(const std::string& p) {
 }
 
 TEST(RuntimeMetrics, JsonContainsRtCounters) {
+  // Ensure Testing/ exists one level up from build working dir
+  std::error_code ec;
+  std::filesystem::create_directory("../Testing", ec);
   const char* src = "../Testing/metrics_rt.py";
   {
     std::ofstream out(src);
     out << "def main() -> int:\n";
     out << "  return 1\n";
   }
-  int rc = std::system("./pycc --metrics-json -o ../Testing/out_rt ../Testing/metrics_rt.py > ../Testing/metrics_rt.json 2>/dev/null");
+  int rc = std::system("./pycc --metrics-json -S -o ../Testing/out_rt ../Testing/metrics_rt.py > ../Testing/metrics_rt.json 2>/dev/null");
   ASSERT_EQ(rc, 0);
   auto js = readAll("../Testing/metrics_rt.json");
   ASSERT_NE(js.find("\"rt.bytes_live\""), std::string::npos);

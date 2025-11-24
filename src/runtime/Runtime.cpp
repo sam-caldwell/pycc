@@ -6,6 +6,8 @@
 #include "runtime/detail/JsonTypes.h"
 #include "runtime/detail/JsonHandlers.h"
 #include "runtime/detail/RuntimeIntrospection.h"
+#include "runtime/detail/Base64Handlers.h"
+#include "runtime/detail/EncodingHandlers.h"
 #include "runtime/detail/HtmlHandlers.h"
 #include "runtime/detail/StructHandlers.h"
 #include "runtime/detail/ArgparseHandlers.h"
@@ -1546,42 +1548,16 @@ void* bytes_decode(void* b, const char* encoding, const char* errors) {
   if (!b) return nullptr;
   const char* enc = nonnull(encoding, "utf-8");
   const char* err = nonnull(errors, "strict");
+  const std::size_t nb = bytes_len(b);
+  const unsigned char* p = bytes_data(b);
+  std::string out;
   if (std::strcmp(enc, "utf-8") == 0) {
-    const std::size_t nb = bytes_len(b);
-    const unsigned char* p = bytes_data(b);
-    if (!utf8_is_valid(reinterpret_cast<const char*>(p), nb)) {
-      if (std::strcmp(err, "replace") == 0) {
-        std::vector<unsigned char> repaired; repaired.reserve(nb);
-        for (std::size_t i=0; i<nb; ) {
-          unsigned char c = p[i];
-          if ((c & 0x80U) == 0) { repaired.push_back(c); ++i; }
-          else if ((c & 0xE0U) == 0xC0U && (i+1)<nb) { repaired.push_back(c); repaired.push_back(p[i+1]); i+=2; }
-          else if ((c & 0xF0U) == 0xE0U && (i+2)<nb) { repaired.push_back(c); repaired.push_back(p[i+1]); repaired.push_back(p[i+2]); i+=3; }
-          else if ((c & 0xF8U) == 0xF0U && (i+3)<nb) { repaired.push_back(c); repaired.push_back(p[i+1]); repaired.push_back(p[i+2]); repaired.push_back(p[i+3]); i+=4; }
-          else { repaired.push_back(0xEFU); repaired.push_back(0xBFU); repaired.push_back(0xBDU); ++i; }
-        }
-        return string_new(reinterpret_cast<const char*>(repaired.data()), repaired.size());
-      }
-      rt_raise("UnicodeDecodeError", "invalid utf-8");
-      return nullptr;
-    }
-    return string_new(reinterpret_cast<const char*>(p), nb);
+    if (!detail::decode_utf8_bytes(p, nb, err, out)) { rt_raise("UnicodeDecodeError", "invalid utf-8"); return nullptr; }
+    return string_new(out.data(), out.size());
   }
   if (std::strcmp(enc, "ascii") == 0) {
-    const std::size_t nb = bytes_len(b);
-    const unsigned char* p = bytes_data(b);
-    for (std::size_t i=0; i<nb; ++i) {
-      if ((p[i] & 0x80U) != 0) {
-        if (std::strcmp(err, "replace") == 0) {
-          std::vector<unsigned char> out; out.reserve(nb);
-          for (std::size_t j=0; j<nb; ++j) out.push_back((p[j]&0x80U)?'?':p[j]);
-          return string_new(reinterpret_cast<const char*>(out.data()), out.size());
-        }
-        rt_raise("UnicodeDecodeError", "ascii codec can't decode byte");
-        return nullptr;
-      }
-    }
-    return string_new(reinterpret_cast<const char*>(p), nb);
+    if (!detail::decode_ascii_bytes(p, nb, err, out)) { rt_raise("UnicodeDecodeError", "ascii codec can't decode byte"); return nullptr; }
+    return string_new(out.data(), out.size());
   }
   rt_raise("LookupError", "unknown encoding");
   return nullptr;
@@ -3303,36 +3279,9 @@ void* base64_b64encode(void* data) {
 }
 
 void* base64_b64decode(void* data) {
-  auto inRaw = as_bytes(data);
-  // Ignore whitespace
-  std::vector<unsigned char> in; in.reserve(inRaw.size());
-  for (unsigned char c : inRaw) { if (!(c=='\n' || c=='\r' || c=='\t' || c==' ')) in.push_back(c); }
-  auto val = [](int c)->int{
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62; if (c == '/') return 63; return -1;
-  };
+  auto in = as_bytes(data);
   std::string out;
-  out.reserve((in.size()*3)/4);
-  size_t i = 0;
-  while (i < in.size()) {
-    int a = (i < in.size()) ? val(in[i++]) : -1;
-    int b = (i < in.size()) ? val(in[i++]) : -1;
-    int c = (i < in.size()) ? (in[i] == '=' ? -2 : val(in[i])) : -1; if (i < in.size()) ++i;
-    int d = (i < in.size()) ? (in[i] == '=' ? -2 : val(in[i])) : -1; if (i < in.size()) ++i;
-    if (a < 0 || b < 0) break;
-    unsigned int n = (static_cast<unsigned int>(a) << 18) | (static_cast<unsigned int>(b) << 12);
-    out.push_back(static_cast<char>((n >> 16) & 0xFF));
-    if (c == -2) break;
-    if (c < 0) break;
-    n |= (static_cast<unsigned int>(c) << 6);
-    out.push_back(static_cast<char>((n >> 8) & 0xFF));
-    if (d == -2) break;
-    if (d < 0) break;
-    n |= static_cast<unsigned int>(d);
-    out.push_back(static_cast<char>(n & 0xFF));
-  }
+  detail::base64_decode_bytes(in.data(), in.size(), out);
   return bytes_new(out.data(), out.size());
 }
 

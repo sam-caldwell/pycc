@@ -15,11 +15,13 @@ TEST(ExecuteMath, ReturnsFour) {
   for (const auto& c : candidates) { if (fs::exists(c)) { demosDir = c; break; } }
   ASSERT_FALSE(demosDir.empty());
   const auto srcPath = (demosDir / "e2e_math.py").string();
-  std::string cmd = std::string("../pycc -o e2e_math ") + srcPath + " > /dev/null 2>&1";
+  // Ensure build-local artifact dir
+  std::error_code ec; fs::create_directory("../Testing", ec);
+  std::string cmd = std::string("../pycc -o ../Testing/e2e_math ") + srcPath + " > /dev/null 2>&1";
   int rc = std::system(cmd.c_str());
   ASSERT_EQ(rc, 0) << "pycc failed to compile e2e_math.py";
 
-  rc = std::system("./e2e_math > /dev/null 2>&1");
+  rc = std::system("../Testing/e2e_math > /dev/null 2>&1");
 #ifdef WIFEXITED
   ASSERT_TRUE(WIFEXITED(rc));
   int code = WEXITSTATUS(rc);

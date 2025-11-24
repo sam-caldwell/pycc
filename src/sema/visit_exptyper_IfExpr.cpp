@@ -49,7 +49,8 @@ void ExpressionTyper::visit(const ast::IfExpr &ife) {
         return;
     }
     if (thenTyper.out != elseTyper.out) {
-        addDiag(*diags, "if-expression branches must have same type", &ife);
+        std::string msg = std::string("if-expression branches must have same type (then: ") + pycc::ast::to_string(thenTyper.out) + ", else: " + pycc::ast::to_string(elseTyper.out) + ")";
+        addDiag(*diags, msg, &ife);
         ok = false;
         return;
     }

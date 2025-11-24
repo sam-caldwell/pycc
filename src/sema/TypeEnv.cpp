@@ -170,6 +170,18 @@ namespace pycc::sema {
         return it->second;
     }
 
+    /*** Name: TypeEnv::applyMerged */
+    void TypeEnv::applyMerged(const TypeEnv &src) {
+        // Scalar sets and singular kinds
+        for (const auto &kv: src.sets_) { sets_[kv.first] = kv.second; }
+        for (const auto &kv: src.types_) { types_[kv.first] = kv.second; }
+        // Container shapes
+        for (const auto &kv: src.listElemSets_) { listElemSets_[kv.first] = kv.second; }
+        for (const auto &kv: src.tupleElemSets_) { tupleElemSets_[kv.first] = kv.second; }
+        for (const auto &kv: src.dictKeySets_) { dictKeySets_[kv.first] = kv.second; }
+        for (const auto &kv: src.dictValSets_) { dictValSets_[kv.first] = kv.second; }
+    }
+
     /*** Name: TypeEnv::maskFor */
     uint32_t TypeEnv::maskFor(ast::TypeKind k) {
         switch (k) {
