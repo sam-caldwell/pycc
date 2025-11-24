@@ -67,6 +67,10 @@ void* pycc_rt_current_exception(void);
 void pycc_rt_clear_exception(void);
 void* pycc_rt_exception_type(void* exc);
 void* pycc_rt_exception_message(void* exc);
+void* pycc_rt_exception_cause(void* exc);
+void pycc_rt_exception_set_cause(void* exc, void* cause_exc);
+void* pycc_rt_exception_context(void* exc);
+void pycc_rt_exception_set_context(void* exc, void* ctx_exc);
 int pycc_string_eq(void* a, void* b);
 #ifdef __cplusplus
 }

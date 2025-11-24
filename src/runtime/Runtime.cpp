@@ -643,6 +643,10 @@ extern "C" void* pycc_rt_current_exception(void) { return rt_current_exception()
 extern "C" void pycc_rt_clear_exception(void) { rt_clear_exception(); }
 extern "C" void* pycc_rt_exception_type(void* exc) { return rt_exception_type(exc); }
 extern "C" void* pycc_rt_exception_message(void* exc) { return rt_exception_message(exc); }
+extern "C" void* pycc_rt_exception_cause(void* exc) { return rt_exception_cause(exc); }
+extern "C" void pycc_rt_exception_set_cause(void* exc, void* cause) { rt_exception_set_cause(exc, cause); }
+extern "C" void* pycc_rt_exception_context(void* exc) { return rt_exception_context(exc); }
+extern "C" void pycc_rt_exception_set_context(void* exc, void* ctx) { rt_exception_set_context(exc, ctx); }
 
 // String equality by content
 static bool string_eq(void* a, void* b) {
@@ -1254,7 +1258,8 @@ void rt_raise(const char* type_name, const char* message) {
   // Allocate exception components; allocation helpers manage their own locking
   void* t = string_from_cstr(type_name);
   void* m = string_from_cstr(message);
-  void* exc = object_new(2);
+  // Reserve slots: [0]=type, [1]=message, [2]=cause, [3]=context
+  void* exc = object_new(4);
   auto* meta = reinterpret_cast<std::size_t*>(exc);
   auto** vals = reinterpret_cast<void**>(meta + 1);
   gc_pre_barrier(&vals[0]); vals[0] = t; gc_write_barrier(&vals[0], t);
@@ -1285,6 +1290,31 @@ void* rt_exception_message(void* exc) {
   auto* meta = reinterpret_cast<std::size_t*>(exc);
   auto** vals = reinterpret_cast<void**>(meta + 1);
   return vals[1];
+}
+
+void rt_exception_set_cause(void* exc, void* cause_exc) {
+  if (exc == nullptr) { return; }
+  // If older exception objects exist with only 2 fields, ignore gracefully.
+  if (object_field_count(exc) < 3) { return; }
+  object_set(exc, 2, cause_exc);
+}
+
+void* rt_exception_cause(void* exc) {
+  if (exc == nullptr) { return nullptr; }
+  if (object_field_count(exc) < 3) { return nullptr; }
+  return object_get(exc, 2);
+}
+
+void rt_exception_set_context(void* exc, void* ctx_exc) {
+  if (exc == nullptr) { return; }
+  if (object_field_count(exc) < 4) { return; }
+  object_set(exc, 3, ctx_exc);
+}
+
+void* rt_exception_context(void* exc) {
+  if (exc == nullptr) { return nullptr; }
+  if (object_field_count(exc) < 4) { return nullptr; }
+  return object_get(exc, 3);
 }
 
 // I/O and OS interop
