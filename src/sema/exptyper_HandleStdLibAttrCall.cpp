@@ -278,6 +278,26 @@ namespace pycc::sema::detail {
             }
             return false;
         }
+        if (base->id == "binascii") {
+            if (fn == "hexlify" || fn == "unhexlify") {
+                if (callNode.args.size() != 1) { addDiag(diags, std::string("binascii.") + fn + "() takes 1 arg", &callNode); ok=false; return true; }
+                ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(a0);
+                if (!a0.ok) { ok=false; return true; }
+                // Accept str or bytes literal as input in this subset
+                const bool isBytesLiteral = (callNode.args[0] && callNode.args[0]->kind == ast::NodeKind::BytesLiteral);
+                const uint32_t allow = TypeEnv::maskForKind(ast::TypeKind::Str);
+                if (!isBytesLiteral && ((maskOf(a0.out, a0.outSet) & ~allow) != 0U)) {
+                    addDiag(diags, std::string("binascii.") + fn + ": argument must be str or bytes", callNode.args[0].get());
+                    ok=false; return true;
+                }
+                // Return a pointer type (use Str tag in this subset) so downstream uses like .decode and io/write accept it.
+                out = ast::TypeKind::Str;
+                outSet = TypeEnv::maskForKind(out);
+                const_cast<ast::Call&>(callNode).setType(out);
+                return true;
+            }
+            return false;
+        }
         if (base->id == "glob") {
             if (fn == "glob" || fn == "iglob") {
                 if (callNode.args.size() != 1) {
@@ -316,6 +336,27 @@ namespace pycc::sema::detail {
                 return true;
             }
             return false;
+        }
+        // Generic attribute shims: string/bytes encode/decode
+        if (fn == "decode") {
+            // Accept 0..2 args; return str
+            if (callNode.args.size() > 2) { addDiag(diags, "decode() takes 0, 1, or 2 args", &callNode); ok=false; return true; }
+            for (const auto &arg : callNode.args) {
+                if (!arg) continue; ExpressionTyper at0{env, sigs, retParamIdxs, diags, polyTargets, outers}; arg->accept(at0); if (!at0.ok) { ok=false; return true; }
+                const uint32_t allow = TypeEnv::maskForKind(ast::TypeKind::Str);
+                if ((maskOf(at0.out, at0.outSet) & ~allow) != 0U) { addDiag(diags, "decode(): arguments must be str", arg.get()); ok=false; return true; }
+            }
+            out = ast::TypeKind::Str; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true;
+        }
+        if (fn == "encode") {
+            // Accept 0..2 args; return treated as 'ptr' via Str tag in this subset
+            if (callNode.args.size() > 2) { addDiag(diags, "encode() takes 0, 1, or 2 args", &callNode); ok=false; return true; }
+            for (const auto &arg : callNode.args) {
+                if (!arg) continue; ExpressionTyper at0{env, sigs, retParamIdxs, diags, polyTargets, outers}; arg->accept(at0); if (!at0.ok) { ok=false; return true; }
+                const uint32_t allow = TypeEnv::maskForKind(ast::TypeKind::Str);
+                if ((maskOf(at0.out, at0.outSet) & ~allow) != 0U) { addDiag(diags, "encode(): arguments must be str", arg.get()); ok=false; return true; }
+            }
+            out = ast::TypeKind::Str; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true;
         }
         return false;
     }
