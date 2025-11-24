@@ -2,7 +2,7 @@
 def main() -> int:
     import binascii, io
     s = 'Hi'
-    # hexlify returns bytes of hex digits; decode to str for comparison
+    # Hexlify -> bytes; decode to ASCII for comparison
     h = binascii.hexlify(s).decode('ascii', 'strict')
     ok = (h == '4869')
     # Round-trip via unhexlify and hexlify again
@@ -14,3 +14,4 @@ def main() -> int:
     else:
         io.write_stdout('BINASCII_BAD\n')
         return 1
+
