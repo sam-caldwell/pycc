@@ -16,28 +16,34 @@ static bool semaOK(const char* src) {
   sema::Sema S; std::vector<sema::Diagnostic> diags; return S.check(*mod, diags);
 }
 
-TEST(SemaBase64, AcceptsStrAndBytes) {
+TEST(SemaBase64, Accepts) {
   const char* src = R"PY(
 def main() -> int:
-  a = base64.b64encode("hi")
-  b = base64.b64decode(a)
+  import base64
+  e = base64.b64encode(b'Hi')
+  d = base64.b64decode(e)
+  e2 = base64.b64encode('Hi')
+  d2 = base64.b64decode('aGk=')
   return 0
 )PY";
   EXPECT_TRUE(semaOK(src));
 }
 
-TEST(SemaBase64, RejectsWrongArityAndType) {
-  const char* src1 = R"PY(
+TEST(SemaBase64, RejectsWrongArityAndTypes) {
+  const char* wrongArity = R"PY(
 def main() -> int:
-  a = base64.b64encode(1)
+  import base64
+  e = base64.b64encode()
   return 0
 )PY";
-  EXPECT_FALSE(semaOK(src1));
-  const char* src2 = R"PY(
+  EXPECT_FALSE(semaOK(wrongArity));
+
+  const char* wrongType = R"PY(
 def main() -> int:
-  a = base64.b64decode("a", "b")
+  import base64
+  e = base64.b64encode(123)
   return 0
 )PY";
-  EXPECT_FALSE(semaOK(src2));
+  EXPECT_FALSE(semaOK(wrongType));
 }
 

@@ -16,22 +16,34 @@ static bool semaOK(const char* src) {
   sema::Sema S; std::vector<sema::Diagnostic> diags; return S.check(*mod, diags);
 }
 
-TEST(SemaHashlib, AcceptsStrArg) {
+TEST(SemaHashlib, Accepts) {
   const char* src = R"PY(
 def main() -> int:
-  a = hashlib.sha256("hello")
-  b = hashlib.md5("hello")
+  import hashlib
+  a = hashlib.sha256('hello')
+  b = hashlib.sha256(b'hello')
+  c = hashlib.md5('hello')
+  d = hashlib.md5(b'hello')
   return 0
 )PY";
   EXPECT_TRUE(semaOK(src));
 }
 
-TEST(SemaHashlib, RejectsWrongType) {
-  const char* src = R"PY(
+TEST(SemaHashlib, Rejects) {
+  const char* wrongArity = R"PY(
 def main() -> int:
-  a = hashlib.sha256(1)
+  import hashlib
+  a = hashlib.sha256()
   return 0
 )PY";
-  EXPECT_FALSE(semaOK(src));
+  EXPECT_FALSE(semaOK(wrongArity));
+
+  const char* wrongType = R"PY(
+def main() -> int:
+  import hashlib
+  a = hashlib.sha256(123)
+  return 0
+)PY";
+  EXPECT_FALSE(semaOK(wrongType));
 }
 

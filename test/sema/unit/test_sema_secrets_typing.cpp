@@ -1,6 +1,6 @@
 /***
  * Name: test_sema_secrets_typing
- * Purpose: Ensure Sema types secrets.token_* and rejects invalid usages.
+ * Purpose: Ensure Sema types secrets token functions and rejects invalid usages.
  */
 #include <gtest/gtest.h>
 #include "lexer/Lexer.h"
@@ -10,7 +10,7 @@
 using namespace pycc;
 
 static bool semaOK(const char* src) {
-  lex::Lexer L; L.pushString(src, "secm.py");
+  lex::Lexer L; L.pushString(src, "se.py");
   parse::Parser P(L);
   auto mod = P.parseModule();
   sema::Sema S; std::vector<sema::Diagnostic> diags; return S.check(*mod, diags);
@@ -19,7 +19,8 @@ static bool semaOK(const char* src) {
 TEST(SemaSecrets, Accepts) {
   const char* src = R"PY(
 def main() -> int:
-  a = secrets.token_bytes(8)
+  import secrets
+  a = secrets.token_bytes(16)
   b = secrets.token_hex(8)
   c = secrets.token_urlsafe(8)
   return 0
@@ -27,18 +28,21 @@ def main() -> int:
   EXPECT_TRUE(semaOK(src));
 }
 
-TEST(SemaSecrets, Rejects) {
-  const char* src1 = R"PY(
+TEST(SemaSecrets, RejectsWrongArityAndType) {
+  const char* wrongArity = R"PY(
 def main() -> int:
-  a = secrets.token_bytes("x")
+  import secrets
+  a = secrets.token_bytes()
   return 0
 )PY";
-  EXPECT_FALSE(semaOK(src1));
-  const char* src2 = R"PY(
+  EXPECT_FALSE(semaOK(wrongArity));
+
+  const char* wrongType = R"PY(
 def main() -> int:
-  a = secrets.token_hex(1, 2)
+  import secrets
+  a = secrets.token_hex('not-int')
   return 0
 )PY";
-  EXPECT_FALSE(semaOK(src2));
+  EXPECT_FALSE(semaOK(wrongType));
 }
 
