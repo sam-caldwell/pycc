@@ -376,6 +376,10 @@ namespace pycc::rt {
 
     int32_t bisect_right(void *sorted_list, void *x);
 
+    void bisect_insort_left(void **list_slot, void *x);
+
+    void bisect_insort_right(void **list_slot, void *x);
+
     // tempfile module shims (subset)
     void *tempfile_gettempdir(); // returns String
     void *tempfile_mkdtemp(); // returns created dir path

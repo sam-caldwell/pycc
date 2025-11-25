@@ -301,6 +301,37 @@ namespace pycc::sema::detail {
             }
             return false;
         }
+        if (base && base->id == "shutil") {
+            // shutil.copyfile(src: str, dst: str) -> bool; shutil.copy(src: str, dst: str) -> bool
+            if (fn == "copyfile" || fn == "copy") {
+                if (callNode.args.size() != 2) {
+                    addDiag(diags, std::string("shutil.") + fn + "() takes 2 args", &callNode);
+                    ok = false; return true;
+                }
+                // src
+                ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers};
+                callNode.args[0]->accept(a0);
+                if (!a0.ok) { ok = false; return true; }
+                const uint32_t sMask = TypeEnv::maskForKind(ast::TypeKind::Str);
+                if ((maskOf(a0.out, a0.outSet) & ~sMask) != 0U) {
+                    addDiag(diags, std::string("shutil.") + fn + ": src must be str", callNode.args[0].get());
+                    ok = false; return true;
+                }
+                // dst
+                ExpressionTyper a1{env, sigs, retParamIdxs, diags, polyTargets, outers};
+                callNode.args[1]->accept(a1);
+                if (!a1.ok) { ok = false; return true; }
+                if ((maskOf(a1.out, a1.outSet) & ~sMask) != 0U) {
+                    addDiag(diags, std::string("shutil.") + fn + ": dst must be str", callNode.args[1].get());
+                    ok = false; return true;
+                }
+                out = ast::TypeKind::Bool;
+                outSet = TypeEnv::maskForKind(out);
+                const_cast<ast::Call &>(callNode).setType(out);
+                return true;
+            }
+            return false;
+        }
         if (base && base->id == "glob") {
             if (fn == "glob" || fn == "iglob") {
                 if (callNode.args.size() != 1) {
@@ -542,8 +573,30 @@ namespace pycc::sema::detail {
             }
             return false;
         }
+        if (base && base->id == "statistics") {
+            if (fn == "mean" || fn == "median" || fn == "stdev" || fn == "pvariance") {
+                if (callNode.args.size() != 1) { addDiag(diags, std::string("statistics.") + fn + "() takes 1 arg", &callNode); ok=false; return true; }
+                ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(a0);
+                if (!a0.ok) { ok=false; return true; }
+                const uint32_t lMask = TypeEnv::maskForKind(ast::TypeKind::List);
+                if ((maskOf(a0.out, a0.outSet) & ~lMask) != 0U) { addDiag(diags, std::string("statistics.") + fn + ": argument must be list", callNode.args[0].get()); ok=false; return true; }
+                out = ast::TypeKind::Float; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true;
+            }
+            return false;
+        }
+        if (base && base->id == "tempfile") {
+            if (fn == "gettempdir" || fn == "mkdtemp") {
+                if (!callNode.args.empty()) { addDiag(diags, std::string("tempfile.") + fn + "() takes 0 args", &callNode); ok=false; return true; }
+                out = ast::TypeKind::Str; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true;
+            }
+            if (fn == "mkstemp") {
+                if (!callNode.args.empty()) { addDiag(diags, "tempfile.mkstemp() takes 0 args", &callNode); ok=false; return true; }
+                out = ast::TypeKind::List; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true;
+            }
+            return false;
+        }
         if (base && base->id == "bisect") {
-            if (fn == "bisect_left" || fn == "bisect_right") {
+            if (fn == "bisect_left" || fn == "bisect_right" || fn == "bisect") {
                 if (callNode.args.size() != 2) { addDiag(diags, std::string("bisect.") + fn + "() takes 2 args", &callNode); ok=false; return true; }
                 ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(a0);
                 ExpressionTyper a1{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[1]->accept(a1);
@@ -553,6 +606,17 @@ namespace pycc::sema::detail {
                 if ((maskOf(a0.out, a0.outSet) & ~lMask) != 0U) { addDiag(diags, std::string("bisect.") + fn + ": first arg must be list", callNode.args[0].get()); ok=false; return true; }
                 if ((maskOf(a1.out, a1.outSet) & ~nMask) != 0U) { addDiag(diags, std::string("bisect.") + fn + ": x must be numeric", callNode.args[1].get()); ok=false; return true; }
                 out = ast::TypeKind::Int; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call &>(callNode).setType(out); return true;
+            }
+            if (fn == "insort_left" || fn == "insort_right" || fn == "insort") {
+                if (callNode.args.size() != 2) { addDiag(diags, std::string("bisect.") + fn + "() takes 2 args", &callNode); ok=false; return true; }
+                ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(a0);
+                ExpressionTyper a1{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[1]->accept(a1);
+                if (!a0.ok || !a1.ok) { ok = false; return true; }
+                const uint32_t lMask = TypeEnv::maskForKind(ast::TypeKind::List);
+                const uint32_t nMask = TypeEnv::maskForKind(ast::TypeKind::Int) | TypeEnv::maskForKind(ast::TypeKind::Bool) | TypeEnv::maskForKind(ast::TypeKind::Float);
+                if ((maskOf(a0.out, a0.outSet) & ~lMask) != 0U) { addDiag(diags, std::string("bisect.") + fn + ": first arg must be list", callNode.args[0].get()); ok=false; return true; }
+                if ((maskOf(a1.out, a1.outSet) & ~nMask) != 0U) { addDiag(diags, std::string("bisect.") + fn + ": x must be numeric", callNode.args[1].get()); ok=false; return true; }
+                out = ast::TypeKind::NoneType; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call &>(callNode).setType(out); return true;
             }
             return false;
         }

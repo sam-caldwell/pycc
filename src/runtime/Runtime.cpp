@@ -3707,6 +3707,46 @@ int32_t bisect_right(void* lst, void* xv) {
 // C ABI for bisect
 extern "C" int32_t pycc_bisect_left(void* a, void* x) { return ::pycc::rt::bisect_left(a,x); }
 extern "C" int32_t pycc_bisect_right(void* a, void* x) { return ::pycc::rt::bisect_right(a,x); }
+namespace pycc::rt {
+
+// In-place insertion helpers (insort_left/right). Accept a pointer to the list slot
+// so reallocation updates the caller's variable.
+static inline void bisect_insort_at(void** list_slot, void* xv, std::size_t pos) {
+  if (list_slot == nullptr) return;
+  void* lst = *list_slot;
+  std::size_t n = lst ? list_len(lst) : 0;
+  if (n == 0) {
+    list_push_slot(list_slot, xv);
+    return;
+  }
+  void* last = list_get(lst, n - 1);
+  list_push_slot(list_slot, last); // grow by 1; may update *list_slot
+  lst = *list_slot;
+  // shift elements right from end down to pos
+  std::size_t i = n; // old last index
+  while (i > pos) {
+    list_set(lst, i, list_get(lst, i - 1));
+    --i;
+  }
+  list_set(lst, pos, xv);
+}
+
+void bisect_insort_left(void** list_slot, void* xv) {
+  void* lst = list_slot ? *list_slot : nullptr;
+  std::size_t pos = static_cast<std::size_t>(bisect_left(lst, xv));
+  bisect_insort_at(list_slot, xv, pos);
+}
+
+void bisect_insort_right(void** list_slot, void* xv) {
+  void* lst = list_slot ? *list_slot : nullptr;
+  std::size_t pos = static_cast<std::size_t>(bisect_right(lst, xv));
+  bisect_insort_at(list_slot, xv, pos);
+}
+
+} // namespace pycc::rt
+
+extern "C" void pycc_bisect_insort_left(void* slot, void* x) { ::pycc::rt::bisect_insort_left(reinterpret_cast<void**>(slot), x); }
+extern "C" void pycc_bisect_insort_right(void* slot, void* x) { ::pycc::rt::bisect_insort_right(reinterpret_cast<void**>(slot), x); }
 
 // ===== tempfile module =====
 namespace pycc::rt {

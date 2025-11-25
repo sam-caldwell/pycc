@@ -500,7 +500,9 @@ namespace pycc::codegen {
                 << "declare ptr @pycc_heapq_heappop(ptr)\n\n"
                 // bisect module
                 << "declare i32 @pycc_bisect_left(ptr, ptr)\n"
-                << "declare i32 @pycc_bisect_right(ptr, ptr)\n\n"
+                << "declare i32 @pycc_bisect_right(ptr, ptr)\n"
+                << "declare void @pycc_bisect_insort_left(ptr, ptr)\n"
+                << "declare void @pycc_bisect_insort_right(ptr, ptr)\n\n"
                 // tempfile module
                 << "declare ptr @pycc_tempfile_gettempdir()\n"
                 << "declare ptr @pycc_tempfile_mkdtemp()\n"
@@ -2507,12 +2509,33 @@ namespace pycc::codegen {
                             }
                             if (mod == "bisect") {
                                 const std::string &fn = at->attr;
-                                if (fn == "bisect_left" || fn == "bisect_right") {
+                                if (fn == "bisect_left" || fn == "bisect_right" || fn == "bisect") {
                                     if (call.args.size() != 2) throw std::runtime_error("bisect." + fn + "() takes 2 args");
                                     auto a = needList(call.args[0].get()); auto x = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="bisect_left"?"pycc_bisect_left":"pycc_bisect_right");
-                                    ir << "  " << r.str() << " = call i32 @" << callee << "(ptr " << a.s << ", ptr " << x.s << ")\n";
+                                    std::string which = (fn=="bisect_left"?"pycc_bisect_left":"pycc_bisect_right");
+                                    ir << "  " << r.str() << " = call i32 @" << which << "(ptr " << a.s << ", ptr " << x.s << ")\n";
                                     out = Value{r.str(), ValKind::I32}; return;
+                                }
+                                if (fn == "insort_left" || fn == "insort_right" || fn == "insort") {
+                                    if (call.args.size() != 2) throw std::runtime_error("bisect." + fn + "() takes 2 args");
+                                    auto a = needList(call.args[0].get()); auto x = needPtr(call.args[1].get());
+                                    // Determine slot pointer to pass for in-place mutation
+                                    std::string slotPtr;
+                                    if (call.args[0] && call.args[0]->kind == ast::NodeKind::Name) {
+                                        const auto *nm = static_cast<const ast::Name *>(call.args[0].get());
+                                        auto itn = slots.find(nm->id);
+                                        if (itn == slots.end()) throw std::runtime_error("undefined name in insort");
+                                        slotPtr = itn->second.ptr;
+                                    } else {
+                                        std::ostringstream slot;
+                                        slot << "%t" << temp++;
+                                        ir << "  " << slot.str() << " = alloca ptr\n";
+                                        ir << "  store ptr " << a.s << ", ptr " << slot.str() << "\n";
+                                        slotPtr = slot.str();
+                                    }
+                                    const char *which = (fn == "insort_left") ? "@pycc_bisect_insort_left" : "@pycc_bisect_insort_right";
+                                    ir << "  call void " << which << "(ptr " << slotPtr << ", ptr " << x.s << ")\n";
+                                    out = Value{"null", ValKind::Ptr}; return;
                                 }
                                 emitNotImplemented(mod, fn, ValKind::Ptr); return;
                             }
@@ -5571,6 +5594,13 @@ namespace pycc::codegen {
                                         }
                                         if (bn->id == "json" && at->attr == "dumps") {
                                             it->second.tag = PtrTag::Str;
+                                        }
+                                        if (bn->id == "tempfile") {
+                                            if (at->attr == "gettempdir" || at->attr == "mkdtemp") {
+                                                it->second.tag = PtrTag::Str;
+                                            } else if (at->attr == "mkstemp") {
+                                                it->second.tag = PtrTag::List;
+                                            }
                                         }
                                     }
                                 }
