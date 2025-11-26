@@ -2867,14 +2867,27 @@ namespace pycc::codegen {
                                 const std::string &fn = at->attr;
                                 if (fn == "heappush") {
                                     if (call.args.size() != 2) throw std::runtime_error("heapq.heappush() takes 2 args");
-                                    auto a = needList(call.args[0].get()); auto v = run(*call.args[1]);
-                                    std::string vptr;
+                                    // Obtain a slot pointer for the list variable, like bisect.insort
+                                    Value a = needList(call.args[0].get());
+                                    std::string slotPtr;
+                                    if (call.args[0] && call.args[0]->kind == ast::NodeKind::Name) {
+                                        const auto *nm = static_cast<const ast::Name *>(call.args[0].get());
+                                        auto itn = slots.find(nm->id);
+                                        if (itn == slots.end()) throw std::runtime_error("undefined name in heappush");
+                                        slotPtr = itn->second.ptr;
+                                    } else {
+                                        std::ostringstream slot; slot<<"%t"<<temp++;
+                                        ir << "  " << slot.str() << " = alloca ptr\n";
+                                        ir << "  store ptr " << a.s << ", ptr " << slot.str() << "\n";
+                                        slotPtr = slot.str();
+                                    }
+                                    auto v = run(*call.args[1]); std::string vptr;
                                     if (v.k == ValKind::Ptr) vptr = v.s;
                                     else if (v.k == ValKind::I32) { std::ostringstream z; z<<"%t"<<temp++; usedBoxInt=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_int(i64 "<<v.s<<")\n"; vptr = z.str(); }
                                     else if (v.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; usedBoxBool=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_bool(i1 "<<v.s<<")\n"; vptr = z.str(); }
                                     else if (v.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; usedBoxFloat=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_float(double "<<v.s<<")\n"; vptr = z.str(); }
                                     else throw std::runtime_error("heappush: unsupported value");
-                                    ir << "  call void @pycc_heapq_heappush(ptr " << a.s << ", ptr " << vptr << ")\n";
+                                    ir << "  call void @pycc_heapq_heappush(ptr " << slotPtr << ", ptr " << vptr << ")\n";
                                     out = Value{"null", ValKind::Ptr}; return;
                                 }
                                 if (fn == "heappop") {
