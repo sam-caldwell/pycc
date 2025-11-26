@@ -10,11 +10,9 @@
 #include "ast/GeometryVisitor.h"
 
 namespace pycc::ast {
-
-GeometrySummary ComputeGeometry(const Module& module) {
-  GeometryVisitor visitor;
-  module.accept(visitor);
-  return GeometrySummary{visitor.nodes, visitor.maxDepth};
-}
-
+    GeometrySummary ComputeGeometry(const Module &module) {
+        GeometryVisitor visitor;
+        module.accept(visitor);
+        return GeometrySummary{visitor.nodes, visitor.maxDepth};
+    }
 } // namespace pycc::ast

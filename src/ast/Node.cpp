@@ -10,10 +10,8 @@
 #include "ast/Visitor.h"
 
 namespace pycc::ast {
-
-void Node::accept(VisitorBase& visitor) const {
-    // Fallback to central dispatch
-    dispatch(*this, visitor);
-}
-
+    void Node::accept(VisitorBase &visitor) const {
+        // Fallback to central dispatch
+        dispatch(*this, visitor);
+    }
 } // namespace pycc::ast
