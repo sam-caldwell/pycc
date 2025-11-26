@@ -6,7 +6,7 @@ namespace pycc::cli::detail {
  * Name: pycc::cli::detail::parseColorValue
  * Purpose: Parse --color value into ColorMode with default.
  */
-ColorMode parseColorValue(std::string_view value) {
+ColorMode parseColorValue(const std::string_view value) {
     using enum pycc::cli::ColorMode;
     if (value == "always") { return Always; }
     if (value == "never") { return Never; }
