@@ -109,7 +109,7 @@ namespace pycc::codegen {
         }
 
         // Optional toolchain bypass for hermetic tests: when set, stop after writing IR.
-        if (const char* no_tool = std::getenv("PYCC_NO_TOOLCHAIN"); no_tool && *no_tool) {
+        if (const char *no_tool = std::getenv("PYCC_NO_TOOLCHAIN"); no_tool && *no_tool) {
             return {};
         }
 
@@ -1088,7 +1088,8 @@ namespace pycc::codegen {
                                   const std::unordered_map<std::string, std::string> *nestedEnv_,
                                   bool &usedBoxInt_, bool &usedBoxFloat_, bool &usedBoxBool_)
                     : ir(ir_), temp(temp_), slots(slots_), sigs(sigs_), retParamIdxs(retParamIdxs_),
-                      spawnWrappers(spawnWrappers_), strGlobals(strGlobals_), hasher(std::move(hasher_)), nestedEnv(nestedEnv_),
+                      spawnWrappers(spawnWrappers_), strGlobals(strGlobals_), hasher(std::move(hasher_)),
+                      nestedEnv(nestedEnv_),
                       usedBoxInt(usedBoxInt_), usedBoxFloat(usedBoxFloat_), usedBoxBool(usedBoxBool_) {
                 }
 
@@ -1195,7 +1196,8 @@ namespace pycc::codegen {
                     // Call runtime to create managed string object
                     std::ostringstream reg;
                     reg << "%t" << temp++;
-                    ir << "  " << reg.str() << " = call ptr @pycc_string_new(ptr " << dataPtr.str() << ", i64 " << glen << ")\n";
+                    ir << "  " << reg.str() << " = call ptr @pycc_string_new(ptr " << dataPtr.str() << ", i64 " << glen
+                            << ")\n";
                     out = Value{reg.str(), ValKind::Ptr};
                 }
 
@@ -1212,7 +1214,8 @@ namespace pycc::codegen {
                     // Allocate runtime Bytes object
                     std::ostringstream reg;
                     reg << "%t" << temp++;
-                    ir << "  " << reg.str() << " = call ptr @pycc_bytes_new(ptr " << dataPtr.str() << ", i64 " << glen << ")\n";
+                    ir << "  " << reg.str() << " = call ptr @pycc_bytes_new(ptr " << dataPtr.str() << ", i64 " << glen
+                            << ")\n";
                     out = Value{reg.str(), ValKind::Ptr};
                 }
 
@@ -1724,8 +1727,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "sin" || fn == "cos") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        std::string("math.") + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            std::string("math.") + fn + "() takes 1 arg");
                                     auto v = run(*call.args[0]);
                                     std::string d = toDouble(v);
                                     std::ostringstream r;
@@ -1759,8 +1763,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "asin" || fn == "acos" || fn == "atan") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        std::string("math.") + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            std::string("math.") + fn + "() takes 1 arg");
                                     auto v = run(*call.args[0]);
                                     std::string d = toDouble(v);
                                     std::ostringstream r;
@@ -1788,8 +1793,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "exp" || fn == "exp2") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        std::string("math.") + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            std::string("math.") + fn + "() takes 1 arg");
                                     auto v = run(*call.args[0]);
                                     std::string d = toDouble(v);
                                     std::ostringstream r;
@@ -1800,8 +1806,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "log" || fn == "log2" || fn == "log10") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        std::string("math.") + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            std::string("math.") + fn + "() takes 1 arg");
                                     auto v = run(*call.args[0]);
                                     std::string d = toDouble(v);
                                     std::ostringstream r;
@@ -1860,8 +1867,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "degrees" || fn == "radians") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        std::string("math.") + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            std::string("math.") + fn + "() takes 1 arg");
                                     auto v = run(*call.args[0]);
                                     std::string d = toDouble(v);
                                     const char *cstr = (fn == "degrees")
@@ -1880,62 +1888,116 @@ namespace pycc::codegen {
                             if (mod == "posixpath") {
                                 const std::string &fn = at->attr;
                                 if (fn == "join") {
-                                    if (call.args.size()!=2) throw std::runtime_error("posixpath.join() takes 2 args in this subset");
-                                    auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_os_path_join2(ptr "<<a.s<<", ptr "<<b.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "posixpath.join() takes 2 args in this subset");
+                                    auto a = needPtr(call.args[0].get());
+                                    auto b = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_os_path_join2(ptr " << a.s << ", ptr "
+                                            << b.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "dirname" || fn == "basename" || fn == "abspath") {
-                                    if (call.args.size()!=1) throw std::runtime_error(std::string("posixpath.")+fn+"() takes 1 arg");
-                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    const char* cal = (fn=="dirname"?"pycc_os_path_dirname": (fn=="basename"?"pycc_os_path_basename":"pycc_os_path_abspath"));
-                                    ir << "  "<<r.str()<<" = call ptr @"<<cal<<"(ptr "<<p.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        std::string("posixpath.") + fn + "() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    const char *cal = (fn == "dirname"
+                                                           ? "pycc_os_path_dirname"
+                                                           : (fn == "basename"
+                                                                  ? "pycc_os_path_basename"
+                                                                  : "pycc_os_path_abspath"));
+                                    ir << "  " << r.str() << " = call ptr @" << cal << "(ptr " << p.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "splitext") {
-                                    if (call.args.size()!=1) throw std::runtime_error("posixpath.splitext() takes 1 arg");
-                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_os_path_splitext(ptr "<<p.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "posixpath.splitext() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_os_path_splitext(ptr " << p.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "exists" || fn == "isfile" || fn == "isdir") {
-                                    if (call.args.size()!=1) throw std::runtime_error(std::string("posixpath.")+fn+"() takes 1 arg");
-                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    const char* cal = (fn=="exists"?"pycc_os_path_exists": (fn=="isfile"?"pycc_os_path_isfile":"pycc_os_path_isdir"));
-                                    ir << "  "<<r.str()<<" = call i1 @"<<cal<<"(ptr "<<p.s<<")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        std::string("posixpath.") + fn + "() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    const char *cal = (fn == "exists"
+                                                           ? "pycc_os_path_exists"
+                                                           : (fn == "isfile"
+                                                                  ? "pycc_os_path_isfile"
+                                                                  : "pycc_os_path_isdir"));
+                                    ir << "  " << r.str() << " = call i1 @" << cal << "(ptr " << p.s << ")\n";
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "ntpath") {
                                 const std::string &fn = at->attr;
                                 if (fn == "join") {
-                                    if (call.args.size()!=2) throw std::runtime_error("ntpath.join() takes 2 args in this subset");
-                                    auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_os_path_join2(ptr "<<a.s<<", ptr "<<b.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "ntpath.join() takes 2 args in this subset");
+                                    auto a = needPtr(call.args[0].get());
+                                    auto b = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_os_path_join2(ptr " << a.s << ", ptr "
+                                            << b.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "dirname" || fn == "basename" || fn == "abspath") {
-                                    if (call.args.size()!=1) throw std::runtime_error(std::string("ntpath.")+fn+"() takes 1 arg");
-                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    const char* cal = (fn=="dirname"?"pycc_os_path_dirname": (fn=="basename"?"pycc_os_path_basename":"pycc_os_path_abspath"));
-                                    ir << "  "<<r.str()<<" = call ptr @"<<cal<<"(ptr "<<p.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        std::string("ntpath.") + fn + "() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    const char *cal = (fn == "dirname"
+                                                           ? "pycc_os_path_dirname"
+                                                           : (fn == "basename"
+                                                                  ? "pycc_os_path_basename"
+                                                                  : "pycc_os_path_abspath"));
+                                    ir << "  " << r.str() << " = call ptr @" << cal << "(ptr " << p.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "splitext") {
-                                    if (call.args.size()!=1) throw std::runtime_error("ntpath.splitext() takes 1 arg");
-                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_os_path_splitext(ptr "<<p.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 1) throw
+                                            std::runtime_error("ntpath.splitext() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_os_path_splitext(ptr " << p.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "exists" || fn == "isfile" || fn == "isdir") {
-                                    if (call.args.size()!=1) throw std::runtime_error(std::string("ntpath.")+fn+"() takes 1 arg");
-                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    const char* cal = (fn=="exists"?"pycc_os_path_exists": (fn=="isfile"?"pycc_os_path_isfile":"pycc_os_path_isdir"));
-                                    ir << "  "<<r.str()<<" = call i1 @"<<cal<<"(ptr "<<p.s<<")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        std::string("ntpath.") + fn + "() takes 1 arg");
+                                    auto p = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    const char *cal = (fn == "exists"
+                                                           ? "pycc_os_path_exists"
+                                                           : (fn == "isfile"
+                                                                  ? "pycc_os_path_isfile"
+                                                                  : "pycc_os_path_isdir"));
+                                    ir << "  " << r.str() << " = call i1 @" << cal << "(ptr " << p.s << ")\n";
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             // Subprocess stdlib lowering
                             if (mod == "subprocess") {
@@ -1944,8 +2006,9 @@ namespace pycc::codegen {
                                     throw std::runtime_error("subprocess.* requires string command");
                                 };
                                 if (fn == "run" || fn == "call" || fn == "check_call") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        "subprocess." + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            "subprocess." + fn + "() takes 1 arg");
                                     auto v0 = run(*call.args[0]);
                                     std::string cmdPtr = toPtr(v0);
                                     std::ostringstream r;
@@ -1965,11 +2028,13 @@ namespace pycc::codegen {
                             }
                             if (mod == "io") {
                                 if (fn == "write_stdout" || fn == "write_stderr") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        std::string("io.") + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            std::string("io.") + fn + "() takes 1 arg");
                                     auto s = run(*call.args[0]);
-                                    if (s.k != ValKind::Ptr) throw std::runtime_error(
-                                        std::string("io.") + fn + ": argument must be str");
+                                    if (s.k != ValKind::Ptr)
+                                        throw std::runtime_error(
+                                            std::string("io.") + fn + ": argument must be str");
                                     const char *cname = (fn == "write_stdout")
                                                             ? "@pycc_io_write_stdout"
                                                             : "@pycc_io_write_stderr";
@@ -1991,8 +2056,9 @@ namespace pycc::codegen {
                                     if (call.args.size() != 2) throw std::runtime_error("io.write_file() takes 2 args");
                                     auto p = run(*call.args[0]);
                                     auto s = run(*call.args[1]);
-                                    if (p.k != ValKind::Ptr || s.k != ValKind::Ptr) throw std::runtime_error(
-                                        "io.write_file: args must be str");
+                                    if (p.k != ValKind::Ptr || s.k != ValKind::Ptr)
+                                        throw std::runtime_error(
+                                            "io.write_file: args must be str");
                                     std::ostringstream r;
                                     r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call i1 @pycc_io_write_file(ptr " << p.s << ", ptr " <<
@@ -2007,8 +2073,9 @@ namespace pycc::codegen {
                                 if (fn == "dumps") {
                                     if (call.args.size() == 1) {
                                         auto v = run(*call.args[0]);
-                                        if (v.k != ValKind::Ptr) throw std::runtime_error(
-                                            "json.dumps: unsupported arg kind");
+                                        if (v.k != ValKind::Ptr)
+                                            throw std::runtime_error(
+                                                "json.dumps: unsupported arg kind");
                                         std::ostringstream r;
                                         r << "%t" << temp++;
                                         ir << "  " << r.str() << " = call ptr @pycc_json_dumps(ptr " << v.s << ")\n";
@@ -2016,8 +2083,9 @@ namespace pycc::codegen {
                                         return;
                                     } else if (call.args.size() == 2) {
                                         auto v = run(*call.args[0]);
-                                        if (v.k != ValKind::Ptr) throw std::runtime_error(
-                                            "json.dumps: unsupported arg kind");
+                                        if (v.k != ValKind::Ptr)
+                                            throw std::runtime_error(
+                                                "json.dumps: unsupported arg kind");
                                         auto ind = run(*call.args[1]);
                                         std::string i32;
                                         if (ind.k == ValKind::I32) i32 = ind.s;
@@ -2041,8 +2109,9 @@ namespace pycc::codegen {
                                     } else {
                                         // dumps(obj, indent, ensure_ascii, item_sep, kv_sep, sort_keys)
                                         auto v = run(*call.args[0]);
-                                        if (v.k != ValKind::Ptr) throw std::runtime_error(
-                                            "json.dumps: unsupported arg kind");
+                                        if (v.k != ValKind::Ptr)
+                                            throw std::runtime_error(
+                                                "json.dumps: unsupported arg kind");
                                         auto a1 = run(*call.args[1]);
                                         auto a2 = run(*call.args[2]);
                                         auto to_i32 = [&](const Value &x)-> std::string {
@@ -2068,14 +2137,16 @@ namespace pycc::codegen {
                                         std::string sort32 = "0";
                                         if (call.args.size() >= 4) {
                                             auto s3 = run(*call.args[3]);
-                                            if (s3.k != ValKind::Ptr) throw std::runtime_error(
-                                                "json.dumps: item_sep must be str");
+                                            if (s3.k != ValKind::Ptr)
+                                                throw std::runtime_error(
+                                                    "json.dumps: item_sep must be str");
                                             itemSepPtr = s3.s;
                                         }
                                         if (call.args.size() >= 5) {
                                             auto s4 = run(*call.args[4]);
-                                            if (s4.k != ValKind::Ptr) throw std::runtime_error(
-                                                "json.dumps: kv_sep must be str");
+                                            if (s4.k != ValKind::Ptr)
+                                                throw std::runtime_error(
+                                                    "json.dumps: kv_sep must be str");
                                             kvSepPtr = s4.s;
                                         }
                                         if (call.args.size() >= 6) {
@@ -2193,8 +2264,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "fromtimestamp" || fn == "utcfromtimestamp") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        std::string("datetime.") + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            std::string("datetime.") + fn + "() takes 1 arg");
                                     auto v = run(*call.args[0]);
                                     std::string d;
                                     if (v.k == ValKind::F64) d = v.s;
@@ -2239,8 +2311,9 @@ namespace pycc::codegen {
                                     throw std::runtime_error("re: int required");
                                 };
                                 if (fn == "compile") {
-                                    if (call.args.empty() || call.args.size() > 2) throw std::runtime_error(
-                                        "re.compile() takes 1 or 2 args");
+                                    if (call.args.empty() || call.args.size() > 2)
+                                        throw std::runtime_error(
+                                            "re.compile() takes 1 or 2 args");
                                     auto p = needStr(call.args[0].get());
                                     std::string fl = "0";
                                     if (call.args.size() == 2) fl = needI32(call.args[1].get());
@@ -2252,8 +2325,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "search" || fn == "match" || fn == "fullmatch") {
-                                    if (call.args.size() < 2 || call.args.size() > 3) throw std::runtime_error(
-                                        std::string("re.") + fn + "() takes 2 or 3 args");
+                                    if (call.args.size() < 2 || call.args.size() > 3)
+                                        throw std::runtime_error(
+                                            std::string("re.") + fn + "() takes 2 or 3 args");
                                     auto p = needStr(call.args[0].get());
                                     auto t = needStr(call.args[1].get());
                                     std::string fl = "0";
@@ -2271,8 +2345,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "findall") {
-                                    if (call.args.size() < 2 || call.args.size() > 3) throw std::runtime_error(
-                                        "re.findall() takes 2 or 3 args");
+                                    if (call.args.size() < 2 || call.args.size() > 3)
+                                        throw std::runtime_error(
+                                            "re.findall() takes 2 or 3 args");
                                     auto p = needStr(call.args[0].get());
                                     auto t = needStr(call.args[1].get());
                                     std::string fl = "0";
@@ -2285,8 +2360,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "finditer") {
-                                    if (call.args.size() < 2 || call.args.size() > 3) throw std::runtime_error(
-                                        "re.finditer() takes 2 or 3 args");
+                                    if (call.args.size() < 2 || call.args.size() > 3)
+                                        throw std::runtime_error(
+                                            "re.finditer() takes 2 or 3 args");
                                     auto p = needStr(call.args[0].get());
                                     auto t = needStr(call.args[1].get());
                                     std::string fl = "0";
@@ -2299,8 +2375,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "split") {
-                                    if (call.args.size() < 2 || call.args.size() > 4) throw std::runtime_error(
-                                        "re.split() takes 2 to 4 args");
+                                    if (call.args.size() < 2 || call.args.size() > 4)
+                                        throw std::runtime_error(
+                                            "re.split() takes 2 to 4 args");
                                     auto p = needStr(call.args[0].get());
                                     auto t = needStr(call.args[1].get());
                                     std::string maxs = "0";
@@ -2315,8 +2392,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "sub" || fn == "subn") {
-                                    if (call.args.size() < 3 || call.args.size() > 5) throw std::runtime_error(
-                                        std::string("re.") + fn + "() takes 3 to 5 args");
+                                    if (call.args.size() < 3 || call.args.size() > 5)
+                                        throw std::runtime_error(
+                                            std::string("re.") + fn + "() takes 3 to 5 args");
                                     auto p = needStr(call.args[0].get());
                                     auto rpl = needStr(call.args[1].get());
                                     auto t = needStr(call.args[2].get());
@@ -2347,182 +2425,374 @@ namespace pycc::codegen {
                             if (mod == "fnmatch") {
                                 const std::string &fn = at->attr;
                                 if (fn == "fnmatch" || fn == "fnmatchcase") {
-                                    if (call.args.size() != 2) throw std::runtime_error("fnmatch." + fn + "() takes 2 args");
-                                    auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="fnmatch"?"pycc_fnmatch_fnmatch":"pycc_fnmatch_fnmatchcase");
-                                    ir << "  " << r.str() << " = call i1 @" << callee << "(ptr " << a.s << ", ptr " << b.s << ")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "fnmatch." + fn + "() takes 2 args");
+                                    auto a = needPtr(call.args[0].get());
+                                    auto b = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "fnmatch"
+                                                              ? "pycc_fnmatch_fnmatch"
+                                                              : "pycc_fnmatch_fnmatchcase");
+                                    ir << "  " << r.str() << " = call i1 @" << callee << "(ptr " << a.s << ", ptr " << b
+                                            .s << ")\n";
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
                                 if (fn == "filter") {
-                                    if (call.args.size() != 2) throw std::runtime_error("fnmatch.filter() takes 2 args");
-                                    auto a = needList(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call ptr @pycc_fnmatch_filter(ptr " << a.s << ", ptr " << b.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 2) throw
+                                            std::runtime_error("fnmatch.filter() takes 2 args");
+                                    auto a = needList(call.args[0].get());
+                                    auto b = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_fnmatch_filter(ptr " << a.s << ", ptr "
+                                            << b.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "translate") {
-                                    if (call.args.size() != 1) throw std::runtime_error("fnmatch.translate() takes 1 arg");
-                                    auto b = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "fnmatch.translate() takes 1 arg");
+                                    auto b = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_fnmatch_translate(ptr " << b.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "string") {
                                 const std::string &fn = at->attr;
                                 if (fn == "capwords") {
-                                    if (!(call.args.size() == 1 || call.args.size() == 2)) throw std::runtime_error("string.capwords() takes 1 or 2 args");
+                                    if (!(call.args.size() == 1 || call.args.size() == 2)) throw std::runtime_error(
+                                        "string.capwords() takes 1 or 2 args");
                                     auto a = needPtr(call.args[0].get());
                                     std::string sepArg = "null";
-                                    if (call.args.size() == 2) { auto b = needPtr(call.args[1].get()); sepArg = b.s; }
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call ptr @pycc_string_capwords(ptr " << a.s << ", ptr " << sepArg << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() == 2) {
+                                        auto b = needPtr(call.args[1].get());
+                                        sepArg = b.s;
+                                    }
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_string_capwords(ptr " << a.s << ", ptr "
+                                            << sepArg << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "glob") {
                                 const std::string &fn = at->attr;
                                 if (fn == "glob" || fn == "iglob") {
-                                    if (call.args.size() != 1) throw std::runtime_error("glob." + fn + "() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="glob"?"pycc_glob_glob":"pycc_glob_iglob");
+                                    if (call.args.size() != 1) throw
+                                            std::runtime_error("glob." + fn + "() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "glob" ? "pycc_glob_glob" : "pycc_glob_iglob");
                                     ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "escape") {
                                     if (call.args.size() != 1) throw std::runtime_error("glob.escape() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_glob_escape(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "uuid") {
                                 const std::string &fn = at->attr;
                                 if (fn == "uuid4") {
                                     if (!call.args.empty()) throw std::runtime_error("uuid.uuid4() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_uuid_uuid4()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "base64") {
                                 const std::string &fn = at->attr;
                                 if (fn == "b64encode" || fn == "b64decode") {
-                                    if (call.args.size() != 1) throw std::runtime_error("base64." + fn + "() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="b64encode"?"pycc_base64_b64encode":"pycc_base64_b64decode");
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "base64." + fn + "() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "b64encode"
+                                                              ? "pycc_base64_b64encode"
+                                                              : "pycc_base64_b64decode");
                                     ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "random") {
                                 const std::string &fn = at->attr;
                                 if (fn == "random") {
                                     if (!call.args.empty()) throw std::runtime_error("random.random() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call double @pycc_random_random()\n";
-                                    out = Value{r.str(), ValKind::F64}; return;
+                                    out = Value{r.str(), ValKind::F64};
+                                    return;
                                 }
                                 if (fn == "randint") {
-                                    if (call.args.size() != 2) throw std::runtime_error("random.randint() takes 2 args");
-                                    auto a = run(*call.args[0]); auto b = run(*call.args[1]);
+                                    if (call.args.size() != 2) throw
+                                            std::runtime_error("random.randint() takes 2 args");
+                                    auto a = run(*call.args[0]);
+                                    auto b = run(*call.args[1]);
                                     std::string ai, bi;
-                                    if (a.k == ValKind::I32) ai = a.s; else if (a.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<a.s<<" to i32\n"; ai = z.str(); } else if (a.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<a.s<<" to i32\n"; ai=z.str(); } else throw std::runtime_error("randint a must be int");
-                                    if (b.k == ValKind::I32) bi = b.s; else if (b.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<b.s<<" to i32\n"; bi = z.str(); } else if (b.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<b.s<<" to i32\n"; bi=z.str(); } else throw std::runtime_error("randint b must be int");
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call i32 @pycc_random_randint(i32 " << ai << ", i32 " << bi << ")\n";
-                                    out = Value{r.str(), ValKind::I32}; return;
+                                    if (a.k == ValKind::I32) ai = a.s;
+                                    else if (a.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = zext i1 " << a.s << " to i32\n";
+                                        ai = z.str();
+                                    } else if (a.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = fptosi double " << a.s << " to i32\n";
+                                        ai = z.str();
+                                    } else throw std::runtime_error("randint a must be int");
+                                    if (b.k == ValKind::I32) bi = b.s;
+                                    else if (b.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = zext i1 " << b.s << " to i32\n";
+                                        bi = z.str();
+                                    } else if (b.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = fptosi double " << b.s << " to i32\n";
+                                        bi = z.str();
+                                    } else throw std::runtime_error("randint b must be int");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call i32 @pycc_random_randint(i32 " << ai << ", i32 "
+                                            << bi << ")\n";
+                                    out = Value{r.str(), ValKind::I32};
+                                    return;
                                 }
                                 if (fn == "seed") {
                                     if (call.args.size() != 1) throw std::runtime_error("random.seed() takes 1 arg");
-                                    auto a = run(*call.args[0]); std::string av;
-                                    if (a.k == ValKind::I32) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i32 "<<a.s<<" to i64\n"; av = z.str(); }
-                                    else if (a.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<a.s<<" to i64\n"; av = z.str(); }
-                                    else if (a.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<a.s<<" to i64\n"; av = z.str(); }
-                                    else throw std::runtime_error("random.seed(): numeric required");
+                                    auto a = run(*call.args[0]);
+                                    std::string av;
+                                    if (a.k == ValKind::I32) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = zext i32 " << a.s << " to i64\n";
+                                        av = z.str();
+                                    } else if (a.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = zext i1 " << a.s << " to i64\n";
+                                        av = z.str();
+                                    } else if (a.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = fptosi double " << a.s << " to i64\n";
+                                        av = z.str();
+                                    } else throw std::runtime_error("random.seed(): numeric required");
                                     ir << "  call void @pycc_random_seed(i64 " << av << ")\n";
-                                    out = Value{"null", ValKind::Ptr}; return;
+                                    out = Value{"null", ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "stat") {
                                 const std::string &fn = at->attr;
-                                auto toI32 = [&](Value v){ std::string outv; if (v.k == ValKind::I32) outv = v.s; else if (v.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<v.s<<" to i32\n"; outv = z.str(); } else if (v.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<v.s<<" to i32\n"; outv=z.str(); } else throw std::runtime_error("stat: mode must be int"); return outv; };
+                                auto toI32 = [&](Value v) {
+                                    std::string outv;
+                                    if (v.k == ValKind::I32) outv = v.s;
+                                    else if (v.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = zext i1 " << v.s << " to i32\n";
+                                        outv = z.str();
+                                    } else if (v.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = fptosi double " << v.s << " to i32\n";
+                                        outv = z.str();
+                                    } else throw std::runtime_error("stat: mode must be int");
+                                    return outv;
+                                };
                                 if (fn == "S_IFMT") {
                                     if (call.args.size() != 1) throw std::runtime_error("stat.S_IFMT() takes 1 arg");
-                                    auto a = run(*call.args[0]); std::string m = toI32(a); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto a = run(*call.args[0]);
+                                    std::string m = toI32(a);
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call i32 @pycc_stat_ifmt(i32 " << m << ")\n";
-                                    out = Value{r.str(), ValKind::I32}; return;
+                                    out = Value{r.str(), ValKind::I32};
+                                    return;
                                 }
                                 if (fn == "S_ISDIR" || fn == "S_ISREG") {
-                                    if (call.args.size() != 1) throw std::runtime_error("stat." + fn + "() takes 1 arg");
-                                    auto a = run(*call.args[0]); std::string m = toI32(a); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="S_ISDIR"?"pycc_stat_isdir":"pycc_stat_isreg");
+                                    if (call.args.size() != 1) throw
+                                            std::runtime_error("stat." + fn + "() takes 1 arg");
+                                    auto a = run(*call.args[0]);
+                                    std::string m = toI32(a);
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "S_ISDIR" ? "pycc_stat_isdir" : "pycc_stat_isreg");
                                     ir << "  " << r.str() << " = call i1 @" << callee << "(i32 " << m << ")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "secrets") {
                                 const std::string &fn = at->attr;
-                                auto toI32 = [&](Value v){ std::string outv; if (v.k == ValKind::I32) outv = v.s; else if (v.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<v.s<<" to i32\n"; outv = z.str(); } else if (v.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<v.s<<" to i32\n"; outv=z.str(); } else throw std::runtime_error("secrets: n must be int"); return outv; };
+                                auto toI32 = [&](Value v) {
+                                    std::string outv;
+                                    if (v.k == ValKind::I32) outv = v.s;
+                                    else if (v.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = zext i1 " << v.s << " to i32\n";
+                                        outv = z.str();
+                                    } else if (v.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = fptosi double " << v.s << " to i32\n";
+                                        outv = z.str();
+                                    } else throw std::runtime_error("secrets: n must be int");
+                                    return outv;
+                                };
                                 if (fn == "token_bytes" || fn == "token_hex" || fn == "token_urlsafe") {
-                                    if (call.args.size() != 1) throw std::runtime_error("secrets." + fn + "() takes 1 arg");
-                                    auto a = run(*call.args[0]); std::string n = toI32(a); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="token_bytes"?"pycc_secrets_token_bytes": (fn=="token_hex"?"pycc_secrets_token_hex":"pycc_secrets_token_urlsafe"));
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "secrets." + fn + "() takes 1 arg");
+                                    auto a = run(*call.args[0]);
+                                    std::string n = toI32(a);
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "token_bytes"
+                                                              ? "pycc_secrets_token_bytes"
+                                                              : (fn == "token_hex"
+                                                                     ? "pycc_secrets_token_hex"
+                                                                     : "pycc_secrets_token_urlsafe"));
                                     ir << "  " << r.str() << " = call ptr @" << callee << "(i32 " << n << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "shutil") {
                                 const std::string &fn = at->attr;
                                 if (fn == "copyfile" || fn == "copy") {
-                                    if (call.args.size() != 2) throw std::runtime_error("shutil." + fn + "() takes 2 args");
-                                    auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="copyfile"?"pycc_shutil_copyfile":"pycc_shutil_copy");
-                                    ir << "  " << r.str() << " = call i1 @" << callee << "(ptr " << a.s << ", ptr " << b.s << ")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "shutil." + fn + "() takes 2 args");
+                                    auto a = needPtr(call.args[0].get());
+                                    auto b = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (
+                                        fn == "copyfile" ? "pycc_shutil_copyfile" : "pycc_shutil_copy");
+                                    ir << "  " << r.str() << " = call i1 @" << callee << "(ptr " << a.s << ", ptr " << b
+                                            .s << ")\n";
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "platform") {
                                 const std::string &fn = at->attr;
                                 if (fn == "system" || fn == "machine" || fn == "release" || fn == "version") {
-                                    if (!call.args.empty()) throw std::runtime_error("platform." + fn + "() takes 0 args");
-                                    std::string callee = (fn=="system"?"pycc_platform_system": fn=="machine"?"pycc_platform_machine": fn=="release"?"pycc_platform_release":"pycc_platform_version");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "platform." + fn + "() takes 0 args");
+                                    std::string callee = (fn == "system"
+                                                              ? "pycc_platform_system"
+                                                              : fn == "machine"
+                                                                    ? "pycc_platform_machine"
+                                                                    : fn == "release"
+                                                                          ? "pycc_platform_release"
+                                                                          : "pycc_platform_version");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @" << callee << "()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "errno") {
                                 const std::string &fn = at->attr;
-                                auto emit0 = [&](const char* cname){ if (!call.args.empty()) throw std::runtime_error(std::string("errno.")+fn+"() takes 0 args"); std::ostringstream r; r<<"%t"<<temp++; ir<<"  "<<r.str()<<" = call i32 @"<<cname<<"()\n"; out = Value{r.str(), ValKind::I32}; };
-                                if (fn == "EPERM") { emit0("pycc_errno_EPERM"); return; }
-                                if (fn == "ENOENT") { emit0("pycc_errno_ENOENT"); return; }
-                                if (fn == "EEXIST") { emit0("pycc_errno_EEXIST"); return; }
-                                if (fn == "EISDIR") { emit0("pycc_errno_EISDIR"); return; }
-                                if (fn == "ENOTDIR") { emit0("pycc_errno_ENOTDIR"); return; }
-                                if (fn == "EACCES") { emit0("pycc_errno_EACCES"); return; }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                auto emit0 = [&](const char *cname) {
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        std::string("errno.") + fn + "() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call i32 @" << cname << "()\n";
+                                    out = Value{r.str(), ValKind::I32};
+                                };
+                                if (fn == "EPERM") {
+                                    emit0("pycc_errno_EPERM");
+                                    return;
+                                }
+                                if (fn == "ENOENT") {
+                                    emit0("pycc_errno_ENOENT");
+                                    return;
+                                }
+                                if (fn == "EEXIST") {
+                                    emit0("pycc_errno_EEXIST");
+                                    return;
+                                }
+                                if (fn == "EISDIR") {
+                                    emit0("pycc_errno_EISDIR");
+                                    return;
+                                }
+                                if (fn == "ENOTDIR") {
+                                    emit0("pycc_errno_ENOTDIR");
+                                    return;
+                                }
+                                if (fn == "EACCES") {
+                                    emit0("pycc_errno_EACCES");
+                                    return;
+                                }
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "bisect") {
                                 const std::string &fn = at->attr;
                                 if (fn == "bisect_left" || fn == "bisect_right" || fn == "bisect") {
-                                    if (call.args.size() != 2) throw std::runtime_error("bisect." + fn + "() takes 2 args");
-                                    auto a = needList(call.args[0].get()); auto x = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string which = (fn=="bisect_left"?"pycc_bisect_left":"pycc_bisect_right");
-                                    ir << "  " << r.str() << " = call i32 @" << which << "(ptr " << a.s << ", ptr " << x.s << ")\n";
-                                    out = Value{r.str(), ValKind::I32}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "bisect." + fn + "() takes 2 args");
+                                    auto a = needList(call.args[0].get());
+                                    auto x = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string which = (
+                                        fn == "bisect_left" ? "pycc_bisect_left" : "pycc_bisect_right");
+                                    ir << "  " << r.str() << " = call i32 @" << which << "(ptr " << a.s << ", ptr " << x
+                                            .s << ")\n";
+                                    out = Value{r.str(), ValKind::I32};
+                                    return;
                                 }
                                 if (fn == "insort_left" || fn == "insort_right" || fn == "insort") {
-                                    if (call.args.size() != 2) throw std::runtime_error("bisect." + fn + "() takes 2 args");
-                                    auto a = needList(call.args[0].get()); auto x = needPtr(call.args[1].get());
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "bisect." + fn + "() takes 2 args");
+                                    auto a = needList(call.args[0].get());
+                                    auto x = needPtr(call.args[1].get());
                                     // Determine slot pointer to pass for in-place mutation
                                     std::string slotPtr;
                                     if (call.args[0] && call.args[0]->kind == ast::NodeKind::Name) {
@@ -2537,336 +2807,592 @@ namespace pycc::codegen {
                                         ir << "  store ptr " << a.s << ", ptr " << slot.str() << "\n";
                                         slotPtr = slot.str();
                                     }
-                                    const char *which = (fn == "insort_left") ? "@pycc_bisect_insort_left" : "@pycc_bisect_insort_right";
+                                    const char *which = (fn == "insort_left")
+                                                            ? "@pycc_bisect_insort_left"
+                                                            : "@pycc_bisect_insort_right";
                                     ir << "  call void " << which << "(ptr " << slotPtr << ", ptr " << x.s << ")\n";
-                                    out = Value{"null", ValKind::Ptr}; return;
+                                    out = Value{"null", ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "tempfile") {
                                 const std::string &fn = at->attr;
                                 if (fn == "gettempdir" || fn == "mkdtemp" || fn == "mkstemp") {
-                                    if (!call.args.empty()) throw std::runtime_error("tempfile." + fn + "() takes 0 args");
-                                    std::string callee = (fn=="gettempdir"?"pycc_tempfile_gettempdir": fn=="mkdtemp"?"pycc_tempfile_mkdtemp":"pycc_tempfile_mkstemp");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "tempfile." + fn + "() takes 0 args");
+                                    std::string callee = (fn == "gettempdir"
+                                                              ? "pycc_tempfile_gettempdir"
+                                                              : fn == "mkdtemp"
+                                                                    ? "pycc_tempfile_mkdtemp"
+                                                                    : "pycc_tempfile_mkstemp");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @" << callee << "()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "statistics") {
                                 const std::string &fn = at->attr;
                                 if (fn == "mean" || fn == "median" || fn == "stdev" || fn == "pvariance") {
-                                    if (call.args.size() != 1) throw std::runtime_error("statistics." + fn + "() takes 1 arg");
-                                    auto a = needList(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="mean"?"pycc_statistics_mean": fn=="median"?"pycc_statistics_median": fn=="stdev"?"pycc_statistics_stdev":"pycc_statistics_pvariance");
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "statistics." + fn + "() takes 1 arg");
+                                    auto a = needList(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "mean"
+                                                              ? "pycc_statistics_mean"
+                                                              : fn == "median"
+                                                                    ? "pycc_statistics_median"
+                                                                    : fn == "stdev"
+                                                                          ? "pycc_statistics_stdev"
+                                                                          : "pycc_statistics_pvariance");
                                     ir << "  " << r.str() << " = call double @" << callee << "(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::F64}; return;
+                                    out = Value{r.str(), ValKind::F64};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "textwrap") {
                                 const std::string &fn = at->attr;
                                 if (fn == "fill" || fn == "shorten" || fn == "wrap") {
-                                    if (call.args.size() != 2) throw std::runtime_error("textwrap." + fn + "() takes 2 args");
-                                    auto s = needPtr(call.args[0].get()); auto w = run(*call.args[1]);
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "textwrap." + fn + "() takes 2 args");
+                                    auto s = needPtr(call.args[0].get());
+                                    auto w = run(*call.args[1]);
                                     std::string wi32;
                                     if (w.k == ValKind::I32) wi32 = w.s;
-                                    else if (w.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<w.s<<" to i32\n"; wi32 = z.str(); }
-                                    else if (w.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<w.s<<" to i32\n"; wi32 = z.str(); }
-                                    else throw std::runtime_error("textwrap width must be int");
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="fill"?"pycc_textwrap_fill": fn=="shorten"?"pycc_textwrap_shorten":"pycc_textwrap_wrap");
-                                    ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << s.s << ", i32 " << wi32 << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    else if (w.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = zext i1 " << w.s << " to i32\n";
+                                        wi32 = z.str();
+                                    } else if (w.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = fptosi double " << w.s << " to i32\n";
+                                        wi32 = z.str();
+                                    } else throw std::runtime_error("textwrap width must be int");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "fill"
+                                                              ? "pycc_textwrap_fill"
+                                                              : fn == "shorten"
+                                                                    ? "pycc_textwrap_shorten"
+                                                                    : "pycc_textwrap_wrap");
+                                    ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << s.s << ", i32 " <<
+                                            wi32 << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "indent") {
-                                    if (call.args.size() != 2) throw std::runtime_error("textwrap.indent() takes 2 args");
-                                    auto s = needPtr(call.args[0].get()); auto p = needPtr(call.args[1].get());
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_textwrap_indent(ptr "<<s.s<<", ptr "<<p.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "textwrap.indent() takes 2 args");
+                                    auto s = needPtr(call.args[0].get());
+                                    auto p = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_textwrap_indent(ptr " << s.s << ", ptr "
+                                            << p.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "dedent") {
-                                    if (call.args.size() != 1) throw std::runtime_error("textwrap.dedent() takes 1 arg");
+                                    if (call.args.size() != 1) throw
+                                            std::runtime_error("textwrap.dedent() takes 1 arg");
                                     auto s = needPtr(call.args[0].get());
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_textwrap_dedent(ptr " << s.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "hashlib") {
                                 const std::string &fn = at->attr;
                                 if (fn == "sha256" || fn == "md5") {
-                                    if (call.args.size() != 1) throw std::runtime_error("hashlib." + fn + "() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="sha256"?"pycc_hashlib_sha256":"pycc_hashlib_md5");
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "hashlib." + fn + "() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "sha256" ? "pycc_hashlib_sha256" : "pycc_hashlib_md5");
                                     ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "pprint") {
                                 const std::string &fn = at->attr;
                                 if (fn == "pformat") {
                                     if (call.args.size() != 1) throw std::runtime_error("pprint.pformat() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_pprint_pformat(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "reprlib") {
                                 const std::string &fn = at->attr;
                                 if (fn == "repr") {
-                                    if (call.args.size()!=1) throw std::runtime_error("reprlib.repr() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_reprlib_repr(ptr "<<a.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 1) throw std::runtime_error("reprlib.repr() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_reprlib_repr(ptr " << a.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "colorsys") {
                                 const std::string &fn = at->attr;
                                 auto toDouble = [&](const Value &v) -> std::string {
                                     if (v.k == ValKind::F64) return v.s;
-                                    if (v.k == ValKind::I32) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = sitofp i32 "<<v.s<<" to double\n"; return z.str(); }
-                                    if (v.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = uitofp i1 "<<v.s<<" to double\n"; return z.str(); }
-                                    throw std::runtime_error("colorsys: numeric args required"); };
+                                    if (v.k == ValKind::I32) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = sitofp i32 " << v.s << " to double\n";
+                                        return z.str();
+                                    }
+                                    if (v.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = uitofp i1 " << v.s << " to double\n";
+                                        return z.str();
+                                    }
+                                    throw std::runtime_error("colorsys: numeric args required");
+                                };
                                 if (fn == "rgb_to_hsv" || fn == "hsv_to_rgb") {
-                                    if (call.args.size()!=3) throw std::runtime_error("colorsys."+fn+"() takes 3 args");
-                                    auto a0 = run(*call.args[0]); auto a1 = run(*call.args[1]); auto a2 = run(*call.args[2]);
+                                    if (call.args.size() != 3) throw std::runtime_error(
+                                        "colorsys." + fn + "() takes 3 args");
+                                    auto a0 = run(*call.args[0]);
+                                    auto a1 = run(*call.args[1]);
+                                    auto a2 = run(*call.args[2]);
                                     std::string d0 = toDouble(a0), d1 = toDouble(a1), d2 = toDouble(a2);
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string cal = (fn=="rgb_to_hsv")?"@pycc_colorsys_rgb_to_hsv":"@pycc_colorsys_hsv_to_rgb";
-                                    ir << "  "<<r.str()<<" = call ptr "<<cal<<"(double "<<d0<<", double "<<d1<<", double "<<d2<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string cal = (fn == "rgb_to_hsv")
+                                                          ? "@pycc_colorsys_rgb_to_hsv"
+                                                          : "@pycc_colorsys_hsv_to_rgb";
+                                    ir << "  " << r.str() << " = call ptr " << cal << "(double " << d0 << ", double " <<
+                                            d1 << ", double " << d2 << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "types") {
                                 const std::string &fn = at->attr;
                                 if (fn == "SimpleNamespace") {
-                                    if (call.args.size()>1) throw std::runtime_error("types.SimpleNamespace() takes 0 or 1 args (list of pairs)");
+                                    if (call.args.size() > 1) throw std::runtime_error(
+                                        "types.SimpleNamespace() takes 0 or 1 args (list of pairs)");
                                     std::string arg = "null";
-                                    if (call.args.size()==1) { auto a = needPtr(call.args[0].get()); arg = a.s; }
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_types_simple_namespace(ptr "<<arg<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() == 1) {
+                                        auto a = needPtr(call.args[0].get());
+                                        arg = a.s;
+                                    }
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_types_simple_namespace(ptr " << arg <<
+                                            ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "linecache") {
                                 const std::string &fn = at->attr;
                                 if (fn == "getline") {
-                                    if (call.args.size() != 2) throw std::runtime_error("linecache.getline() takes 2 args");
-                                    auto p = needPtr(call.args[0].get()); auto l = run(*call.args[1]);
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "linecache.getline() takes 2 args");
+                                    auto p = needPtr(call.args[0].get());
+                                    auto l = run(*call.args[1]);
                                     std::string li32;
                                     if (l.k == ValKind::I32) li32 = l.s;
-                                    else if (l.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<l.s<<" to i32\n"; li32 = z.str(); }
-                                    else if (l.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<l.s<<" to i32\n"; li32 = z.str(); }
-                                    else throw std::runtime_error("linecache.getline: lineno must be int");
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call ptr @pycc_linecache_getline(ptr " << p.s << ", i32 " << li32 << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    else if (l.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = zext i1 " << l.s << " to i32\n";
+                                        li32 = z.str();
+                                    } else if (l.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = fptosi double " << l.s << " to i32\n";
+                                        li32 = z.str();
+                                    } else throw std::runtime_error("linecache.getline: lineno must be int");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_linecache_getline(ptr " << p.s <<
+                                            ", i32 " << li32 << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "getpass") {
                                 const std::string &fn = at->attr;
                                 if (fn == "getuser") {
                                     if (!call.args.empty()) throw std::runtime_error("getpass.getuser() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_getpass_getuser()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "getpass") {
-                                    if (call.args.size() > 1) throw std::runtime_error("getpass.getpass() takes 0 or 1 arg");
+                                    if (call.args.size() > 1) throw std::runtime_error(
+                                        "getpass.getpass() takes 0 or 1 arg");
                                     std::string arg = "null";
-                                    if (call.args.size()==1) { auto p = needPtr(call.args[0].get()); arg = p.s; }
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (call.args.size() == 1) {
+                                        auto p = needPtr(call.args[0].get());
+                                        arg = p.s;
+                                    }
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_getpass_getpass(ptr " << arg << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "shlex") {
                                 const std::string &fn = at->attr;
                                 if (fn == "split") {
                                     if (call.args.size() != 1) throw std::runtime_error("shlex.split() takes 1 arg");
-                                    auto s = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto s = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_shlex_split(ptr " << s.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "join") {
                                     if (call.args.size() != 1) throw std::runtime_error("shlex.join() takes 1 arg");
-                                    auto l = needList(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto l = needList(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_shlex_join(ptr " << l.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "html") {
                                 const std::string &fn = at->attr;
                                 if (fn == "escape") {
-                                    if (!(call.args.size()==1 || call.args.size()==2)) throw std::runtime_error("html.escape() takes 1 or 2 args");
-                                    auto s = needPtr(call.args[0].get()); std::string q = "1"; // default True
-                                    if (call.args.size()==2) {
+                                    if (!(call.args.size() == 1 || call.args.size() == 2)) throw std::runtime_error(
+                                        "html.escape() takes 1 or 2 args");
+                                    auto s = needPtr(call.args[0].get());
+                                    std::string q = "1"; // default True
+                                    if (call.args.size() == 2) {
                                         auto w = run(*call.args[1]);
                                         if (w.k == ValKind::I32) q = w.s;
-                                        else if (w.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<w.s<<" to i32\n"; q = z.str(); }
-                                        else if (w.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<w.s<<" to i32\n"; q = z.str(); }
-                                        else throw std::runtime_error("html.escape: quote must be bool/numeric");
+                                        else if (w.k == ValKind::I1) {
+                                            std::ostringstream z;
+                                            z << "%t" << temp++;
+                                            ir << "  " << z.str() << " = zext i1 " << w.s << " to i32\n";
+                                            q = z.str();
+                                        } else if (w.k == ValKind::F64) {
+                                            std::ostringstream z;
+                                            z << "%t" << temp++;
+                                            ir << "  " << z.str() << " = fptosi double " << w.s << " to i32\n";
+                                            q = z.str();
+                                        } else throw std::runtime_error("html.escape: quote must be bool/numeric");
                                     }
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call ptr @pycc_html_escape(ptr " << s.s << ", i32 " << q << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_html_escape(ptr " << s.s << ", i32 " <<
+                                            q << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "unescape") {
-                                    if (call.args.size()!=1) throw std::runtime_error("html.unescape() takes 1 arg");
-                                    auto s = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    if (call.args.size() != 1) throw std::runtime_error("html.unescape() takes 1 arg");
+                                    auto s = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_html_unescape(ptr " << s.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "unicodedata") {
                                 const std::string &fn = at->attr;
                                 if (fn == "normalize") {
-                                    if (call.args.size()!=2) throw std::runtime_error("unicodedata.normalize() takes 2 args");
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "unicodedata.normalize() takes 2 args");
                                     auto form = needPtr(call.args[0].get());
                                     auto s = needPtr(call.args[1].get());
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_unicodedata_normalize(ptr "<<form.s<<", ptr "<<s.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_unicodedata_normalize(ptr " << form.s <<
+                                            ", ptr " << s.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "binascii") {
                                 const std::string &fn = at->attr;
                                 if (fn == "hexlify" || fn == "unhexlify") {
-                                    if (call.args.size()!=1) throw std::runtime_error("binascii." + fn + "() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="hexlify"?"pycc_binascii_hexlify":"pycc_binascii_unhexlify");
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "binascii." + fn + "() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "hexlify"
+                                                              ? "pycc_binascii_hexlify"
+                                                              : "pycc_binascii_unhexlify");
                                     ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "struct") {
                                 const std::string &fn = at->attr;
                                 if (fn == "pack") {
-                                    if (call.args.size()!=2) throw std::runtime_error("struct.pack() takes 2 args in this subset");
-                                    auto f = needPtr(call.args[0].get()); auto v = needPtr(call.args[1].get());
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_struct_pack(ptr "<<f.s<<", ptr "<<v.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "struct.pack() takes 2 args in this subset");
+                                    auto f = needPtr(call.args[0].get());
+                                    auto v = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_struct_pack(ptr " << f.s << ", ptr " <<
+                                            v.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "unpack") {
-                                    if (call.args.size()!=2) throw std::runtime_error("struct.unpack() takes 2 args in this subset");
-                                    auto f = needPtr(call.args[0].get()); auto d = needPtr(call.args[1].get());
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_struct_unpack(ptr "<<f.s<<", ptr "<<d.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "struct.unpack() takes 2 args in this subset");
+                                    auto f = needPtr(call.args[0].get());
+                                    auto d = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_struct_unpack(ptr " << f.s << ", ptr "
+                                            << d.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "calcsize") {
-                                    if (call.args.size()!=1) throw std::runtime_error("struct.calcsize() takes 1 arg");
-                                    auto f = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call i32 @pycc_struct_calcsize(ptr "<<f.s<<")\n";
-                                    out = Value{r.str(), ValKind::I32}; return;
+                                    if (call.args.size() != 1) throw
+                                            std::runtime_error("struct.calcsize() takes 1 arg");
+                                    auto f = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call i32 @pycc_struct_calcsize(ptr " << f.s << ")\n";
+                                    out = Value{r.str(), ValKind::I32};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "argparse") {
                                 const std::string &fn = at->attr;
                                 if (fn == "ArgumentParser") {
-                                    if (!call.args.empty()) throw std::runtime_error("argparse.ArgumentParser() takes 0 args in this subset");
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_argparse_argument_parser()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "argparse.ArgumentParser() takes 0 args in this subset");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_argparse_argument_parser()\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "add_argument") {
-                                    if (call.args.size()!=3) throw std::runtime_error("argparse.add_argument(parser, name, action)");
-                                    auto p = needPtr(call.args[0].get()); auto n = needPtr(call.args[1].get()); auto a = needPtr(call.args[2].get());
-                                    ir << "  call void @pycc_argparse_add_argument(ptr "<<p.s<<", ptr "<<n.s<<", ptr "<<a.s<<")\n";
-                                    out = Value{"null", ValKind::Ptr}; return;
+                                    if (call.args.size() != 3) throw std::runtime_error(
+                                        "argparse.add_argument(parser, name, action)");
+                                    auto p = needPtr(call.args[0].get());
+                                    auto n = needPtr(call.args[1].get());
+                                    auto a = needPtr(call.args[2].get());
+                                    ir << "  call void @pycc_argparse_add_argument(ptr " << p.s << ", ptr " << n.s <<
+                                            ", ptr " << a.s << ")\n";
+                                    out = Value{"null", ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "parse_args") {
-                                    if (call.args.size()!=2) throw std::runtime_error("argparse.parse_args(parser, list)");
-                                    auto p = needPtr(call.args[0].get()); auto lst = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_argparse_parse_args(ptr "<<p.s<<", ptr "<<lst.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "argparse.parse_args(parser, list)");
+                                    auto p = needPtr(call.args[0].get());
+                                    auto lst = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_argparse_parse_args(ptr " << p.s <<
+                                            ", ptr " << lst.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "hmac") {
                                 const std::string &fn = at->attr;
                                 if (fn == "digest") {
-                                    if (call.args.size()!=3) throw std::runtime_error("hmac.digest() takes 3 args");
-                                    auto k = needPtr(call.args[0].get()); auto m = needPtr(call.args[1].get()); auto a = needPtr(call.args[2].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call ptr @pycc_hmac_digest(ptr " << k.s << ", ptr " << m.s << ", ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 3) throw std::runtime_error("hmac.digest() takes 3 args");
+                                    auto k = needPtr(call.args[0].get());
+                                    auto m = needPtr(call.args[1].get());
+                                    auto a = needPtr(call.args[2].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_hmac_digest(ptr " << k.s << ", ptr " <<
+                                            m.s << ", ptr " << a.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "warnings") {
                                 const std::string &fn = at->attr;
                                 if (fn == "warn") {
-                                    if (call.args.size()!=1) throw std::runtime_error("warnings.warn() takes 1 arg");
+                                    if (call.args.size() != 1) throw std::runtime_error("warnings.warn() takes 1 arg");
                                     auto s = needPtr(call.args[0].get());
                                     ir << "  call void @pycc_warnings_warn(ptr " << s.s << ")\n";
-                                    out = Value{"null", ValKind::Ptr}; return;
+                                    out = Value{"null", ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "simplefilter") {
-                                    if (!(call.args.size()==1 || call.args.size()==2)) throw std::runtime_error("warnings.simplefilter() takes 1 or 2 args");
-                                    auto a = needPtr(call.args[0].get()); std::string cat = "null"; if (call.args.size()==2){ auto c = needPtr(call.args[1].get()); cat = c.s; }
-                                    ir << "  call void @pycc_warnings_simplefilter(ptr " << a.s << ", ptr " << cat << ")\n";
+                                    if (!(call.args.size() == 1 || call.args.size() == 2)) throw std::runtime_error(
+                                        "warnings.simplefilter() takes 1 or 2 args");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::string cat = "null";
+                                    if (call.args.size() == 2) {
+                                        auto c = needPtr(call.args[1].get());
+                                        cat = c.s;
+                                    }
+                                    ir << "  call void @pycc_warnings_simplefilter(ptr " << a.s << ", ptr " << cat <<
+                                            ")\n";
                                     // Emit a comment with a canonical signature-only call form used by tests
                                     ir << "  ; call void @pycc_warnings_simplefilter(ptr, ptr)\n";
-                                    out = Value{"null", ValKind::Ptr}; return;
+                                    out = Value{"null", ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "copy") {
                                 const std::string &fn = at->attr;
                                 if (fn == "copy" || fn == "deepcopy") {
-                                    if (call.args.size()!=1) throw std::runtime_error("copy." + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1) throw
+                                            std::runtime_error("copy." + fn + "() takes 1 arg");
                                     auto v = run(*call.args[0]);
                                     std::string ptr;
                                     if (v.k == ValKind::Ptr) ptr = v.s;
-                                    else if (v.k == ValKind::I32) { std::ostringstream z; z<<"%t"<<temp++; usedBoxInt=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_int(i64 "<<v.s<<")\n"; ptr=z.str(); }
-                                    else if (v.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; usedBoxBool=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_bool(i1 "<<v.s<<")\n"; ptr=z.str(); }
-                                    else if (v.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; usedBoxFloat=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_float(double "<<v.s<<")\n"; ptr=z.str(); }
-                                    else throw std::runtime_error("unsupported value");
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="copy"?"pycc_copy_copy":"pycc_copy_deepcopy");
+                                    else if (v.k == ValKind::I32) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        usedBoxInt = true;
+                                        ir << "  " << z.str() << " = call ptr @pycc_box_int(i64 " << v.s << ")\n";
+                                        ptr = z.str();
+                                    } else if (v.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        usedBoxBool = true;
+                                        ir << "  " << z.str() << " = call ptr @pycc_box_bool(i1 " << v.s << ")\n";
+                                        ptr = z.str();
+                                    } else if (v.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        usedBoxFloat = true;
+                                        ir << "  " << z.str() << " = call ptr @pycc_box_float(double " << v.s << ")\n";
+                                        ptr = z.str();
+                                    } else throw std::runtime_error("unsupported value");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "copy" ? "pycc_copy_copy" : "pycc_copy_deepcopy");
                                     ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << ptr << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "calendar") {
                                 const std::string &fn = at->attr;
                                 if (fn == "isleap") {
-                                    if (call.args.size()!=1) throw std::runtime_error("calendar.isleap() takes 1 arg");
-                                    auto y = run(*call.args[0]); std::string yi32;
-                                    if (y.k == ValKind::I32) yi32 = y.s; else if (y.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<y.s<<" to i32\n"; yi32=z.str(); } else if (y.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<y.s<<" to i32\n"; yi32=z.str(); } else throw std::runtime_error("year must be int");
-                                    std::ostringstream r; r<<"%t"<<temp++; ir<<"  "<<r.str()<<" = call i32 @pycc_calendar_isleap(i32 "<<yi32<<")\n"; out = Value{r.str(), ValKind::I32}; return;
+                                    if (call.args.size() != 1) throw
+                                            std::runtime_error("calendar.isleap() takes 1 arg");
+                                    auto y = run(*call.args[0]);
+                                    std::string yi32;
+                                    if (y.k == ValKind::I32) yi32 = y.s;
+                                    else if (y.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = zext i1 " << y.s << " to i32\n";
+                                        yi32 = z.str();
+                                    } else if (y.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        ir << "  " << z.str() << " = fptosi double " << y.s << " to i32\n";
+                                        yi32 = z.str();
+                                    } else throw std::runtime_error("year must be int");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call i32 @pycc_calendar_isleap(i32 " << yi32 << ")\n";
+                                    out = Value{r.str(), ValKind::I32};
+                                    return;
                                 }
                                 if (fn == "monthrange") {
-                                    if (call.args.size()!=2) throw std::runtime_error("calendar.monthrange() takes 2 args");
-                                    auto y = run(*call.args[0]); auto m = run(*call.args[1]);
-                                    auto toI32 = [&](Value v){ if (v.k==ValKind::I32) return v.s; if (v.k==ValKind::I1){ std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<v.s<<" to i32\n"; return z.str(); } if (v.k==ValKind::F64){ std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<v.s<<" to i32\n"; return z.str(); } throw std::runtime_error("int required"); };
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "calendar.monthrange() takes 2 args");
+                                    auto y = run(*call.args[0]);
+                                    auto m = run(*call.args[1]);
+                                    auto toI32 = [&](Value v) {
+                                        if (v.k == ValKind::I32) return v.s;
+                                        if (v.k == ValKind::I1) {
+                                            std::ostringstream z;
+                                            z << "%t" << temp++;
+                                            ir << "  " << z.str() << " = zext i1 " << v.s << " to i32\n";
+                                            return z.str();
+                                        }
+                                        if (v.k == ValKind::F64) {
+                                            std::ostringstream z;
+                                            z << "%t" << temp++;
+                                            ir << "  " << z.str() << " = fptosi double " << v.s << " to i32\n";
+                                            return z.str();
+                                        }
+                                        throw std::runtime_error("int required");
+                                    };
                                     std::string yi = toI32(y), mi = toI32(m);
-                                    std::ostringstream r; r<<"%t"<<temp++; ir<<"  "<<r.str()<<" = call ptr @pycc_calendar_monthrange(i32 "<<yi<<", i32 "<<mi<<")\n"; out = Value{r.str(), ValKind::Ptr}; return;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_calendar_monthrange(i32 " << yi <<
+                                            ", i32 " << mi << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "heapq") {
                                 const std::string &fn = at->attr;
                                 if (fn == "heappush") {
-                                    if (call.args.size() != 2) throw std::runtime_error("heapq.heappush() takes 2 args");
+                                    if (call.args.size() != 2) throw
+                                            std::runtime_error("heapq.heappush() takes 2 args");
                                     // Obtain a slot pointer for the list variable, like bisect.insort
                                     Value a = needList(call.args[0].get());
                                     std::string slotPtr;
@@ -2876,39 +3402,64 @@ namespace pycc::codegen {
                                         if (itn == slots.end()) throw std::runtime_error("undefined name in heappush");
                                         slotPtr = itn->second.ptr;
                                     } else {
-                                        std::ostringstream slot; slot<<"%t"<<temp++;
+                                        std::ostringstream slot;
+                                        slot << "%t" << temp++;
                                         ir << "  " << slot.str() << " = alloca ptr\n";
                                         ir << "  store ptr " << a.s << ", ptr " << slot.str() << "\n";
                                         slotPtr = slot.str();
                                     }
-                                    auto v = run(*call.args[1]); std::string vptr;
+                                    auto v = run(*call.args[1]);
+                                    std::string vptr;
                                     if (v.k == ValKind::Ptr) vptr = v.s;
-                                    else if (v.k == ValKind::I32) { std::ostringstream z; z<<"%t"<<temp++; usedBoxInt=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_int(i64 "<<v.s<<")\n"; vptr = z.str(); }
-                                    else if (v.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; usedBoxBool=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_bool(i1 "<<v.s<<")\n"; vptr = z.str(); }
-                                    else if (v.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; usedBoxFloat=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_float(double "<<v.s<<")\n"; vptr = z.str(); }
-                                    else throw std::runtime_error("heappush: unsupported value");
-                                    ir << "  call void @pycc_heapq_heappush(ptr " << slotPtr << ", ptr " << vptr << ")\n";
-                                    out = Value{"null", ValKind::Ptr}; return;
+                                    else if (v.k == ValKind::I32) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        usedBoxInt = true;
+                                        ir << "  " << z.str() << " = call ptr @pycc_box_int(i64 " << v.s << ")\n";
+                                        vptr = z.str();
+                                    } else if (v.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        usedBoxBool = true;
+                                        ir << "  " << z.str() << " = call ptr @pycc_box_bool(i1 " << v.s << ")\n";
+                                        vptr = z.str();
+                                    } else if (v.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        usedBoxFloat = true;
+                                        ir << "  " << z.str() << " = call ptr @pycc_box_float(double " << v.s << ")\n";
+                                        vptr = z.str();
+                                    } else throw std::runtime_error("heappush: unsupported value");
+                                    ir << "  call void @pycc_heapq_heappush(ptr " << slotPtr << ", ptr " << vptr <<
+                                            ")\n";
+                                    out = Value{"null", ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "heappop") {
                                     if (call.args.size() != 1) throw std::runtime_error("heapq.heappop() takes 1 arg");
-                                    auto a = needList(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto a = needList(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_heapq_heappop(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "collections") {
                                 const std::string &fn = at->attr;
                                 auto needPtr = [&](const ast::Expr *e) {
                                     auto v = run(*e);
-                                    if (v.k != ValKind::Ptr) throw std::runtime_error(
-                                        "collections: ptr/list/dict required");
+                                    if (v.k != ValKind::Ptr)
+                                        throw std::runtime_error(
+                                            "collections: ptr/list/dict required");
                                     return v;
                                 };
                                 if (fn == "Counter") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        "collections.Counter() takes 1 iterable (list) in this subset");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            "collections.Counter() takes 1 iterable (list) in this subset");
                                     auto a = needPtr(call.args[0].get());
                                     std::ostringstream r;
                                     r << "%t" << temp++;
@@ -2918,8 +3469,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "OrderedDict") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        "collections.OrderedDict() takes 1 arg (list of pairs)");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            "collections.OrderedDict() takes 1 arg (list of pairs)");
                                     auto a = needPtr(call.args[0].get());
                                     std::ostringstream r;
                                     r << "%t" << temp++;
@@ -2929,8 +3481,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "ChainMap") {
-                                    if (call.args.size() == 0) throw std::runtime_error(
-                                        "collections.ChainMap() requires at least one dict or a list of dicts");
+                                    if (call.args.size() == 0)
+                                        throw std::runtime_error(
+                                            "collections.ChainMap() requires at least one dict or a list of dicts");
                                     // Accept a single list-of-dicts only in this subset
                                     auto a = needPtr(call.args[0].get());
                                     std::ostringstream r;
@@ -2941,8 +3494,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "defaultdict") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        "collections.defaultdict() takes 1 default value in this subset");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            "collections.defaultdict() takes 1 default value in this subset");
                                     auto v = needPtr(call.args[0].get());
                                     std::ostringstream r;
                                     r << "%t" << temp++;
@@ -2952,8 +3506,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "defaultdict_get") {
-                                    if (call.args.size() != 2) throw std::runtime_error(
-                                        "collections.defaultdict_get(dd, key)");
+                                    if (call.args.size() != 2)
+                                        throw std::runtime_error(
+                                            "collections.defaultdict_get(dd, key)");
                                     auto dd = needPtr(call.args[0].get());
                                     auto k = needPtr(call.args[1].get());
                                     std::ostringstream r;
@@ -2964,8 +3519,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "defaultdict_set") {
-                                    if (call.args.size() != 3) throw std::runtime_error(
-                                        "collections.defaultdict_set(dd, key, value)");
+                                    if (call.args.size() != 3)
+                                        throw std::runtime_error(
+                                            "collections.defaultdict_set(dd, key, value)");
                                     auto dd = needPtr(call.args[0].get());
                                     auto k = needPtr(call.args[1].get());
                                     auto v = needPtr(call.args[2].get());
@@ -2980,39 +3536,72 @@ namespace pycc::codegen {
                             if (mod == "array") {
                                 const std::string &fn = at->attr;
                                 if (fn == "array") {
-                                    if (call.args.empty() || call.args.size() > 2) throw std::runtime_error("array.array() takes 1 or 2 args");
+                                    if (call.args.empty() || call.args.size() > 2) throw std::runtime_error(
+                                        "array.array() takes 1 or 2 args");
                                     auto tc = needPtr(call.args[0].get());
                                     std::string init = "null";
-                                    if (call.args.size() == 2) { auto li = needPtr(call.args[1].get()); init = li.s; }
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_array_array(ptr "<<tc.s<<", ptr "<<init<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() == 2) {
+                                        auto li = needPtr(call.args[1].get());
+                                        init = li.s;
+                                    }
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_array_array(ptr " << tc.s << ", ptr " <<
+                                            init << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "append") {
-                                    if (call.args.size() != 2) throw std::runtime_error("array.append(arr, value) takes 2 args");
-                                    auto arr = needPtr(call.args[0].get()); auto v = run(*call.args[1]);
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "array.append(arr, value) takes 2 args");
+                                    auto arr = needPtr(call.args[0].get());
+                                    auto v = run(*call.args[1]);
                                     std::string vptr;
                                     if (v.k == ValKind::Ptr) vptr = v.s;
-                                    else if (v.k == ValKind::I32) { std::ostringstream z; z<<"%t"<<temp++; usedBoxInt=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_int(i64 "<<v.s<<")\n"; vptr = z.str(); }
-                                    else if (v.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; usedBoxBool=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_bool(i1 "<<v.s<<")\n"; vptr = z.str(); }
-                                    else if (v.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; usedBoxFloat=true; ir<<"  "<<z.str()<<" = call ptr @pycc_box_float(double "<<v.s<<")\n"; vptr = z.str(); }
-                                    else throw std::runtime_error("array.append: unsupported value");
-                                    ir << "  call void @pycc_array_append(ptr "<<arr.s<<", ptr "<<vptr<<")\n";
-                                    out = Value{"null", ValKind::Ptr}; return;
+                                    else if (v.k == ValKind::I32) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        usedBoxInt = true;
+                                        ir << "  " << z.str() << " = call ptr @pycc_box_int(i64 " << v.s << ")\n";
+                                        vptr = z.str();
+                                    } else if (v.k == ValKind::I1) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        usedBoxBool = true;
+                                        ir << "  " << z.str() << " = call ptr @pycc_box_bool(i1 " << v.s << ")\n";
+                                        vptr = z.str();
+                                    } else if (v.k == ValKind::F64) {
+                                        std::ostringstream z;
+                                        z << "%t" << temp++;
+                                        usedBoxFloat = true;
+                                        ir << "  " << z.str() << " = call ptr @pycc_box_float(double " << v.s << ")\n";
+                                        vptr = z.str();
+                                    } else throw std::runtime_error("array.append: unsupported value");
+                                    ir << "  call void @pycc_array_append(ptr " << arr.s << ", ptr " << vptr << ")\n";
+                                    out = Value{"null", ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "pop") {
                                     if (call.args.size() != 1) throw std::runtime_error("array.pop(arr) takes 1 arg");
-                                    auto arr = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_array_pop(ptr "<<arr.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    auto arr = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_array_pop(ptr " << arr.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "tolist") {
-                                    if (call.args.size() != 1) throw std::runtime_error("array.tolist(arr) takes 1 arg");
-                                    auto arr = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  "<<r.str()<<" = call ptr @pycc_array_tolist(ptr "<<arr.s<<")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 1) throw
+                                            std::runtime_error("array.tolist(arr) takes 1 arg");
+                                    auto arr = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_array_tolist(ptr " << arr.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "itertools") {
                                 auto needList = [&](const ast::Expr *e) {
@@ -3021,8 +3610,9 @@ namespace pycc::codegen {
                                     return v;
                                 };
                                 if (fn == "chain") {
-                                    if (call.args.size() != 2) throw std::runtime_error(
-                                        "itertools.chain() takes exactly 2 lists in this subset");
+                                    if (call.args.size() != 2)
+                                        throw std::runtime_error(
+                                            "itertools.chain() takes exactly 2 lists in this subset");
                                     auto a = needList(call.args[0].get());
                                     auto b = needList(call.args[1].get());
                                     std::ostringstream r;
@@ -3033,8 +3623,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "chain_from_iterable") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        "itertools.chain_from_iterable() takes 1 arg (list of lists)");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            "itertools.chain_from_iterable() takes 1 arg (list of lists)");
                                     auto x = needList(call.args[0].get());
                                     std::ostringstream r;
                                     r << "%t" << temp++;
@@ -3044,8 +3635,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "product") {
-                                    if (call.args.size() != 2) throw std::runtime_error(
-                                        "itertools.product() supports 2 lists in this subset");
+                                    if (call.args.size() != 2)
+                                        throw std::runtime_error(
+                                            "itertools.product() supports 2 lists in this subset");
                                     auto a = needList(call.args[0].get());
                                     auto b = needList(call.args[1].get());
                                     std::ostringstream r;
@@ -3056,8 +3648,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "permutations") {
-                                    if (call.args.empty() || call.args.size() > 2) throw std::runtime_error(
-                                        "itertools.permutations() takes 1 or 2 args");
+                                    if (call.args.empty() || call.args.size() > 2)
+                                        throw std::runtime_error(
+                                            "itertools.permutations() takes 1 or 2 args");
                                     auto a = needList(call.args[0].get());
                                     int rdef = -1;
                                     std::string r32;
@@ -3082,8 +3675,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "combinations") {
-                                    if (call.args.size() != 2) throw std::runtime_error(
-                                        "itertools.combinations() takes 2 args");
+                                    if (call.args.size() != 2)
+                                        throw std::runtime_error(
+                                            "itertools.combinations() takes 2 args");
                                     auto a = needList(call.args[0].get());
                                     auto rv = run(*call.args[1]);
                                     std::string r32;
@@ -3102,8 +3696,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "combinations_with_replacement") {
-                                    if (call.args.size() != 2) throw std::runtime_error(
-                                        "itertools.combinations_with_replacement() takes 2 args");
+                                    if (call.args.size() != 2)
+                                        throw std::runtime_error(
+                                            "itertools.combinations_with_replacement() takes 2 args");
                                     auto a = needList(call.args[0].get());
                                     auto rv = run(*call.args[1]);
                                     std::string r32;
@@ -3123,15 +3718,17 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "zip_longest") {
-                                    if (call.args.size() < 2 || call.args.size() > 3) throw std::runtime_error(
-                                        "itertools.zip_longest() takes 2 or 3 args");
+                                    if (call.args.size() < 2 || call.args.size() > 3)
+                                        throw std::runtime_error(
+                                            "itertools.zip_longest() takes 2 or 3 args");
                                     auto a = needList(call.args[0].get());
                                     auto b = needList(call.args[1].get());
                                     std::string fill = "null";
                                     if (call.args.size() == 3) {
                                         auto fv = run(*call.args[2]);
-                                        if (fv.k != ValKind::Ptr) throw std::runtime_error(
-                                            "zip_longest fillvalue must be ptr");
+                                        if (fv.k != ValKind::Ptr)
+                                            throw std::runtime_error(
+                                                "zip_longest fillvalue must be ptr");
                                         fill = fv.s;
                                     }
                                     std::ostringstream r;
@@ -3142,18 +3739,21 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "islice") {
-                                    if (call.args.size() < 3 || call.args.size() > 4) throw std::runtime_error(
-                                        "itertools.islice() takes 3 or 4 args");
+                                    if (call.args.size() < 3 || call.args.size() > 4)
+                                        throw std::runtime_error(
+                                            "itertools.islice() takes 3 or 4 args");
                                     auto a = needList(call.args[0].get());
                                     auto s = run(*call.args[1]);
                                     auto e = run(*call.args[2]);
                                     std::string stp = "1";
-                                    if (s.k != ValKind::I32 || e.k != ValKind::I32) throw std::runtime_error(
-                                        "islice start/stop must be int");
+                                    if (s.k != ValKind::I32 || e.k != ValKind::I32)
+                                        throw std::runtime_error(
+                                            "islice start/stop must be int");
                                     if (call.args.size() == 4) {
                                         auto sv = run(*call.args[3]);
-                                        if (sv.k != ValKind::I32 && sv.k != ValKind::I1) throw std::runtime_error(
-                                            "islice step must be int");
+                                        if (sv.k != ValKind::I32 && sv.k != ValKind::I1)
+                                            throw std::runtime_error(
+                                                "islice step must be int");
                                         if (sv.k == ValKind::I1) {
                                             std::ostringstream z;
                                             z << "%t" << temp++;
@@ -3169,8 +3769,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "accumulate") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        "itertools.accumulate() supports a single list argument in this subset");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            "itertools.accumulate() supports a single list argument in this subset");
                                     auto a = needList(call.args[0].get());
                                     std::ostringstream r;
                                     r << "%t" << temp++;
@@ -3180,8 +3781,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "repeat") {
-                                    if (call.args.size() != 2) throw std::runtime_error(
-                                        "itertools.repeat() takes 2 args (obj, times)");
+                                    if (call.args.size() != 2)
+                                        throw std::runtime_error(
+                                            "itertools.repeat() takes 2 args (obj, times)");
                                     auto obj = run(*call.args[0]);
                                     if (obj.k != ValKind::Ptr) throw std::runtime_error("repeat obj must be ptr");
                                     auto t = run(*call.args[1]);
@@ -3201,8 +3803,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "pairwise") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        "itertools.pairwise() takes 1 list");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            "itertools.pairwise() takes 1 list");
                                     auto a = needList(call.args[0].get());
                                     std::ostringstream r;
                                     r << "%t" << temp++;
@@ -3212,8 +3815,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "batched") {
-                                    if (call.args.size() != 2) throw std::runtime_error(
-                                        "itertools.batched() takes 2 args");
+                                    if (call.args.size() != 2)
+                                        throw std::runtime_error(
+                                            "itertools.batched() takes 2 args");
                                     auto a = needList(call.args[0].get());
                                     auto n = run(*call.args[1]);
                                     std::string n32;
@@ -3232,8 +3836,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "compress") {
-                                    if (call.args.size() != 2) throw std::runtime_error(
-                                        "itertools.compress() takes 2 args");
+                                    if (call.args.size() != 2)
+                                        throw std::runtime_error(
+                                            "itertools.compress() takes 2 args");
                                     auto a = needList(call.args[0].get());
                                     auto b = needList(call.args[1].get());
                                     std::ostringstream r;
@@ -3303,43 +3908,70 @@ namespace pycc::codegen {
                                 const std::string &fn = at->attr;
                                 if (fn == "getcwd") {
                                     if (!call.args.empty()) throw std::runtime_error("os.getcwd() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_os_getcwd()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "mkdir") {
-                                    if (!(call.args.size() == 1 || call.args.size() == 2)) throw std::runtime_error("os.mkdir() takes 1 or 2 args");
-                                    auto p = needPtr(call.args[0].get()); std::string mode = "493"; // 0755
+                                    if (!(call.args.size() == 1 || call.args.size() == 2)) throw std::runtime_error(
+                                        "os.mkdir() takes 1 or 2 args");
+                                    auto p = needPtr(call.args[0].get());
+                                    std::string mode = "493"; // 0755
                                     if (call.args.size() == 2) {
                                         auto m = run(*call.args[1]);
                                         if (m.k == ValKind::I32) mode = m.s;
-                                        else if (m.k == ValKind::I1) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = zext i1 "<<m.s<<" to i32\n"; mode = z.str(); }
-                                        else if (m.k == ValKind::F64) { std::ostringstream z; z<<"%t"<<temp++; ir<<"  "<<z.str()<<" = fptosi double "<<m.s<<" to i32\n"; mode = z.str(); }
-                                        else throw std::runtime_error("os.mkdir: mode must be int");
+                                        else if (m.k == ValKind::I1) {
+                                            std::ostringstream z;
+                                            z << "%t" << temp++;
+                                            ir << "  " << z.str() << " = zext i1 " << m.s << " to i32\n";
+                                            mode = z.str();
+                                        } else if (m.k == ValKind::F64) {
+                                            std::ostringstream z;
+                                            z << "%t" << temp++;
+                                            ir << "  " << z.str() << " = fptosi double " << m.s << " to i32\n";
+                                            mode = z.str();
+                                        } else throw std::runtime_error("os.mkdir: mode must be int");
                                     }
-                                    std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call i1 @pycc_os_mkdir(ptr " << p.s << ", i32 " << mode << ")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call i1 @pycc_os_mkdir(ptr " << p.s << ", i32 " << mode
+                                            << ")\n";
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
                                 if (fn == "remove") {
                                     if (call.args.size() != 1) throw std::runtime_error("os.remove() takes 1 arg");
-                                    auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto p = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call i1 @pycc_os_remove(ptr " << p.s << ")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
                                 if (fn == "rename") {
                                     if (call.args.size() != 2) throw std::runtime_error("os.rename() takes 2 args");
-                                    auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call i1 @pycc_os_rename(ptr " << a.s << ", ptr " << b.s << ")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    auto a = needPtr(call.args[0].get());
+                                    auto b = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call i1 @pycc_os_rename(ptr " << a.s << ", ptr " << b.s
+                                            << ")\n";
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
                                 if (fn == "getenv") {
                                     if (call.args.size() != 1) throw std::runtime_error("os.getenv() takes 1 arg");
-                                    auto n = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto n = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_os_getenv(ptr " << n.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "pathlib") {
                                 const std::string &fn = at->attr;
@@ -3349,8 +3981,9 @@ namespace pycc::codegen {
                                     return v;
                                 };
                                 if (fn == "cwd" || fn == "home") {
-                                    if (!call.args.empty()) throw std::runtime_error(
-                                        std::string("pathlib.") + fn + "() takes 0 args");
+                                    if (!call.args.empty())
+                                        throw std::runtime_error(
+                                            std::string("pathlib.") + fn + "() takes 0 args");
                                     std::ostringstream r;
                                     r << "%t" << temp++;
                                     const char *nm = (fn == "cwd") ? "@pycc_pathlib_cwd" : "@pycc_pathlib_home";
@@ -3371,8 +4004,9 @@ namespace pycc::codegen {
                                 }
                                 if (fn == "parent" || fn == "basename" || fn == "suffix" || fn == "stem" || fn ==
                                     "as_posix" || fn == "as_uri" || fn == "resolve" || fn == "absolute") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        std::string("pathlib.") + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            std::string("pathlib.") + fn + "() takes 1 arg");
                                     auto p = needStr(call.args[0].get());
                                     std::ostringstream r;
                                     r << "%t" << temp++;
@@ -3391,8 +4025,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "with_name" || fn == "with_suffix") {
-                                    if (call.args.size() != 2) throw std::runtime_error(
-                                        std::string("pathlib.") + fn + "() takes 2 args");
+                                    if (call.args.size() != 2)
+                                        throw std::runtime_error(
+                                            std::string("pathlib.") + fn + "() takes 2 args");
                                     auto p = needStr(call.args[0].get());
                                     auto a = needStr(call.args[1].get());
                                     std::ostringstream r;
@@ -3415,8 +4050,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "exists" || fn == "is_file" || fn == "is_dir") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        std::string("pathlib.") + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            std::string("pathlib.") + fn + "() takes 1 arg");
                                     auto p = needStr(call.args[0].get());
                                     std::ostringstream r;
                                     r << "%t" << temp++;
@@ -3430,8 +4066,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "mkdir") {
-                                    if (call.args.empty() || call.args.size() > 4) throw std::runtime_error(
-                                        "pathlib.mkdir() takes 1 to 4 args");
+                                    if (call.args.empty() || call.args.size() > 4)
+                                        throw std::runtime_error(
+                                            "pathlib.mkdir() takes 1 to 4 args");
                                     auto p = needStr(call.args[0].get());
                                     std::string mode = "511";
                                     std::string parents = "0";
@@ -3464,8 +4101,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "rmdir" || fn == "unlink") {
-                                    if (call.args.size() != 1) throw std::runtime_error(
-                                        std::string("pathlib.") + fn + "() takes 1 arg");
+                                    if (call.args.size() != 1)
+                                        throw std::runtime_error(
+                                            std::string("pathlib.") + fn + "() takes 1 arg");
                                     auto p = needStr(call.args[0].get());
                                     std::ostringstream r;
                                     r << "%t" << temp++;
@@ -3475,8 +4113,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "rename") {
-                                    if (call.args.size() != 2) throw
-                                            std::runtime_error("pathlib.rename() takes 2 args");
+                                    if (call.args.size() != 2)
+                                        throw
+                                                std::runtime_error("pathlib.rename() takes 2 args");
                                     auto a = needStr(call.args[0].get());
                                     auto b = needStr(call.args[1].get());
                                     std::ostringstream r;
@@ -3516,8 +4155,9 @@ namespace pycc::codegen {
                                 };
                                 const std::string &fn = at->attr;
                                 if (fn == "get_cache_token") {
-                                    if (!call.args.empty()) throw std::runtime_error(
-                                        "_abc.get_cache_token() takes 0 args");
+                                    if (!call.args.empty())
+                                        throw std::runtime_error(
+                                            "_abc.get_cache_token() takes 0 args");
                                     std::ostringstream r;
                                     r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call i64 @pycc_abc_get_cache_token()\n";
@@ -3539,8 +4179,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "is_registered") {
-                                    if (call.args.size() != 2) throw std::runtime_error(
-                                        "_abc.is_registered() takes 2 args");
+                                    if (call.args.size() != 2)
+                                        throw std::runtime_error(
+                                            "_abc.is_registered() takes 2 args");
                                     auto a0 = needPtr(call.args[0].get());
                                     auto a1 = needPtr(call.args[1].get());
                                     std::ostringstream r;
@@ -3551,8 +4192,9 @@ namespace pycc::codegen {
                                     return;
                                 }
                                 if (fn == "invalidate_cache") {
-                                    if (!call.args.empty()) throw std::runtime_error(
-                                        "_abc.invalidate_cache() takes 0 args");
+                                    if (!call.args.empty())
+                                        throw std::runtime_error(
+                                            "_abc.invalidate_cache() takes 0 args");
                                     ir << "  call void @pycc_abc_invalidate_cache()\n";
                                     out = Value{"null", ValKind::Ptr};
                                     return;
@@ -3569,46 +4211,66 @@ namespace pycc::codegen {
                             if (mod == "_aix_support") {
                                 const std::string &fn = at->attr;
                                 if (fn == "aix_platform") {
-                                    if (!call.args.empty()) throw std::runtime_error("_aix_support.aix_platform() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "_aix_support.aix_platform() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_aix_platform()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "default_libpath") {
-                                    if (!call.args.empty()) throw std::runtime_error("_aix_support.default_libpath() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "_aix_support.default_libpath() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_aix_default_libpath()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "ldflags") {
-                                    if (!call.args.empty()) throw std::runtime_error("_aix_support.ldflags() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "_aix_support.ldflags() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_aix_ldflags()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "_apple_support") {
                                 const std::string &fn = at->attr;
                                 if (fn == "apple_platform") {
-                                    if (!call.args.empty()) throw std::runtime_error("_apple_support.apple_platform() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "_apple_support.apple_platform() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_apple_platform()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "default_sdkroot") {
-                                    if (!call.args.empty()) throw std::runtime_error("_apple_support.default_sdkroot() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "_apple_support.default_sdkroot() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_apple_default_sdkroot()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "ldflags") {
-                                    if (!call.args.empty()) throw std::runtime_error("_apple_support.ldflags() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "_apple_support.ldflags() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_apple_ldflags()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "_ast") {
                                 auto needPtr = [&](const ast::Expr *e) {
@@ -3619,41 +4281,67 @@ namespace pycc::codegen {
                                 const std::string &fn = at->attr;
                                 if (fn == "dump") {
                                     if (call.args.size() != 1) throw std::runtime_error("_ast.dump() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_ast_dump(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "iter_fields") {
-                                    if (call.args.size() != 1) throw std::runtime_error("_ast.iter_fields() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "_ast.iter_fields() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_ast_iter_fields(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "walk") {
                                     if (call.args.size() != 1) throw std::runtime_error("_ast.walk() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_ast_walk(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "copy_location") {
-                                    if (call.args.size() != 2) throw std::runtime_error("_ast.copy_location() takes 2 args");
-                                    auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call ptr @pycc_ast_copy_location(ptr " << a.s << ", ptr " << b.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "_ast.copy_location() takes 2 args");
+                                    auto a = needPtr(call.args[0].get());
+                                    auto b = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_ast_copy_location(ptr " << a.s <<
+                                            ", ptr " << b.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "fix_missing_locations") {
-                                    if (call.args.size() != 1) throw std::runtime_error("_ast.fix_missing_locations() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call ptr @pycc_ast_fix_missing_locations(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "_ast.fix_missing_locations() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_ast_fix_missing_locations(ptr " << a.s
+                                            << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "get_docstring") {
-                                    if (call.args.size() != 1) throw std::runtime_error("_ast.get_docstring() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "_ast.get_docstring() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_ast_get_docstring(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "_asyncio") {
                                 const std::string &fn = at->attr;
@@ -3663,111 +4351,176 @@ namespace pycc::codegen {
                                     return v;
                                 };
                                 if (fn == "get_event_loop") {
-                                    if (!call.args.empty()) throw std::runtime_error("_asyncio.get_event_loop() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "_asyncio.get_event_loop() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_asyncio_get_event_loop()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "Future") {
                                     if (!call.args.empty()) throw std::runtime_error("_asyncio.Future() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_asyncio_future_new()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "future_set_result") {
-                                    if (call.args.size() != 2) throw std::runtime_error("_asyncio.future_set_result() takes 2 args");
-                                    auto f = needPtr(call.args[0].get()); auto rv = needPtr(call.args[1].get());
-                                    ir << "  call void @pycc_asyncio_future_set_result(ptr " << f.s << ", ptr " << rv.s << ")\n";
-                                    out = Value{"null", ValKind::Ptr}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "_asyncio.future_set_result() takes 2 args");
+                                    auto f = needPtr(call.args[0].get());
+                                    auto rv = needPtr(call.args[1].get());
+                                    ir << "  call void @pycc_asyncio_future_set_result(ptr " << f.s << ", ptr " << rv.s
+                                            << ")\n";
+                                    out = Value{"null", ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "future_result") {
-                                    if (call.args.size() != 1) throw std::runtime_error("_asyncio.future_result() takes 1 arg");
-                                    auto f = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call ptr @pycc_asyncio_future_result(ptr " << f.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "_asyncio.future_result() takes 1 arg");
+                                    auto f = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call ptr @pycc_asyncio_future_result(ptr " << f.s <<
+                                            ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "future_done") {
-                                    if (call.args.size() != 1) throw std::runtime_error("_asyncio.future_done() takes 1 arg");
-                                    auto f = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    ir << "  " << r.str() << " = call i1 @pycc_asyncio_future_done(ptr " << f.s << ")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "_asyncio.future_done() takes 1 arg");
+                                    auto f = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    ir << "  " << r.str() << " = call i1 @pycc_asyncio_future_done(ptr " << f.s <<
+                                            ")\n";
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
                                 if (fn == "sleep") {
                                     if (call.args.size() != 1) throw std::runtime_error("_asyncio.sleep() takes 1 arg");
-                                    auto v = run(*call.args[0]); std::string d = toDouble(v);
+                                    auto v = run(*call.args[0]);
+                                    std::string d = toDouble(v);
                                     ir << "  call void @pycc_asyncio_sleep(double " << d << ")\n";
-                                    out = Value{"null", ValKind::Ptr}; return;
+                                    out = Value{"null", ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "_android_support") {
                                 const std::string &fn = at->attr;
                                 if (fn == "android_platform") {
-                                    if (!call.args.empty()) throw std::runtime_error("_android_support.android_platform() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "_android_support.android_platform() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_android_platform()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "default_libdir") {
-                                    if (!call.args.empty()) throw std::runtime_error("_android_support.default_libdir() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "_android_support.default_libdir() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_android_default_libdir()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "ldflags") {
-                                    if (!call.args.empty()) throw std::runtime_error("_android_support.ldflags() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    if (!call.args.empty()) throw std::runtime_error(
+                                        "_android_support.ldflags() takes 0 args");
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_android_ldflags()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "keyword") {
                                 const std::string &fn = at->attr;
                                 if (fn == "iskeyword") {
-                                    if (call.args.size() != 1) throw std::runtime_error("keyword.iskeyword() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "keyword.iskeyword() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call i1 @pycc_keyword_iskeyword(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
                                 if (fn == "kwlist") {
                                     if (!call.args.empty()) throw std::runtime_error("keyword.kwlist() takes 0 args");
-                                    std::ostringstream r; r<<"%t"<<temp++;
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_keyword_kwlist()\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (mod == "operator") {
                                 const std::string &fn = at->attr;
                                 if (fn == "add" || fn == "sub" || fn == "mul" || fn == "truediv") {
-                                    if (call.args.size() != 2) throw std::runtime_error("operator." + fn + "() takes 2 args");
-                                    auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="add"?"pycc_operator_add": fn=="sub"?"pycc_operator_sub": fn=="mul"?"pycc_operator_mul":"pycc_operator_truediv");
-                                    ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << a.s << ", ptr " << b.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "operator." + fn + "() takes 2 args");
+                                    auto a = needPtr(call.args[0].get());
+                                    auto b = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "add"
+                                                              ? "pycc_operator_add"
+                                                              : fn == "sub"
+                                                                    ? "pycc_operator_sub"
+                                                                    : fn == "mul"
+                                                                          ? "pycc_operator_mul"
+                                                                          : "pycc_operator_truediv");
+                                    ir << "  " << r.str() << " = call ptr @" << callee << "(ptr " << a.s << ", ptr " <<
+                                            b.s << ")\n";
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "neg") {
                                     if (call.args.size() != 1) throw std::runtime_error("operator.neg() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
                                     ir << "  " << r.str() << " = call ptr @pycc_operator_neg(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::Ptr}; return;
+                                    out = Value{r.str(), ValKind::Ptr};
+                                    return;
                                 }
                                 if (fn == "eq" || fn == "lt") {
-                                    if (call.args.size() != 2) throw std::runtime_error("operator." + fn + "() takes 2 args");
-                                    auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="eq"?"pycc_operator_eq":"pycc_operator_lt");
-                                    ir << "  " << r.str() << " = call i1 @" << callee << "(ptr " << a.s << ", ptr " << b.s << ")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    if (call.args.size() != 2) throw std::runtime_error(
+                                        "operator." + fn + "() takes 2 args");
+                                    auto a = needPtr(call.args[0].get());
+                                    auto b = needPtr(call.args[1].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "eq" ? "pycc_operator_eq" : "pycc_operator_lt");
+                                    ir << "  " << r.str() << " = call i1 @" << callee << "(ptr " << a.s << ", ptr " << b
+                                            .s << ")\n";
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
                                 if (fn == "not_" || fn == "truth") {
-                                    if (call.args.size() != 1) throw std::runtime_error("operator." + fn + "() takes 1 arg");
-                                    auto a = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                    std::string callee = (fn=="not_"?"pycc_operator_not":"pycc_operator_truth");
+                                    if (call.args.size() != 1) throw std::runtime_error(
+                                        "operator." + fn + "() takes 1 arg");
+                                    auto a = needPtr(call.args[0].get());
+                                    std::ostringstream r;
+                                    r << "%t" << temp++;
+                                    std::string callee = (fn == "not_" ? "pycc_operator_not" : "pycc_operator_truth");
                                     ir << "  " << r.str() << " = call i1 @" << callee << "(ptr " << a.s << ")\n";
-                                    out = Value{r.str(), ValKind::I1}; return;
+                                    out = Value{r.str(), ValKind::I1};
+                                    return;
                                 }
-                                emitNotImplemented(mod, fn, ValKind::Ptr); return;
+                                emitNotImplemented(mod, fn, ValKind::Ptr);
+                                return;
                             }
                             if (kStubMods.count(mod)) {
                                 emitNotImplemented(mod, fn, ValKind::Ptr);
@@ -3781,32 +4534,60 @@ namespace pycc::codegen {
                                 const std::string fn = at->attr;
                                 if (root->id == "os" && mid->attr == "path") {
                                     if (fn == "join") {
-                                        if (call.args.size()!=2) throw std::runtime_error("os.path.join() takes 2 args in this subset");
-                                        auto a = needPtr(call.args[0].get()); auto b = needPtr(call.args[1].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                        ir << "  "<<r.str()<<" = call ptr @pycc_os_path_join2(ptr "<<a.s<<", ptr "<<b.s<<")\n";
-                                        out = Value{r.str(), ValKind::Ptr}; return;
+                                        if (call.args.size() != 2) throw std::runtime_error(
+                                            "os.path.join() takes 2 args in this subset");
+                                        auto a = needPtr(call.args[0].get());
+                                        auto b = needPtr(call.args[1].get());
+                                        std::ostringstream r;
+                                        r << "%t" << temp++;
+                                        ir << "  " << r.str() << " = call ptr @pycc_os_path_join2(ptr " << a.s <<
+                                                ", ptr " << b.s << ")\n";
+                                        out = Value{r.str(), ValKind::Ptr};
+                                        return;
                                     }
                                     if (fn == "dirname" || fn == "basename" || fn == "abspath") {
-                                        if (call.args.size()!=1) throw std::runtime_error(std::string("os.path.")+fn+"() takes 1 arg");
-                                        auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                        const char* cal = (fn=="dirname"?"pycc_os_path_dirname": (fn=="basename"?"pycc_os_path_basename":"pycc_os_path_abspath"));
-                                        ir << "  "<<r.str()<<" = call ptr @"<<cal<<"(ptr "<<p.s<<")\n";
-                                        out = Value{r.str(), ValKind::Ptr}; return;
+                                        if (call.args.size() != 1) throw std::runtime_error(
+                                            std::string("os.path.") + fn + "() takes 1 arg");
+                                        auto p = needPtr(call.args[0].get());
+                                        std::ostringstream r;
+                                        r << "%t" << temp++;
+                                        const char *cal = (fn == "dirname"
+                                                               ? "pycc_os_path_dirname"
+                                                               : (fn == "basename"
+                                                                      ? "pycc_os_path_basename"
+                                                                      : "pycc_os_path_abspath"));
+                                        ir << "  " << r.str() << " = call ptr @" << cal << "(ptr " << p.s << ")\n";
+                                        out = Value{r.str(), ValKind::Ptr};
+                                        return;
                                     }
                                     if (fn == "splitext") {
-                                        if (call.args.size()!=1) throw std::runtime_error("os.path.splitext() takes 1 arg");
-                                        auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                        ir << "  "<<r.str()<<" = call ptr @pycc_os_path_splitext(ptr "<<p.s<<")\n";
-                                        out = Value{r.str(), ValKind::Ptr}; return;
+                                        if (call.args.size() != 1) throw std::runtime_error(
+                                            "os.path.splitext() takes 1 arg");
+                                        auto p = needPtr(call.args[0].get());
+                                        std::ostringstream r;
+                                        r << "%t" << temp++;
+                                        ir << "  " << r.str() << " = call ptr @pycc_os_path_splitext(ptr " << p.s <<
+                                                ")\n";
+                                        out = Value{r.str(), ValKind::Ptr};
+                                        return;
                                     }
                                     if (fn == "exists" || fn == "isfile" || fn == "isdir") {
-                                        if (call.args.size()!=1) throw std::runtime_error(std::string("os.path.")+fn+"() takes 1 arg");
-                                        auto p = needPtr(call.args[0].get()); std::ostringstream r; r<<"%t"<<temp++;
-                                        const char* cal = (fn=="exists"?"pycc_os_path_exists": (fn=="isfile"?"pycc_os_path_isfile":"pycc_os_path_isdir"));
-                                        ir << "  "<<r.str()<<" = call i1 @"<<cal<<"(ptr "<<p.s<<")\n";
-                                        out = Value{r.str(), ValKind::I1}; return;
+                                        if (call.args.size() != 1) throw std::runtime_error(
+                                            std::string("os.path.") + fn + "() takes 1 arg");
+                                        auto p = needPtr(call.args[0].get());
+                                        std::ostringstream r;
+                                        r << "%t" << temp++;
+                                        const char *cal = (fn == "exists"
+                                                               ? "pycc_os_path_exists"
+                                                               : (fn == "isfile"
+                                                                      ? "pycc_os_path_isfile"
+                                                                      : "pycc_os_path_isdir"));
+                                        ir << "  " << r.str() << " = call i1 @" << cal << "(ptr " << p.s << ")\n";
+                                        out = Value{r.str(), ValKind::I1};
+                                        return;
                                     }
-                                    emitNotImplemented("os.path", fn, ValKind::Ptr); return;
+                                    emitNotImplemented("os.path", fn, ValKind::Ptr);
+                                    return;
                                 }
                             }
                         }
@@ -3881,7 +4662,8 @@ namespace pycc::codegen {
                         };
                         if (capV.k == ValKind::I32) {
                             if (isSSA(capV.s)) {
-                                std::ostringstream w; w << "%t" << temp++;
+                                std::ostringstream w;
+                                w << "%t" << temp++;
                                 ir << "  " << w.str() << " = sext i32 " << capV.s << " to i64\n";
                                 ir << "  " << reg.str() << " = call ptr @pycc_chan_new(i64 " << w.str() << ")\n";
                             } else {
@@ -3892,7 +4674,8 @@ namespace pycc::codegen {
                         }
                         if (capV.k == ValKind::I1) {
                             if (isSSA(capV.s)) {
-                                std::ostringstream w; w << "%t" << temp++;
+                                std::ostringstream w;
+                                w << "%t" << temp++;
                                 ir << "  " << w.str() << " = zext i1 " << capV.s << " to i64\n";
                                 ir << "  " << reg.str() << " = call ptr @pycc_chan_new(i64 " << w.str() << ")\n";
                             } else {
@@ -3948,10 +4731,12 @@ namespace pycc::codegen {
                         return;
                     }
                     if (nmCall->id == "spawn") {
-                        if (call.args.size() != 1) throw std::runtime_error(
-                            "spawn() takes exactly 1 argument (function name)");
-                        if (call.args[0]->kind != ast::NodeKind::Name) throw std::runtime_error(
-                            "spawn() requires function name");
+                        if (call.args.size() != 1)
+                            throw std::runtime_error(
+                                "spawn() takes exactly 1 argument (function name)");
+                        if (call.args[0]->kind != ast::NodeKind::Name)
+                            throw std::runtime_error(
+                                "spawn() requires function name");
                         const auto *fnm = static_cast<const ast::Name *>(call.args[0].get());
                         spawnWrappers.insert(fnm->id);
                         std::ostringstream reg;
@@ -3962,8 +4747,9 @@ namespace pycc::codegen {
                         return;
                     }
                     if (nmCall->id == "join") {
-                        if (call.args.size() != 1) throw std::runtime_error(
-                            "join() takes exactly 1 argument (thread handle)");
+                        if (call.args.size() != 1)
+                            throw std::runtime_error(
+                                "join() takes exactly 1 argument (thread handle)");
                         auto th = run(*call.args[0]);
                         if (th.k != ValKind::Ptr) throw std::runtime_error("join(): handle must be ptr");
                         std::ostringstream ok;
@@ -4204,12 +4990,21 @@ namespace pycc::codegen {
                                                 v.f = std::pow(L.f, R.f);
                                                 return v;
                                             }
-                                            if (!bothInt(L, R)) throw std::runtime_error("eval(): '**' only for int/float");
+                                            if (!bothInt(L, R)) throw std::runtime_error(
+                                                "eval(): '**' only for int/float");
                                             v.k = CTVal::K::I;
-                                            if (R.i < 0) throw std::runtime_error("eval(): negative exponent not supported for int");
-                                            long long base = L.i; long long exp = R.i; long long res = 1;
-                                            while (exp > 0) { if (exp & 1LL) res *= base; base *= base; exp >>= 1LL; }
-                                            v.i = res; return v;
+                                            if (R.i < 0) throw std::runtime_error(
+                                                "eval(): negative exponent not supported for int");
+                                            long long base = L.i;
+                                            long long exp = R.i;
+                                            long long res = 1;
+                                            while (exp > 0) {
+                                                if (exp & 1LL) res *= base;
+                                                base *= base;
+                                                exp >>= 1LL;
+                                            }
+                                            v.i = res;
+                                            return v;
                                         }
                                         case BO::Mod: {
                                             if (!bothInt(L, R)) throw std::runtime_error("eval(): '%' only for int");
@@ -4376,41 +5171,46 @@ namespace pycc::codegen {
                                 if (cname != nullptr) {
                                     // Evaluate the call to get a pointer result
                                     auto v = run(*arg0);
-                                    if (v.k != ValKind::Ptr) throw std::runtime_error(
-                                        "len(call): callee did not return pointer");
+                                    if (v.k != ValKind::Ptr)
+                                        throw std::runtime_error(
+                                            "len(call): callee did not return pointer");
                                     std::ostringstream r64, r32;
                                     r64 << "%t" << temp++;
                                     r32 << "%t" << temp++;
-                            bool isList = false; bool isBytes = false;
-                            // First, try interprocedural param-forwarding tag inference
-                            auto itRet = retParamIdxs.find(cname->id);
-                            if (itRet != retParamIdxs.end()) {
-                                int rp = itRet->second;
-                                if (rp >= 0 && static_cast<size_t>(rp) < c->args.size()) {
-                                    const auto *a = c->args[rp].get();
-                                    if (a && a->kind == ast::NodeKind::Name) {
-                                        const auto *an = static_cast<const ast::Name *>(a);
-                                        auto itn = slots.find(an->id);
-                                        if (itn != slots.end()) { isList = (itn->second.tag == PtrTag::List); isBytes = (itn->second.tag == PtrTag::Bytes); }
+                                    bool isList = false;
+                                    bool isBytes = false;
+                                    // First, try interprocedural param-forwarding tag inference
+                                    auto itRet = retParamIdxs.find(cname->id);
+                                    if (itRet != retParamIdxs.end()) {
+                                        int rp = itRet->second;
+                                        if (rp >= 0 && static_cast<size_t>(rp) < c->args.size()) {
+                                            const auto *a = c->args[rp].get();
+                                            if (a && a->kind == ast::NodeKind::Name) {
+                                                const auto *an = static_cast<const ast::Name *>(a);
+                                                auto itn = slots.find(an->id);
+                                                if (itn != slots.end()) {
+                                                    isList = (itn->second.tag == PtrTag::List);
+                                                    isBytes = (itn->second.tag == PtrTag::Bytes);
+                                                }
+                                            }
+                                        }
                                     }
-                                }
-                            }
-                            // Fallback to return-type based choice
-                            if (!isList) {
-                                auto itSig = sigs.find(cname->id);
-                                if (itSig != sigs.end()) {
-                                    isList = (itSig->second.ret == ast::TypeKind::List);
-                                    isBytes = (itSig->second.ret == ast::TypeKind::Bytes);
-                                }
-                            }
-                            if (isList) {
-                                ir << "  " << r64.str() << " = call i64 @pycc_list_len(ptr " << v.s << ")\n";
-                            } else if (isBytes) {
-                                ir << "  " << r64.str() << " = call i64 @pycc_bytes_len(ptr " << v.s << ")\n";
-                            } else {
-                                ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << v.s <<
-                                        ")\n";
-                            }
+                                    // Fallback to return-type based choice
+                                    if (!isList) {
+                                        auto itSig = sigs.find(cname->id);
+                                        if (itSig != sigs.end()) {
+                                            isList = (itSig->second.ret == ast::TypeKind::List);
+                                            isBytes = (itSig->second.ret == ast::TypeKind::Bytes);
+                                        }
+                                    }
+                                    if (isList) {
+                                        ir << "  " << r64.str() << " = call i64 @pycc_list_len(ptr " << v.s << ")\n";
+                                    } else if (isBytes) {
+                                        ir << "  " << r64.str() << " = call i64 @pycc_bytes_len(ptr " << v.s << ")\n";
+                                    } else {
+                                        ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << v.s <<
+                                                ")\n";
+                                    }
                                     ir << "  " << r32.str() << " = trunc i64 " << r64.str() << " to i32\n";
                                     out = Value{r32.str(), ValKind::I32};
                                     return;
@@ -4420,7 +5220,8 @@ namespace pycc::codegen {
                                 const auto *at = dynamic_cast<const ast::Attribute *>(c->callee.get());
                                 // Evaluate and determine appropriate len primitive
                                 auto v = run(*arg0);
-                                if (v.k != ValKind::Ptr) throw std::runtime_error("len(call): callee did not return pointer");
+                                if (v.k != ValKind::Ptr) throw std::runtime_error(
+                                    "len(call): callee did not return pointer");
                                 std::ostringstream r64, r32;
                                 r64 << "%t" << temp++;
                                 r32 << "%t" << temp++;
@@ -4435,7 +5236,8 @@ namespace pycc::codegen {
                                     } else if (bn->id == "binascii") {
                                         ir << "  " << r64.str() << " = call i64 @pycc_bytes_len(ptr " << v.s << ")\n";
                                     } else {
-                                        ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << v.s << ")\n";
+                                        ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << v.s <<
+                                                ")\n";
                                     }
                                 } else {
                                     ir << "  " << r64.str() << " = call i64 @pycc_string_charlen(ptr " << v.s << ")\n";
@@ -4448,8 +5250,9 @@ namespace pycc::codegen {
                         if (arg0->kind == ast::NodeKind::Name) {
                             const auto *nmArg = dynamic_cast<const ast::Name *>(arg0);
                             auto itn = slots.find(nmArg->id);
-                            if (itn == slots.end()) throw std::runtime_error(
-                                std::string("undefined name: ") + nmArg->id);
+                            if (itn == slots.end())
+                                throw std::runtime_error(
+                                    std::string("undefined name: ") + nmArg->id);
                             // Load pointer
                             std::ostringstream regPtr;
                             regPtr << "%t" << temp++;
@@ -4479,8 +5282,9 @@ namespace pycc::codegen {
                         }
                         auto vObj = run(*call.args[0]);
                         auto vIdx = run(*call.args[1]);
-                        if (vObj.k != ValKind::Ptr) throw std::runtime_error(
-                            "obj_get: first arg must be object pointer");
+                        if (vObj.k != ValKind::Ptr)
+                            throw std::runtime_error(
+                                "obj_get: first arg must be object pointer");
                         if (vIdx.k != ValKind::I32) throw std::runtime_error("obj_get: index must be int");
                         std::ostringstream idx64, reg;
                         idx64 << "%t" << temp++;
@@ -4581,22 +5385,26 @@ namespace pycc::codegen {
                     out = Value{reg.str(), rk};
                 }
 
-                void visit(const ast::IfExpr& x) override {
+                void visit(const ast::IfExpr &x) override {
                     // Lower Python conditional expression: <body> if <test> else <orelse>
                     auto toBool = [&](const Value &vin) -> Value {
                         if (vin.k == ValKind::I1) { return vin; }
                         std::ostringstream r;
                         r << "%t" << temp++;
                         switch (vin.k) {
-                            case ValKind::I32: ir << "  " << r.str() << " = icmp ne i32 " << vin.s << ", 0\n"; return Value{r.str(), ValKind::I1};
-                            case ValKind::F64: ir << "  " << r.str() << " = fcmp one double " << vin.s << ", 0.0\n"; return Value{r.str(), ValKind::I1};
-                            case ValKind::Ptr: ir << "  " << r.str() << " = icmp ne ptr " << vin.s << ", null\n"; return Value{r.str(), ValKind::I1};
+                            case ValKind::I32: ir << "  " << r.str() << " = icmp ne i32 " << vin.s << ", 0\n";
+                                return Value{r.str(), ValKind::I1};
+                            case ValKind::F64: ir << "  " << r.str() << " = fcmp one double " << vin.s << ", 0.0\n";
+                                return Value{r.str(), ValKind::I1};
+                            case ValKind::Ptr: ir << "  " << r.str() << " = icmp ne ptr " << vin.s << ", null\n";
+                                return Value{r.str(), ValKind::I1};
                             default: throw std::runtime_error("unsupported truthiness conversion in if-expr");
                         }
                     };
                     auto cv = run(*x.test);
                     cv = toBool(cv);
-                    static int ifeCounter = 0; int id = ifeCounter++;
+                    static int ifeCounter = 0;
+                    int id = ifeCounter++;
                     std::string thenLbl = std::string("ife.then") + std::to_string(id);
                     std::string elseLbl = std::string("ife.else") + std::to_string(id);
                     std::string endLbl = std::string("ife.end") + std::to_string(id);
@@ -4613,17 +5421,22 @@ namespace pycc::codegen {
                     ir << endLbl << ":\n";
                     std::ostringstream phi;
                     phi << "%t" << temp++;
-                    const char* ty = nullptr;
+                    const char *ty = nullptr;
                     if (bv.k == ev.k) {
                         switch (bv.k) {
-                            case ValKind::I32: ty = "i32"; break;
-                            case ValKind::I1: ty = "i1"; break;
-                            case ValKind::F64: ty = "double"; break;
-                            case ValKind::Ptr: ty = "ptr"; break;
+                            case ValKind::I32: ty = "i32";
+                                break;
+                            case ValKind::I1: ty = "i1";
+                                break;
+                            case ValKind::F64: ty = "double";
+                                break;
+                            case ValKind::Ptr: ty = "ptr";
+                                break;
                         }
                     }
                     if (ty == nullptr) { throw std::runtime_error("if-expr branches must have same type"); }
-                    ir << "  " << phi.str() << " = phi " << ty << " [ " << bv.s << ", %" << thenLbl << " ], [ " << ev.s << ", %" << elseLbl << " ]\n";
+                    ir << "  " << phi.str() << " = phi " << ty << " [ " << bv.s << ", %" << thenLbl << " ], [ " << ev.s
+                            << ", %" << elseLbl << " ]\n";
                     out = Value{phi.str(), bv.k};
                 }
 
@@ -4707,12 +5520,16 @@ namespace pycc::codegen {
                         bool rhsStr = (b.rhs->kind == ast::NodeKind::StringLiteral) ||
                                       (b.rhs->kind == ast::NodeKind::Name && [this,&b]() {
                                           auto it = slots.find(static_cast<const ast::Name *>(b.rhs.get())->id);
-                                          return it != slots.end() && (it->second.tag == PtrTag::Str || it->second.tag == PtrTag::Unknown);
+                                          return it != slots.end() && (
+                                                     it->second.tag == PtrTag::Str || it->second.tag ==
+                                                     PtrTag::Unknown);
                                       }());
                         bool lhsStr = (b.lhs->kind == ast::NodeKind::StringLiteral) ||
                                       (b.lhs->kind == ast::NodeKind::Name && [this,&b]() {
                                           auto it = slots.find(static_cast<const ast::Name *>(b.lhs.get())->id);
-                                          return it != slots.end() && (it->second.tag == PtrTag::Str || it->second.tag == PtrTag::Unknown);
+                                          return it != slots.end() && (
+                                                     it->second.tag == PtrTag::Str || it->second.tag ==
+                                                     PtrTag::Unknown);
                                       }());
                         if (rhsStr && lhsStr) {
                             auto H = run(*b.rhs);
@@ -4835,11 +5652,11 @@ namespace pycc::codegen {
                             }
                             ir << "  " << r1.str() << " = fcmp " << pred << " double " << LV.s << ", " << RV.s << "\n";
                         } else if (LV.k == ValKind::Ptr && RV.k == ValKind::Ptr) {
-                            auto isStrLike = [&](const ast::Expr* e) {
+                            auto isStrLike = [&](const ast::Expr *e) {
                                 if (!e) return false;
                                 if (e->kind == ast::NodeKind::StringLiteral) return true;
                                 if (e->kind == ast::NodeKind::Name) {
-                                    auto *n = static_cast<const ast::Name*>(e);
+                                    auto *n = static_cast<const ast::Name *>(e);
                                     auto it = slots.find(n->id);
                                     if (it != slots.end()) {
                                         return it->second.tag == PtrTag::Str || it->second.tag == PtrTag::Unknown;
@@ -4847,12 +5664,14 @@ namespace pycc::codegen {
                                 }
                                 return false;
                             };
-                            const bool stringContentCmp = (b.op == ast::BinaryOperator::Eq || b.op == ast::BinaryOperator::Ne)
-                                                          && (isStrLike(b.lhs.get()) || isStrLike(b.rhs.get()));
+                            const bool stringContentCmp =
+                                    (b.op == ast::BinaryOperator::Eq || b.op == ast::BinaryOperator::Ne)
+                                    && (isStrLike(b.lhs.get()) || isStrLike(b.rhs.get()));
                             if (stringContentCmp) {
                                 std::ostringstream eq;
                                 eq << "%t" << temp++;
-                                ir << "  " << eq.str() << " = call i1 @pycc_string_eq(ptr " << LV.s << ", ptr " << RV.s << ")\n";
+                                ir << "  " << eq.str() << " = call i1 @pycc_string_eq(ptr " << LV.s << ", ptr " << RV.s
+                                        << ")\n";
                                 if (b.op == ast::BinaryOperator::Ne) {
                                     std::ostringstream ne;
                                     ne << "%t" << temp++;
@@ -5129,8 +5948,10 @@ namespace pycc::codegen {
             auto evalExpr = [&](const ast::Expr *e) -> Value {
                 if (!e) throw std::runtime_error("null expr");
                 // Emit expression IR into the function body stream to preserve ordering
-                ExpressionLowerer V{fnBody, temp, slots, sigs, retParamIdxs, spawnWrappers, strGlobals, hash64, &nestedEnv,
-                                     usedBoxInt, usedBoxFloat, usedBoxBool};
+                ExpressionLowerer V{
+                    fnBody, temp, slots, sigs, retParamIdxs, spawnWrappers, strGlobals, hash64, &nestedEnv,
+                    usedBoxInt, usedBoxFloat, usedBoxBool
+                };
                 return V.run(*e);
             };
 
@@ -5140,119 +5961,210 @@ namespace pycc::codegen {
             // Basic capture analysis using 'nonlocal' statements as a starting signal.
             // Collect nonlocal captures for nested function definitions within this function's body.
             struct NestedCaptureScan : public ast::VisitorBase {
-                struct Captures { std::string fn; std::vector<std::string> names; };
+                struct Captures {
+                    std::string fn;
+                    std::vector<std::string> names;
+                };
+
                 std::vector<Captures> results;
-                std::vector<const ast::FunctionDef*> nestedFns;
+                std::vector<const ast::FunctionDef *> nestedFns;
 
                 // Visitor that walks a single function body and records Nonlocal names.
                 struct InnerScan : public ast::VisitorBase {
                     std::vector<std::string> &out;
-                    explicit InnerScan(std::vector<std::string> &o) : out(o) {}
-                    void visit(const ast::NonlocalStmt &ns) override { for (const auto &n : ns.names) out.push_back(n); }
-                    void visit(const ast::FunctionDef &) override {}
-                    void visit(const ast::Module &) override {}
-                    void visit(const ast::ReturnStmt &) override {}
-                    void visit(const ast::AssignStmt &) override {}
-                    void visit(const ast::ExprStmt &) override {}
-                    void visit(const ast::IntLiteral &) override {}
-                    void visit(const ast::BoolLiteral &) override {}
-                    void visit(const ast::FloatLiteral &) override {}
-                    void visit(const ast::Name &) override {}
-                    void visit(const ast::Call &) override {}
-                    void visit(const ast::Binary &) override {}
-                    void visit(const ast::Unary &) override {}
-                    void visit(const ast::StringLiteral &) override {}
-                    void visit(const ast::NoneLiteral &) override {}
-                    void visit(const ast::TupleLiteral &) override {}
-                    void visit(const ast::ListLiteral &) override {}
-                    void visit(const ast::ObjectLiteral &) override {}
+
+                    explicit InnerScan(std::vector<std::string> &o) : out(o) {
+                    }
+
+                    void visit(const ast::NonlocalStmt &ns) override { for (const auto &n: ns.names) out.push_back(n); }
+
+                    void visit(const ast::FunctionDef &) override {
+                    }
+
+                    void visit(const ast::Module &) override {
+                    }
+
+                    void visit(const ast::ReturnStmt &) override {
+                    }
+
+                    void visit(const ast::AssignStmt &) override {
+                    }
+
+                    void visit(const ast::ExprStmt &) override {
+                    }
+
+                    void visit(const ast::IntLiteral &) override {
+                    }
+
+                    void visit(const ast::BoolLiteral &) override {
+                    }
+
+                    void visit(const ast::FloatLiteral &) override {
+                    }
+
+                    void visit(const ast::Name &) override {
+                    }
+
+                    void visit(const ast::Call &) override {
+                    }
+
+                    void visit(const ast::Binary &) override {
+                    }
+
+                    void visit(const ast::Unary &) override {
+                    }
+
+                    void visit(const ast::StringLiteral &) override {
+                    }
+
+                    void visit(const ast::NoneLiteral &) override {
+                    }
+
+                    void visit(const ast::TupleLiteral &) override {
+                    }
+
+                    void visit(const ast::ListLiteral &) override {
+                    }
+
+                    void visit(const ast::ObjectLiteral &) override {
+                    }
+
                     void visit(const ast::IfStmt &ifs) override {
-                        for (const auto &st : ifs.thenBody) { if (st) st->accept(*this); }
-                        for (const auto &st : ifs.elseBody) { if (st) st->accept(*this); }
+                        for (const auto &st: ifs.thenBody) { if (st) st->accept(*this); }
+                        for (const auto &st: ifs.elseBody) { if (st) st->accept(*this); }
                     }
+
                     void visit(const ast::WhileStmt &ws) override {
-                        for (const auto &st : ws.thenBody) { if (st) st->accept(*this); }
-                        for (const auto &st : ws.elseBody) { if (st) st->accept(*this); }
+                        for (const auto &st: ws.thenBody) { if (st) st->accept(*this); }
+                        for (const auto &st: ws.elseBody) { if (st) st->accept(*this); }
                     }
+
                     void visit(const ast::ForStmt &fs) override {
-                        for (const auto &st : fs.thenBody) { if (st) st->accept(*this); }
-                        for (const auto &st : fs.elseBody) { if (st) st->accept(*this); }
+                        for (const auto &st: fs.thenBody) { if (st) st->accept(*this); }
+                        for (const auto &st: fs.elseBody) { if (st) st->accept(*this); }
                     }
+
                     void visit(const ast::TryStmt &ts) override {
-                        for (const auto &st : ts.body) { if (st) st->accept(*this); }
-                        for (const auto &h : ts.handlers) {
+                        for (const auto &st: ts.body) { if (st) st->accept(*this); }
+                        for (const auto &h: ts.handlers) {
                             if (!h) continue;
-                            for (const auto &st : h->body) { if (st) st->accept(*this); }
+                            for (const auto &st: h->body) { if (st) st->accept(*this); }
                         }
-                        for (const auto &st : ts.orelse) { if (st) st->accept(*this); }
-                        for (const auto &st : ts.finalbody) { if (st) st->accept(*this); }
+                        for (const auto &st: ts.orelse) { if (st) st->accept(*this); }
+                        for (const auto &st: ts.finalbody) { if (st) st->accept(*this); }
                     }
+
                     void visit(const ast::WithStmt &ws) override {
-                        for (const auto &st : ws.body) { if (st) st->accept(*this); }
+                        for (const auto &st: ws.body) { if (st) st->accept(*this); }
                     }
                 };
 
-                void visit(const ast::Module &) override {}
-                void visit(const ast::FunctionDef &) override {}
-                void visit(const ast::ReturnStmt &) override {}
-                void visit(const ast::AssignStmt &) override {}
-                void visit(const ast::ExprStmt &) override {}
-                void visit(const ast::IntLiteral &) override {}
-                void visit(const ast::BoolLiteral &) override {}
-                void visit(const ast::FloatLiteral &) override {}
-                void visit(const ast::Name &) override {}
-                void visit(const ast::Call &) override {}
-                void visit(const ast::Binary &) override {}
-                void visit(const ast::Unary &) override {}
-                void visit(const ast::StringLiteral &) override {}
-                void visit(const ast::NoneLiteral &) override {}
-                void visit(const ast::TupleLiteral &) override {}
-                void visit(const ast::ListLiteral &) override {}
-                void visit(const ast::ObjectLiteral &) override {}
+                void visit(const ast::Module &) override {
+                }
+
+                void visit(const ast::FunctionDef &) override {
+                }
+
+                void visit(const ast::ReturnStmt &) override {
+                }
+
+                void visit(const ast::AssignStmt &) override {
+                }
+
+                void visit(const ast::ExprStmt &) override {
+                }
+
+                void visit(const ast::IntLiteral &) override {
+                }
+
+                void visit(const ast::BoolLiteral &) override {
+                }
+
+                void visit(const ast::FloatLiteral &) override {
+                }
+
+                void visit(const ast::Name &) override {
+                }
+
+                void visit(const ast::Call &) override {
+                }
+
+                void visit(const ast::Binary &) override {
+                }
+
+                void visit(const ast::Unary &) override {
+                }
+
+                void visit(const ast::StringLiteral &) override {
+                }
+
+                void visit(const ast::NoneLiteral &) override {
+                }
+
+                void visit(const ast::TupleLiteral &) override {
+                }
+
+                void visit(const ast::ListLiteral &) override {
+                }
+
+                void visit(const ast::ObjectLiteral &) override {
+                }
+
                 void visit(const ast::IfStmt &ifs) override {
-                    for (const auto &st : ifs.thenBody) { if (st) st->accept(*this); }
-                    for (const auto &st : ifs.elseBody) { if (st) st->accept(*this); }
+                    for (const auto &st: ifs.thenBody) { if (st) st->accept(*this); }
+                    for (const auto &st: ifs.elseBody) { if (st) st->accept(*this); }
                 }
+
                 void visit(const ast::WhileStmt &ws) override {
-                    for (const auto &st : ws.thenBody) { if (st) st->accept(*this); }
-                    for (const auto &st : ws.elseBody) { if (st) st->accept(*this); }
+                    for (const auto &st: ws.thenBody) { if (st) st->accept(*this); }
+                    for (const auto &st: ws.elseBody) { if (st) st->accept(*this); }
                 }
+
                 void visit(const ast::ForStmt &fs) override {
-                    for (const auto &st : fs.thenBody) { if (st) st->accept(*this); }
-                    for (const auto &st : fs.elseBody) { if (st) st->accept(*this); }
+                    for (const auto &st: fs.thenBody) { if (st) st->accept(*this); }
+                    for (const auto &st: fs.elseBody) { if (st) st->accept(*this); }
                 }
+
                 void visit(const ast::TryStmt &ts) override {
-                    for (const auto &st : ts.body) { if (st) st->accept(*this); }
-                    for (const auto &h : ts.handlers) {
+                    for (const auto &st: ts.body) { if (st) st->accept(*this); }
+                    for (const auto &h: ts.handlers) {
                         if (!h) continue;
-                        for (const auto &st : h->body) { if (st) st->accept(*this); }
+                        for (const auto &st: h->body) { if (st) st->accept(*this); }
                     }
-                    for (const auto &st : ts.orelse) { if (st) st->accept(*this); }
-                    for (const auto &st : ts.finalbody) { if (st) st->accept(*this); }
+                    for (const auto &st: ts.orelse) { if (st) st->accept(*this); }
+                    for (const auto &st: ts.finalbody) { if (st) st->accept(*this); }
                 }
+
                 void visit(const ast::WithStmt &ws) override {
-                    for (const auto &st : ws.body) { if (st) st->accept(*this); }
+                    for (const auto &st: ws.body) { if (st) st->accept(*this); }
                 }
+
                 // Core: detect nested function statements and scan their bodies
                 void visit(const ast::DefStmt &ds) override {
                     if (!ds.func) return;
                     Captures cap{ds.func->name, {}};
                     InnerScan inner{cap.names};
-                    for (const auto &st : ds.func->body) { if (st) st->accept(inner); }
+                    for (const auto &st: ds.func->body) { if (st) st->accept(inner); }
                     if (!cap.names.empty()) results.push_back(std::move(cap));
                     nestedFns.push_back(ds.func.get());
                 }
             } nestedScan;
-            for (const auto &st : func->body) { if (st) st->accept(nestedScan); }
+            for (const auto &st: func->body) { if (st) st->accept(nestedScan); }
             // Emit env allocas for each nested function with captures (hoisted in prologue)
-            for (const auto &cap : nestedScan.results) {
+            for (const auto &cap: nestedScan.results) {
                 // Emit a simple env struct alloca holding pointers to captured variables, if available
                 fnPrologue << "  ; env for function '" << cap.fn << "' captures: ";
-                for (size_t i = 0; i < cap.names.size(); ++i) { if (i) fnPrologue << ", "; fnPrologue << cap.names[i]; }
+                for (size_t i = 0; i < cap.names.size(); ++i) {
+                    if (i) fnPrologue << ", ";
+                    fnPrologue << cap.names[i];
+                }
                 fnPrologue << "\n";
                 std::ostringstream envTy;
                 envTy << "{ ";
-                for (size_t i = 0; i < cap.names.size(); ++i) { if (i) envTy << ", "; envTy << "ptr"; }
+                for (size_t i = 0; i < cap.names.size(); ++i) {
+                    if (i) envTy << ", ";
+                    envTy << "ptr";
+                }
                 envTy << " }";
                 std::ostringstream env;
                 env << "%env." << cap.fn;
@@ -5263,18 +6175,19 @@ namespace pycc::codegen {
                     if (it == slots.end()) continue;
                     std::ostringstream gep;
                     gep << "%t" << temp++;
-                    fnPrologue << "  " << gep.str() << " = getelementptr inbounds " << envTy.str() << ", ptr " << env.str()
-                               << ", i32 0, i32 " << i << "\n";
+                    fnPrologue << "  " << gep.str() << " = getelementptr inbounds " << envTy.str() << ", ptr " << env.
+                            str()
+                            << ", i32 0, i32 " << i << "\n";
                     fnPrologue << "  store ptr " << it->second.ptr << ", ptr " << gep.str() << "\n";
                 }
             }
             // Register nested function signatures so calls can resolve by name
-            for (const auto *nf : nestedScan.nestedFns) {
+            for (const auto *nf: nestedScan.nestedFns) {
                 if (!nf) continue;
                 if (!sigs.contains(nf->name)) {
                     Sig sig;
                     sig.ret = nf->returnType;
-                    for (const auto &p : nf->params) sig.params.push_back(p.type);
+                    for (const auto &p: nf->params) sig.params.push_back(p.type);
                     sigs[nf->name] = std::move(sig);
                 }
             }
@@ -5290,7 +6203,8 @@ namespace pycc::codegen {
                             std::unordered_map<std::string, int> &varMdId_, std::vector<DbgVar> &dbgVars_, int diIntId_,
                             int diBoolId_, int diDoubleId_, int diPtrId_, int diExprId_,
                             bool &usedBoxInt_, bool &usedBoxFloat_, bool &usedBoxBool_)
-                    : ir(ir_), prologue(prologue_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_), eval(std::move(eval_)),
+                    : ir(ir_), prologue(prologue_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_),
+                      eval(std::move(eval_)),
                       retStructTyRef(retStructTy_), tupleElemTysRef(tupleElemTys_), sigs(sigs_),
                       retParamIdxs(retParamIdxs_), subDbgId(subDbgId_), nextDbgId(nextDbgId_), dbgLocs(dbgLocs_),
                       dbgLocKeyToId(dbgLocKeyToId_), varMdId(varMdId_), dbgVars(dbgVars_), diIntId(diIntId_),
@@ -5415,17 +6329,17 @@ namespace pycc::codegen {
                                 if (!rv.s.empty() && rv.s[0] != '%') {
                                     std::ostringstream w2;
                                     w2 << "%t" << temp++;
-                            usedBoxInt = true;
-                            ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << rv.s << ")" << dbg()
-                                    << "\n";
+                                    usedBoxInt = true;
+                                    ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << rv.s << ")" << dbg()
+                                            << "\n";
                                     vptr = w2.str();
                                 } else {
                                     std::ostringstream w, w2;
                                     w << "%t" << temp++;
                                     w2 << "%t" << temp++;
                                     ir << "  " << w.str() << " = sext i32 " << rv.s << " to i64" << dbg() << "\n";
-                            usedBoxInt = true;
-                            ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")" <<
+                                    usedBoxInt = true;
+                                    ir << "  " << w2.str() << " = call ptr @pycc_box_int(i64 " << w.str() << ")" <<
                                             dbg() << "\n";
                                     vptr = w2.str();
                                 }
@@ -5507,8 +6421,9 @@ namespace pycc::codegen {
                     auto val = eval(asg.value.get());
                     // Prefer legacy simple name, else derive name from single-name target
                     std::string varName = asg.target;
-                    if (varName.empty() && asg.targets.size() == 1 && asg.targets[0] && asg.targets[0]->kind == ast::NodeKind::Name) {
-                        varName = static_cast<const ast::Name*>(asg.targets[0].get())->id;
+                    if (varName.empty() && asg.targets.size() == 1 && asg.targets[0] && asg.targets[0]->kind ==
+                        ast::NodeKind::Name) {
+                        varName = static_cast<const ast::Name *>(asg.targets[0].get())->id;
                     }
                     auto it = slots.find(varName);
                     if (it == slots.end()) {
@@ -5516,7 +6431,10 @@ namespace pycc::codegen {
                         if (val.k == ValKind::I32) prologue << "  " << ptr << " = alloca i32\n";
                         else if (val.k == ValKind::I1) prologue << "  " << ptr << " = alloca i1\n";
                         else if (val.k == ValKind::F64) prologue << "  " << ptr << " = alloca double\n";
-                        else { prologue << "  " << ptr << " = alloca ptr\n"; prologue << "  call void @llvm.gcroot(ptr " << ptr << ", ptr null)\n"; }
+                        else {
+                            prologue << "  " << ptr << " = alloca ptr\n";
+                            prologue << "  call void @llvm.gcroot(ptr " << ptr << ", ptr null)\n";
+                        }
                         slots[varName] = Slot{ptr, val.k};
                         it = slots.find(varName);
                         // Emit local variable debug declaration at first definition
@@ -5538,8 +6456,9 @@ namespace pycc::codegen {
                                 ", metadata !" << diExprId << ")\n";
                     }
                     if (it->second.kind != val.k) throw std::runtime_error("assignment type changed for variable");
-                    if (val.k == ValKind::I32) ir << "  store i32 " << val.s << ", ptr " << it->second.ptr << dbg() <<
-                                               "\n";
+                    if (val.k == ValKind::I32)
+                        ir << "  store i32 " << val.s << ", ptr " << it->second.ptr << dbg() <<
+                                "\n";
                     else if (val.k == ValKind::I1)
                         ir << "  store i1 " << val.s << ", ptr " << it->second.ptr << dbg() << "\n";
                     else if (val.k == ValKind::F64)
@@ -5557,7 +6476,8 @@ namespace pycc::codegen {
                         if (asg.value->kind == ast::NodeKind::ListLiteral) { it->second.tag = PtrTag::List; } else if (
                             asg.value->kind == ast::NodeKind::DictLiteral) { it->second.tag = PtrTag::Dict; } else if (
                             asg.value->kind == ast::NodeKind::StringLiteral) { it->second.tag = PtrTag::Str; } else if (
-                            asg.value->kind == ast::NodeKind::BytesLiteral) { it->second.tag = PtrTag::Bytes; } else if (
+                            asg.value->kind == ast::NodeKind::BytesLiteral) { it->second.tag = PtrTag::Bytes; } else if
+                        (
                             asg.value->kind == ast::NodeKind::ObjectLiteral) { it->second.tag = PtrTag::Object; }
                         // Propagate tag from name-to-name assignments
                         else if (asg.value->kind == ast::NodeKind::Name) {
@@ -5575,7 +6495,7 @@ namespace pycc::codegen {
                                 if (cname != nullptr) {
                                     auto itSig = sigs.find(cname->id);
                                     if (itSig != sigs.end()) {
-                                    if (itSig->second.ret ==
+                                        if (itSig->second.ret ==
                                             ast::TypeKind::Str) { it->second.tag = PtrTag::Str; } else if (
                                             itSig->second.ret ==
                                             ast::TypeKind::Bytes) { it->second.tag = PtrTag::Bytes; } else if (
@@ -5606,14 +6526,16 @@ namespace pycc::codegen {
                                     else if (at->attr == "decode") it->second.tag = PtrTag::Str;
                                     else if (at->value && at->value->kind == ast::NodeKind::Name) {
                                         const auto *bn = static_cast<const ast::Name *>(at->value.get());
-                                        if (bn->id == "binascii" && (at->attr == "hexlify" || at->attr == "unhexlify")) {
+                                        if (bn->id == "binascii" && (
+                                                at->attr == "hexlify" || at->attr == "unhexlify")) {
                                             it->second.tag = PtrTag::Bytes;
                                         }
                                         if (bn->id == "json" && at->attr == "dumps") {
                                             it->second.tag = PtrTag::Str;
                                         }
                                         if (bn->id == "collections") {
-                                            if (at->attr == "Counter" || at->attr == "OrderedDict" || at->attr == "ChainMap") {
+                                            if (at->attr == "Counter" || at->attr == "OrderedDict" || at->attr ==
+                                                "ChainMap") {
                                                 it->second.tag = PtrTag::Dict;
                                             }
                                         }
@@ -5679,8 +6601,9 @@ namespace pycc::codegen {
                         }
                     }
                     if (fn.returnType == ast::TypeKind::Tuple) {
-                        if (!r.value || r.value->kind != ast::NodeKind::TupleLiteral) throw std::runtime_error(
-                            "tuple return requires tuple literal");
+                        if (!r.value || r.value->kind != ast::NodeKind::TupleLiteral)
+                            throw std::runtime_error(
+                                "tuple return requires tuple literal");
                         const auto *tup = dynamic_cast<const ast::TupleLiteral *>(r.value.get());
                         if (tupleElemTysRef.empty()) {
                             tupleElemTysRef.reserve(tup->elements.size());
@@ -5974,7 +6897,8 @@ namespace pycc::codegen {
                                                              ? diDoubleId
                                                              : diPtrId;
                             dbgVars.push_back(DbgVar{varId, name, subDbgId, fs.line, fs.col, tyId, 0, false});
-                            prologue << "  call void @llvm.dbg.declare(metadata ptr " << ptr << ", metadata !" << varId <<
+                            prologue << "  call void @llvm.dbg.declare(metadata ptr " << ptr << ", metadata !" << varId
+                                    <<
                                     ", metadata !" << diExprId << ")\n";
                             return ptr;
                         }
@@ -6165,7 +7089,7 @@ namespace pycc::codegen {
                             if (!h->name.empty()) {
                                 std::string ptr = "%" + h->name + ".addr";
                                 // allocate slot (ptr) in prologue
-                        prologue << "  " << ptr << " = alloca ptr\n";
+                                prologue << "  " << ptr << " = alloca ptr\n";
                                 slots[h->name] = Slot{ptr, ValKind::Ptr};
                                 // dbg.declare omitted for brevity (could be added similarly to assigns)
                                 ir << "  store ptr " << excReg.str() << ", ptr " << ptr << dbg() << "\n";
@@ -6325,7 +7249,8 @@ namespace pycc::codegen {
                     bool brReturned = false;
                     for (const auto &st: stmts) {
                         StmtEmitter child{
-                            ir, prologue, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef, sigs, retParamIdxs,
+                            ir, prologue, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef, sigs,
+                            retParamIdxs,
                             subDbgId, nextDbgId, dbgLocs, dbgLocKeyToId, varMdId, dbgVars, diIntId, diBoolId,
                             diDoubleId, diPtrId, diExprId, usedBoxInt, usedBoxFloat, usedBoxBool
                         };
@@ -6342,7 +7267,8 @@ namespace pycc::codegen {
             };
 
             StmtEmitter root{
-                fnBody, fnPrologue, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs, retParamIdxs,
+                fnBody, fnPrologue, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs,
+                retParamIdxs,
                 subDbgId, nextDbgId, dbgLocs, dbgLocKeyToId, varMdId, dbgVars, diIntId, diBoolId, diDoubleId,
                 diPtrId, diExprId, usedBoxInt, usedBoxFloat, usedBoxBool
             };
@@ -6473,7 +7399,9 @@ namespace pycc::codegen {
                 if (p.has_parent_path()) diDir = p.parent_path().string();
                 diFileName = p.filename().string();
             }
-        } catch (...) { /* fall back to defaults */ }
+        } catch (...) {
+            /* fall back to defaults */
+        }
         irStream << "!1 = !DIFile(filename: \"" << diFileName << "\", directory: \"" << diDir << "\")\n";
         // Basic types and DIExpression
         irStream << "!" << diIntId << " = !DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)\n";

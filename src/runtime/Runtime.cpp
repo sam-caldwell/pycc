@@ -157,8 +157,7 @@ static void* alloc_raw(std::size_t size, TypeTag tag) {
   const std::size_t total = sizeof(ObjectHeader) + size;
   unsigned char* mem = nullptr;
   // Try segregated free list first (callers generally hold g_mu)
-  int ci = class_index_for(total);
-  if (ci >= 0) {
+  if (const int ci = class_index_for(total); ci >= 0) {
     // Prefer thread-local cache
     if (!t_free_lists[ci].empty()) {
       ObjectHeader* h = t_free_lists[ci].back(); t_free_lists[ci].pop_back();
@@ -213,7 +212,7 @@ static void mark(ObjectHeader* header);
 // Per-tag mark helpers to keep switch shallow
 static inline void mark_list_body(ObjectHeader* header) {
   auto* base = reinterpret_cast<unsigned char*>(header);
-  auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader));
+  auto const* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader));
   const std::size_t len = payload[0];
   auto* const* items = reinterpret_cast<void* const*>(payload + 2);
   for (std::size_t i = 0; i < len; ++i) {
@@ -225,7 +224,7 @@ static inline void mark_list_body(ObjectHeader* header) {
 
 static inline void mark_object_body(ObjectHeader* header) {
   auto* base = reinterpret_cast<unsigned char*>(header);
-  auto* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader));
+  auto const* payload = reinterpret_cast<std::size_t*>(base + sizeof(ObjectHeader));
   const std::size_t fields = payload[0];
   auto* const* values = reinterpret_cast<void* const*>(payload + 1);
   for (std::size_t i = 0; i < fields; ++i) {
@@ -278,7 +277,7 @@ static void mark_from_roots() {
   for (void* const* slot : g_roots) {
     void* const ptr = *slot;
     if (ptr == nullptr) { continue; }
-    auto* hdr = reinterpret_cast<ObjectHeader*>(reinterpret_cast<unsigned char*>(ptr) - sizeof(ObjectHeader)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast,cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    auto* hdr = reinterpret_cast<ObjectHeader*>(static_cast<unsigned char*>(ptr) - sizeof(ObjectHeader)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast,cppcoreguidelines-pro-bounds-pointer-arithmetic)
     mark(hdr);
   }
 }
@@ -298,7 +297,7 @@ static ObjectHeader* find_object_for_pointer(const void* ptr) {
 }
 
 static void mark_from_remembered_locked() {
-  // g_mu must be held by caller when calling this
+  // g_mu must be held by the caller when calling this
   std::vector<void*> tmp;
   {
     const std::lock_guard<std::mutex> lockGuard(g_rem_mu);
@@ -313,14 +312,13 @@ static void mark_from_remembered_locked() {
 static std::optional<std::pair<void*, void*>> get_stack_bounds_pair() {
   // Current thread only
 #ifdef __APPLE__
-  pthread_t self = pthread_self();
+  const pthread_t self = pthread_self();
   void* stackaddr = pthread_get_stackaddr_np(self);
-  const size_t stacksize = pthread_get_stacksize_np(self);
-  if (stackaddr != nullptr && stacksize > 0U) {
+  if (const size_t stacksize = pthread_get_stacksize_np(self); stackaddr != nullptr && stacksize > 0U) {
     // On macOS, stackaddr is the HIGH address, stack grows down
-    const std::uintptr_t highAddr = reinterpret_cast<std::uintptr_t>(stackaddr);
+    const auto highAddr = reinterpret_cast<std::uintptr_t>(stackaddr);
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    const std::uintptr_t lowAddr = reinterpret_cast<std::uintptr_t>(static_cast<unsigned char*>(stackaddr) - stacksize);
+    const auto lowAddr = reinterpret_cast<std::uintptr_t>(static_cast<unsigned char*>(stackaddr) - stacksize);
     return std::make_pair(reinterpret_cast<void*>(lowAddr), reinterpret_cast<void*>(highAddr));
   }
   return std::nullopt;
@@ -3641,9 +3639,12 @@ static void sift_down(void* lst, std::size_t idx) {
   }
 }
 
-void heapq_heappush(void* lst, void* value) {
-  if (!lst) return;
-  list_push_slot(&lst, value);
+void heapq_heappush(void* slot, void* value) {
+  if (!slot) return;
+  auto** list_slot = reinterpret_cast<void**>(slot);
+  void* lst = (list_slot ? *list_slot : nullptr);
+  list_push_slot(list_slot, value);
+  lst = (list_slot ? *list_slot : nullptr);
   sift_up(lst, list_len(lst) - 1);
 }
 
