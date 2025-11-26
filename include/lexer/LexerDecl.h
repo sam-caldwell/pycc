@@ -52,7 +52,7 @@ private:
     // helpers
     bool ensure(size_t lookahead); // ensure buffer has at least k+1 tokens
     bool refill(); // append next token to buffer
-    bool readNextLine(State& st); // load next line into state
+    bool readNextLine(State& state); // load next line into state
     bool atEOF() const; // no more inputs
     bool emitIndentTokens(State& state, std::vector<Token>& out, int baseCol);
 
