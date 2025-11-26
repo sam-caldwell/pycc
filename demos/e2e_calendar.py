@@ -1,12 +1,12 @@
-# demos/e2e_calendar.py
 def main() -> int:
     import calendar, io
-    # Check leap-year logic
-    ok1 = (calendar.isleap(2024) == 1) and (calendar.isleap(2023) == 0)
-    # Check monthrange returns [weekday_mon0, ndays]
+    ok = True
+    if not (calendar.isleap(2000) == 1 and calendar.isleap(1900) == 0 and calendar.isleap(2024) == 1):
+        ok = False
     mr = calendar.monthrange(2024, 2)
-    # Only assert the shape to avoid boxed-int comparisons in this subset.
-    ok2 = (len(mr) == 2)
-    ok = ok1 and ok2
+    # Verify days in Feb 2024 (leap year). Weekday varies by algorithm, so just check days.
+    if not (isinstance(mr, list) and len(mr) == 2 and mr[1] == 29):
+        ok = False
     io.write_stdout('CAL_OK\n' if ok else 'CAL_BAD\n')
     return 0 if ok else 1
+
