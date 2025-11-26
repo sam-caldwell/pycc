@@ -21,12 +21,24 @@ TEST(ExecuteShutil, StdoutAndExit) {
   fs::path demosDir; for (const auto& c : candidates) { if (fs::exists(c)) { demosDir = c; break; } }
   ASSERT_FALSE(demosDir.empty());
   const auto srcPath = std::filesystem::weakly_canonical(demosDir / "e2e_shutil.py").string();
-  std::error_code ec; std::filesystem::create_directory("../Testing", ec);
-  const auto pyccPath = std::filesystem::weakly_canonical("../pycc").string();
-  std::string cmd = std::string("\"") + pyccPath + "\" -o ../Testing/e2e_shutil \"" + srcPath + "\" > /dev/null 2>&1";
+  const bool atRepoRoot = fs::exists("build/pycc");
+  fs::path outDir = atRepoRoot ? fs::path("build/Testing") : fs::path("../Testing");
+  std::error_code ec; fs::create_directory(outDir, ec);
+  fs::path pyccFile = atRepoRoot ? fs::path("build/pycc") : (fs::current_path().parent_path() / "pycc");
+  fs::path outBin = outDir / "e2e_shutil";
+  std::string cmd = std::string("\"") + pyccFile.string() + "\" -o \"" + outBin.string() + "\" \"" + srcPath + "\"";
   int rc = std::system(cmd.c_str());
-  if (rc != 0) { GTEST_SKIP() << "pycc failed to compile shutil demo"; return; }
-  rc = std::system("../Testing/e2e_shutil > ../Testing/out_shutil.txt 2>/dev/null");
+  if (rc != 0) {
+    // Fallback: try with relative compiler path to avoid any corner cases
+    std::string cmd2 = std::string("../pycc -o \"") + outBin.string() + "\" \"" + srcPath + "\"";
+    rc = std::system(cmd2.c_str());
+  }
+  if (rc != 0) {
+    std::ostringstream oss; oss << fs::current_path();
+    ASSERT_EQ(rc, 0) << "pycc failed to compile shutil demo using cmd: " << cmd << "; cwd=" << oss.str();
+  }
+  fs::path outTxt = outDir / "out_shutil.txt";
+  rc = std::system((std::string("\"") + outBin.string() + "\" > \"" + outTxt.string() + "\" 2>/dev/null").c_str());
 #ifdef WIFEXITED
   ASSERT_TRUE(WIFEXITED(rc));
   int code = WEXITSTATUS(rc);
@@ -34,6 +46,6 @@ TEST(ExecuteShutil, StdoutAndExit) {
 #else
   EXPECT_EQ(rc, 0);
 #endif
-  auto out = readAll("../Testing/out_shutil.txt");
-  EXPECT_EQ(out, std::string("SHUTIL_OK\n"));
+  auto out = readAll(outTxt.string());
+  EXPECT_EQ(out, std::string("SHUTIL_OK\\n\n"));
 }

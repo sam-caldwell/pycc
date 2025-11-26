@@ -17,8 +17,7 @@ def main() -> int:
     c2 = io.read_file(dst2)
     ok = ok and (c1 == 'Hello Shutil!') and (c2 == 'Hello Shutil!')
     # negative case: copying missing file returns False
-    bad = shutil.copyfile(base + '/missing.txt', base + '/nowhere.txt')
-    ok = ok and (not bad)
+    ok = ok and (not shutil.copyfile(base + '/missing.txt', base + '/nowhere.txt'))
     # report
     if ok:
         io.write_stdout('SHUTIL_OK\n')

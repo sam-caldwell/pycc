@@ -994,6 +994,10 @@ namespace pycc::codegen {
             nextDbgId++;
             irStream << "entry:\n";
 
+            // Per-function IR buffers: prologue (allocas/dbg.decl) and body (everything else)
+            std::ostringstream fnPrologue;
+            std::ostringstream fnBody;
+
             enum class ValKind : std::uint8_t { I32, I1, F64, Ptr };
             enum class PtrTag : std::uint8_t { Unknown, Str, Bytes, List, Dict, Object };
             struct Slot {
@@ -1020,28 +1024,28 @@ namespace pycc::codegen {
                 return id;
             };
 
-            // Parameter allocas + debug
+            // Parameter allocas + debug (always hoisted in prologue)
             std::unordered_map<std::string, int> varMdId; // per-function var->!DILocalVariable id
             for (size_t pidx = 0; pidx < func->params.size(); ++pidx) {
                 const auto &param = func->params[pidx];
                 const std::string ptr = "%" + param.name + ".addr";
                 if (param.type == ast::TypeKind::Int) {
-                    irStream << "  " << ptr << " = alloca i32\n";
-                    irStream << "  store i32 %" << param.name << ", ptr " << ptr << "\n";
+                    fnPrologue << "  " << ptr << " = alloca i32\n";
+                    fnPrologue << "  store i32 %" << param.name << ", ptr " << ptr << "\n";
                     slots[param.name] = Slot{ptr, ValKind::I32};
                 } else if (param.type == ast::TypeKind::Bool) {
-                    irStream << "  " << ptr << " = alloca i1\n";
-                    irStream << "  store i1 %" << param.name << ", ptr " << ptr << "\n";
+                    fnPrologue << "  " << ptr << " = alloca i1\n";
+                    fnPrologue << "  store i1 %" << param.name << ", ptr " << ptr << "\n";
                     slots[param.name] = Slot{ptr, ValKind::I1};
                 } else if (param.type == ast::TypeKind::Float) {
-                    irStream << "  " << ptr << " = alloca double\n";
-                    irStream << "  store double %" << param.name << ", ptr " << ptr << "\n";
+                    fnPrologue << "  " << ptr << " = alloca double\n";
+                    fnPrologue << "  store double %" << param.name << ", ptr " << ptr << "\n";
                     slots[param.name] = Slot{ptr, ValKind::F64};
                 } else if (param.type == ast::TypeKind::Str || param.type == ast::TypeKind::Bytes) {
-                    irStream << "  " << ptr << " = alloca ptr\n";
-                    irStream << "  store ptr %" << param.name << ", ptr " << ptr << "\n";
-                    irStream << "  call void @pycc_gc_write_barrier(ptr " << ptr << ", ptr %" << param.name << ")\n";
-                    irStream << "  call void @llvm.gcroot(ptr " << ptr << ", ptr null)\n";
+                    fnPrologue << "  " << ptr << " = alloca ptr\n";
+                    fnPrologue << "  store ptr %" << param.name << ", ptr " << ptr << "\n";
+                    fnPrologue << "  call void @pycc_gc_write_barrier(ptr " << ptr << ", ptr %" << param.name << ")\n";
+                    fnPrologue << "  call void @llvm.gcroot(ptr " << ptr << ", ptr null)\n";
                     Slot s{ptr, ValKind::Ptr};
                     s.tag = (param.type == ast::TypeKind::Str) ? PtrTag::Str : PtrTag::Bytes;
                     slots[param.name] = s;
@@ -1062,10 +1066,10 @@ namespace pycc::codegen {
                 dbgVars.push_back(DbgVar{
                     varId, param.name, subDbgId, func->line, func->col, tyId, static_cast<int>(pidx) + 1, true
                 });
-                irStream << "  call void @llvm.dbg.declare(metadata ptr " << ptr
+                fnPrologue << "  call void @llvm.dbg.declare(metadata ptr " << ptr
                         << ", metadata !" << varId << ", metadata !" << diExprId << ")";
-                if (locId > 0) irStream << " , !dbg !" << locId;
-                irStream << "\n";
+                if (locId > 0) fnPrologue << " , !dbg !" << locId;
+                fnPrologue << "\n";
             }
 
             struct Value {
@@ -5111,7 +5115,8 @@ namespace pycc::codegen {
 
             auto evalExpr = [&](const ast::Expr *e) -> Value {
                 if (!e) throw std::runtime_error("null expr");
-                ExpressionLowerer V{irStream, temp, slots, sigs, retParamIdxs, spawnWrappers, strGlobals, hash64, &nestedEnv,
+                // Emit expression IR into the function body stream to preserve ordering
+                ExpressionLowerer V{fnBody, temp, slots, sigs, retParamIdxs, spawnWrappers, strGlobals, hash64, &nestedEnv,
                                      usedBoxInt, usedBoxFloat, usedBoxBool};
                 return V.run(*e);
             };
@@ -5226,12 +5231,12 @@ namespace pycc::codegen {
                 }
             } nestedScan;
             for (const auto &st : func->body) { if (st) st->accept(nestedScan); }
-            // Emit env allocas for each nested function with captures
+            // Emit env allocas for each nested function with captures (hoisted in prologue)
             for (const auto &cap : nestedScan.results) {
                 // Emit a simple env struct alloca holding pointers to captured variables, if available
-                irStream << "  ; env for function '" << cap.fn << "' captures: ";
-                for (size_t i = 0; i < cap.names.size(); ++i) { if (i) irStream << ", "; irStream << cap.names[i]; }
-                irStream << "\n";
+                fnPrologue << "  ; env for function '" << cap.fn << "' captures: ";
+                for (size_t i = 0; i < cap.names.size(); ++i) { if (i) fnPrologue << ", "; fnPrologue << cap.names[i]; }
+                fnPrologue << "\n";
                 std::ostringstream envTy;
                 envTy << "{ ";
                 for (size_t i = 0; i < cap.names.size(); ++i) { if (i) envTy << ", "; envTy << "ptr"; }
@@ -5239,15 +5244,15 @@ namespace pycc::codegen {
                 std::ostringstream env;
                 env << "%env." << cap.fn;
                 nestedEnv[cap.fn] = env.str();
-                irStream << "  " << env.str() << " = alloca " << envTy.str() << "\n";
+                fnPrologue << "  " << env.str() << " = alloca " << envTy.str() << "\n";
                 for (size_t i = 0; i < cap.names.size(); ++i) {
                     auto it = slots.find(cap.names[i]);
                     if (it == slots.end()) continue;
                     std::ostringstream gep;
                     gep << "%t" << temp++;
-                    irStream << "  " << gep.str() << " = getelementptr inbounds " << envTy.str() << ", ptr " << env.str()
-                            << ", i32 0, i32 " << i << "\n";
-                    irStream << "  store ptr " << it->second.ptr << ", ptr " << gep.str() << "\n";
+                    fnPrologue << "  " << gep.str() << " = getelementptr inbounds " << envTy.str() << ", ptr " << env.str()
+                               << ", i32 0, i32 " << i << "\n";
+                    fnPrologue << "  store ptr " << it->second.ptr << ", ptr " << gep.str() << "\n";
                 }
             }
             // Register nested function signatures so calls can resolve by name
@@ -5262,7 +5267,7 @@ namespace pycc::codegen {
             }
 
             struct StmtEmitter : public ast::VisitorBase {
-                StmtEmitter(std::ostringstream &ir_, int &temp_, int &ifCounter_,
+                StmtEmitter(std::ostringstream &ir_, std::ostringstream &prologue_, int &temp_, int &ifCounter_,
                             std::unordered_map<std::string, Slot> &slots_, const ast::FunctionDef &fn_,
                             std::function<Value(const ast::Expr *)> eval_, std::string &retStructTy_,
                             std::vector<std::string> &tupleElemTys_, const std::unordered_map<std::string, Sig> &sigs_,
@@ -5272,7 +5277,7 @@ namespace pycc::codegen {
                             std::unordered_map<std::string, int> &varMdId_, std::vector<DbgVar> &dbgVars_, int diIntId_,
                             int diBoolId_, int diDoubleId_, int diPtrId_, int diExprId_,
                             bool &usedBoxInt_, bool &usedBoxFloat_, bool &usedBoxBool_)
-                    : ir(ir_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_), eval(std::move(eval_)),
+                    : ir(ir_), prologue(prologue_), temp(temp_), ifCounter(ifCounter_), slots(slots_), fn(fn_), eval(std::move(eval_)),
                       retStructTyRef(retStructTy_), tupleElemTysRef(tupleElemTys_), sigs(sigs_),
                       retParamIdxs(retParamIdxs_), subDbgId(subDbgId_), nextDbgId(nextDbgId_), dbgLocs(dbgLocs_),
                       dbgLocKeyToId(dbgLocKeyToId_), varMdId(varMdId_), dbgVars(dbgVars_), diIntId(diIntId_),
@@ -5281,6 +5286,8 @@ namespace pycc::codegen {
                 }
 
                 std::ostringstream &ir;
+                // Prologue stream for hoisted allocas/dbg.declare
+                std::ostringstream &prologue;
                 int &temp;
                 int &ifCounter;
                 std::unordered_map<std::string, Slot> &slots;
@@ -5493,13 +5500,10 @@ namespace pycc::codegen {
                     auto it = slots.find(varName);
                     if (it == slots.end()) {
                         std::string ptr = "%" + varName + ".addr";
-                        if (val.k == ValKind::I32) ir << "  " << ptr << " = alloca i32\n";
-                        else if (val.k == ValKind::I1) ir << "  " << ptr << " = alloca i1\n";
-                        else if (val.k == ValKind::F64) ir << "  " << ptr << " = alloca double\n";
-                        else {
-                            ir << "  " << ptr << " = alloca ptr\n";
-                            ir << "  call void @llvm.gcroot(ptr " << ptr << ", ptr null)\n";
-                        }
+                        if (val.k == ValKind::I32) prologue << "  " << ptr << " = alloca i32\n";
+                        else if (val.k == ValKind::I1) prologue << "  " << ptr << " = alloca i1\n";
+                        else if (val.k == ValKind::F64) prologue << "  " << ptr << " = alloca double\n";
+                        else { prologue << "  " << ptr << " = alloca ptr\n"; prologue << "  call void @llvm.gcroot(ptr " << ptr << ", ptr null)\n"; }
                         slots[varName] = Slot{ptr, val.k};
                         it = slots.find(varName);
                         // Emit local variable debug declaration at first definition
@@ -5517,8 +5521,8 @@ namespace pycc::codegen {
                                                          ? diDoubleId
                                                          : diPtrId;
                         dbgVars.push_back(DbgVar{varId, varName, subDbgId, asg.line, asg.col, tyId, 0, false});
-                        ir << "  call void @llvm.dbg.declare(metadata ptr " << ptr << ", metadata !" << varId <<
-                                ", metadata !" << diExprId << ")" << dbg() << "\n";
+                        prologue << "  call void @llvm.dbg.declare(metadata ptr " << ptr << ", metadata !" << varId <<
+                                ", metadata !" << diExprId << ")\n";
                     }
                     if (it->second.kind != val.k) throw std::runtime_error("assignment type changed for variable");
                     if (val.k == ValKind::I32) ir << "  store i32 " << val.s << ", ptr " << it->second.ptr << dbg() <<
@@ -5929,10 +5933,10 @@ namespace pycc::codegen {
                         auto it = slots.find(name);
                         if (it == slots.end()) {
                             std::string ptr = "%" + name + ".addr";
-                            if (kind == ValKind::I32) ir << "  " << ptr << " = alloca i32\n";
-                            else if (kind == ValKind::I1) ir << "  " << ptr << " = alloca i1\n";
-                            else if (kind == ValKind::F64) ir << "  " << ptr << " = alloca double\n";
-                            else ir << "  " << ptr << " = alloca ptr\n";
+                            if (kind == ValKind::I32) prologue << "  " << ptr << " = alloca i32\n";
+                            else if (kind == ValKind::I1) prologue << "  " << ptr << " = alloca i1\n";
+                            else if (kind == ValKind::F64) prologue << "  " << ptr << " = alloca double\n";
+                            else prologue << "  " << ptr << " = alloca ptr\n";
                             slots[name] = Slot{ptr, kind};
                             // Debug declare for loop-target variable on first definition
                             int varId = 0;
@@ -5949,8 +5953,8 @@ namespace pycc::codegen {
                                                              ? diDoubleId
                                                              : diPtrId;
                             dbgVars.push_back(DbgVar{varId, name, subDbgId, fs.line, fs.col, tyId, 0, false});
-                            ir << "  call void @llvm.dbg.declare(metadata ptr " << ptr << ", metadata !" << varId <<
-                                    ", metadata !" << diExprId << ")" << dbg() << "\n";
+                            prologue << "  call void @llvm.dbg.declare(metadata ptr " << ptr << ", metadata !" << varId <<
+                                    ", metadata !" << diExprId << ")\n";
                             return ptr;
                         }
                         return it->second.ptr;
@@ -6139,8 +6143,8 @@ namespace pycc::codegen {
                             // Bind name if provided
                             if (!h->name.empty()) {
                                 std::string ptr = "%" + h->name + ".addr";
-                                // allocate slot (ptr)
-                                ir << "  " << ptr << " = alloca ptr\n";
+                                // allocate slot (ptr) in prologue
+                        prologue << "  " << ptr << " = alloca ptr\n";
                                 slots[h->name] = Slot{ptr, ValKind::Ptr};
                                 // dbg.declare omitted for brevity (could be added similarly to assigns)
                                 ir << "  store ptr " << excReg.str() << ", ptr " << ptr << dbg() << "\n";
@@ -6168,7 +6172,7 @@ namespace pycc::codegen {
                         }
                         if (!h->name.empty()) {
                             std::string ptr = "%" + h->name + ".addr";
-                            ir << "  " << ptr << " = alloca ptr\n";
+                            prologue << "  " << ptr << " = alloca ptr\n";
                             slots[h->name] = Slot{ptr, ValKind::Ptr};
                             ir << "  store ptr " << excReg.str() << ", ptr " << ptr << dbg() << "\n";
                             {
@@ -6300,7 +6304,7 @@ namespace pycc::codegen {
                     bool brReturned = false;
                     for (const auto &st: stmts) {
                         StmtEmitter child{
-                            ir, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef, sigs, retParamIdxs,
+                            ir, prologue, temp, ifCounter, slots, fn, eval, retStructTyRef, tupleElemTysRef, sigs, retParamIdxs,
                             subDbgId, nextDbgId, dbgLocs, dbgLocKeyToId, varMdId, dbgVars, diIntId, diBoolId,
                             diDoubleId, diPtrId, diExprId, usedBoxInt, usedBoxFloat, usedBoxBool
                         };
@@ -6317,23 +6321,23 @@ namespace pycc::codegen {
             };
 
             StmtEmitter root{
-                irStream, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs, retParamIdxs,
+                fnBody, fnPrologue, temp, ifCounter, slots, *func, evalExpr, retStructTy, tupleElemTys, sigs, retParamIdxs,
                 subDbgId, nextDbgId, dbgLocs, dbgLocKeyToId, varMdId, dbgVars, diIntId, diBoolId, diDoubleId,
                 diPtrId, diExprId, usedBoxInt, usedBoxFloat, usedBoxBool
             };
             returned = root.emitStmtList(func->body);
             if (!returned) {
                 // default return based on function type
-                if (func->returnType == ast::TypeKind::Int) irStream << "  ret i32 0\n";
-                else if (func->returnType == ast::TypeKind::Bool) irStream << "  ret i1 false\n";
-                else if (func->returnType == ast::TypeKind::Float) irStream << "  ret double 0.0\n";
-                else if (func->returnType == ast::TypeKind::Str) irStream << "  ret ptr null\n";
+                if (func->returnType == ast::TypeKind::Int) fnBody << "  ret i32 0\n";
+                else if (func->returnType == ast::TypeKind::Bool) fnBody << "  ret i1 false\n";
+                else if (func->returnType == ast::TypeKind::Float) fnBody << "  ret double 0.0\n";
+                else if (func->returnType == ast::TypeKind::Str) fnBody << "  ret ptr null\n";
                 else if (func->returnType == ast::TypeKind::Tuple) {
                     if (retStructTy.empty()) { retStructTy = "{ i32, i32 }"; }
                     // Build zero aggregate of appropriate arity with per-element types
                     std::ostringstream agg;
                     agg << "%t" << temp++;
-                    irStream << "  " << agg.str() << " = undef " << retStructTy << "\n";
+                    fnBody << "  " << agg.str() << " = undef " << retStructTy << "\n";
                     std::string cur = agg.str();
                     // Count elements in struct by commas
                     size_t elems = 1;
@@ -6347,13 +6351,16 @@ namespace pycc::codegen {
                                                : (ety == "i1")
                                                      ? std::string("i1 false")
                                                      : std::string("i32 0");
-                        irStream << "  " << nx.str() << " = insertvalue " << retStructTy << " " << cur << ", " << zero
+                        fnBody << "  " << nx.str() << " = insertvalue " << retStructTy << " " << cur << ", " << zero
                                 << ", " << idx << "\n";
                         cur = nx.str();
                     }
-                    irStream << "  ret " << retStructTy << " " << cur << "\n";
+                    fnBody << "  ret " << retStructTy << " " << cur << "\n";
                 }
             }
+            // Flush function prologue + body
+            irStream << fnPrologue.str();
+            irStream << fnBody.str();
             irStream << "}\n\n";
         }
 
