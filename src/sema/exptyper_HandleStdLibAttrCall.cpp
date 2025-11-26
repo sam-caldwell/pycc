@@ -332,6 +332,62 @@ namespace pycc::sema::detail {
             }
             return false;
         }
+        if (base && base->id == "datetime") {
+            // datetime subset: now()/utcnow() -> str; fromtimestamp(x)/utcfromtimestamp(x) -> str (x numeric)
+            auto setRet = [&](ast::TypeKind k) {
+                out = k; outSet = TypeEnv::maskForKind(k);
+                const_cast<ast::Call &>(callNode).setType(out);
+            };
+            if (fn == "now" || fn == "utcnow") {
+                if (!callNode.args.empty()) { addDiag(diags, std::string("datetime.") + fn + "() takes 0 args", &callNode); ok=false; return true; }
+                setRet(ast::TypeKind::Str);
+                return true;
+            }
+            if (fn == "fromtimestamp" || fn == "utcfromtimestamp") {
+                if (callNode.args.size() != 1) { addDiag(diags, std::string("datetime.") + fn + "() takes 1 arg", &callNode); ok=false; return true; }
+                ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers};
+                callNode.args[0]->accept(a0);
+                if (!a0.ok) { ok=false; return true; }
+                const uint32_t num = TypeEnv::maskForKind(ast::TypeKind::Int) |
+                                     TypeEnv::maskForKind(ast::TypeKind::Bool) |
+                                     TypeEnv::maskForKind(ast::TypeKind::Float);
+                if ((maskOf(a0.out, a0.outSet) & ~num) != 0U) { addDiag(diags, std::string("datetime.") + fn + ": numeric required", callNode.args[0].get()); ok=false; return true; }
+                setRet(ast::TypeKind::Str);
+                return true;
+            }
+            return false;
+        }
+        if (base && base->id == "time") {
+            // time module subset: time()/monotonic()/perf_counter()/process_time() -> float
+            // ns variants -> int; sleep(x) -> NoneType where x is numeric
+            auto setRet = [&](ast::TypeKind k) {
+                out = k; outSet = TypeEnv::maskForKind(k);
+                const_cast<ast::Call &>(callNode).setType(out);
+            };
+            if (fn == "time" || fn == "monotonic" || fn == "perf_counter" || fn == "process_time") {
+                if (!callNode.args.empty()) { addDiag(diags, std::string("time.") + fn + "() takes 0 args", &callNode); ok=false; return true; }
+                setRet(ast::TypeKind::Float);
+                return true;
+            }
+            if (fn == "time_ns" || fn == "monotonic_ns" || fn == "perf_counter_ns") {
+                if (!callNode.args.empty()) { addDiag(diags, std::string("time.") + fn + "() takes 0 args", &callNode); ok=false; return true; }
+                setRet(ast::TypeKind::Int);
+                return true;
+            }
+            if (fn == "sleep") {
+                if (callNode.args.size() != 1) { addDiag(diags, "time.sleep() takes 1 arg", &callNode); ok=false; return true; }
+                ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers};
+                callNode.args[0]->accept(a0);
+                if (!a0.ok) { ok=false; return true; }
+                const uint32_t num = TypeEnv::maskForKind(ast::TypeKind::Int) |
+                                     TypeEnv::maskForKind(ast::TypeKind::Bool) |
+                                     TypeEnv::maskForKind(ast::TypeKind::Float);
+                if ((maskOf(a0.out, a0.outSet) & ~num) != 0U) { addDiag(diags, "time.sleep: numeric required", callNode.args[0].get()); ok=false; return true; }
+                setRet(ast::TypeKind::NoneType);
+                return true;
+            }
+            return false;
+        }
         if (base && base->id == "glob") {
             if (fn == "glob" || fn == "iglob") {
                 if (callNode.args.size() != 1) {
@@ -368,6 +424,206 @@ namespace pycc::sema::detail {
                 outSet = TypeEnv::maskForKind(out);
                 const_cast<ast::Call &>(callNode).setType(out);
                 return true;
+            }
+            return false;
+        }
+        if (base && base->id == "collections") {
+            // collections subset: Counter(list)->Dict; OrderedDict(list)->Dict; ChainMap(list_of_dicts)->Dict
+            // defaultdict(default_value)->opaque (use Dict kind); defaultdict_get(dd,key)->Str (subset); defaultdict_set(dd,key,value)->NoneType
+            auto setRet = [&](ast::TypeKind k){ out=k; outSet=TypeEnv::maskForKind(k); const_cast<ast::Call&>(callNode).setType(out); };
+            if (fn == "Counter" || fn == "OrderedDict" || fn == "ChainMap") {
+                if (callNode.args.size() != 1) { addDiag(diags, std::string("collections.") + fn + "() takes 1 arg", &callNode); ok=false; return true; }
+                ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(a0);
+                if (!a0.ok) { ok=false; return true; }
+                // Accept any pointer-like iterable/dicts in this subset
+                setRet(ast::TypeKind::Dict);
+                return true;
+            }
+            if (fn == "defaultdict") {
+                if (callNode.args.size() != 1) { addDiag(diags, "collections.defaultdict() takes 1 arg", &callNode); ok=false; return true; }
+                ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(a0);
+                if (!a0.ok) { ok=false; return true; }
+                setRet(ast::TypeKind::Dict);
+                return true;
+            }
+            if (fn == "defaultdict_get") {
+                if (callNode.args.size() != 2) { addDiag(diags, "collections.defaultdict_get() takes 2 args", &callNode); ok=false; return true; }
+                ExpressionTyper d{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[0]->accept(d);
+                ExpressionTyper k{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[1]->accept(k);
+                if (!d.ok || !k.ok) { ok=false; return true; }
+                setRet(ast::TypeKind::Str);
+                return true;
+            }
+            if (fn == "defaultdict_set") {
+                if (callNode.args.size() != 3) { addDiag(diags, "collections.defaultdict_set() takes 3 args", &callNode); ok=false; return true; }
+                ExpressionTyper d{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[0]->accept(d);
+                ExpressionTyper k{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[1]->accept(k);
+                ExpressionTyper v{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[2]->accept(v);
+                if (!d.ok || !k.ok || !v.ok) { ok=false; return true; }
+                setRet(ast::TypeKind::NoneType);
+                return true;
+            }
+            return false;
+        }
+        if (base && base->id == "pprint") {
+            if (fn == "pformat") {
+                if (callNode.args.size() != 1) { addDiag(diags, "pprint.pformat() takes 1 arg", &callNode); ok=false; return true; }
+                ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(a0);
+                if (!a0.ok) { ok=false; return true; }
+                out = ast::TypeKind::Str; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true;
+            }
+            return false;
+        }
+        if (base && base->id == "__future__") {
+            // __future__.feature() -> bool (i1); 0 args only
+            if (!callNode.args.empty()) { addDiag(diags, "__future__.feature() takes 0 args", &callNode); ok=false; return true; }
+            out = ast::TypeKind::Bool; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true;
+        }
+        if (base && base->id == "_abc") {
+            auto setRet = [&](ast::TypeKind k){ out=k; outSet=TypeEnv::maskForKind(k); const_cast<ast::Call&>(callNode).setType(out); };
+            const std::string &f = fn;
+            if (f == "get_cache_token") {
+                if (!callNode.args.empty()) { addDiag(diags, "_abc.get_cache_token() takes 0 args", &callNode); ok=false; return true; }
+                setRet(ast::TypeKind::Int); return true;
+            }
+            if (f == "register" || f == "is_registered") {
+                if (callNode.args.size() != 2) { addDiag(diags, std::string("_abc.") + f + "() takes 2 args", &callNode); ok=false; return true; }
+                ExpressionTyper a0{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[0]->accept(a0);
+                ExpressionTyper a1{env, sigs, retParamIdxs, diags, polyTargets, outers}; callNode.args[1]->accept(a1);
+                if (!a0.ok || !a1.ok) { ok=false; return true; }
+                const uint32_t strMask = TypeEnv::maskForKind(ast::TypeKind::Str);
+                if ((maskOf(a0.out,a0.outSet)&~strMask)!=0U || (maskOf(a1.out,a1.outSet)&~strMask)!=0U) {
+                    addDiag(diags, std::string("_abc.") + f + ": args must be str", &callNode); ok=false; return true;
+                }
+                setRet(ast::TypeKind::Bool); return true;
+            }
+            if (f == "invalidate_cache" || f == "reset") {
+                if (!callNode.args.empty()) { addDiag(diags, std::string("_abc.") + f + "() takes 0 args", &callNode); ok=false; return true; }
+                setRet(ast::TypeKind::NoneType); return true;
+            }
+            return false;
+        }
+        if (base && base->id == "argparse") {
+            auto setRet = [&](ast::TypeKind k){ out=k; outSet=TypeEnv::maskForKind(k); const_cast<ast::Call&>(callNode).setType(out); };
+            if (fn == "ArgumentParser") {
+                if (!callNode.args.empty()) { addDiag(diags, "argparse.ArgumentParser() takes 0 args", &callNode); ok=false; return true; }
+                // Treat parser as opaque dict-like object
+                setRet(ast::TypeKind::Dict); return true;
+            }
+            if (fn == "add_argument") {
+                if (callNode.args.size() != 3) { addDiag(diags, "argparse.add_argument() takes 3 args", &callNode); ok=false; return true; }
+                // name and action must be str
+                ExpressionTyper n{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[1]->accept(n);
+                ExpressionTyper a{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[2]->accept(a);
+                if (!n.ok || !a.ok) { ok=false; return true; }
+                const uint32_t strMask = TypeEnv::maskForKind(ast::TypeKind::Str);
+                if ((maskOf(n.out,n.outSet)&~strMask)!=0U || (maskOf(a.out,a.outSet)&~strMask)!=0U) { addDiag(diags, "argparse.add_argument: name/action must be str", &callNode); ok=false; return true; }
+                setRet(ast::TypeKind::NoneType); return true;
+            }
+            if (fn == "parse_args") {
+                if (callNode.args.size() != 2) { addDiag(diags, "argparse.parse_args() takes 2 args", &callNode); ok=false; return true; }
+                ExpressionTyper lst{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[1]->accept(lst);
+                if (!lst.ok) { ok=false; return true; }
+                const uint32_t listMask = TypeEnv::maskForKind(ast::TypeKind::List);
+                if ((maskOf(lst.out,lst.outSet)&~listMask)!=0U && callNode.args[1]->kind != ast::NodeKind::ListLiteral) { addDiag(diags, "argparse.parse_args: second arg must be list", &callNode); ok=false; return true; }
+                setRet(ast::TypeKind::Dict); return true;
+            }
+            return false;
+        }
+        if (base && base->id == "array") {
+            auto setRet = [&](ast::TypeKind k){ out=k; outSet=TypeEnv::maskForKind(k); const_cast<ast::Call&>(callNode).setType(out); };
+            if (fn == "array") {
+                if (!(callNode.args.size() == 1 || callNode.args.size() == 2)) { addDiag(diags, "array.array() takes 1 or 2 args", &callNode); ok=false; return true; }
+                ExpressionTyper tc{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[0]->accept(tc);
+                if (!tc.ok) { ok=false; return true; }
+                const uint32_t strMask = TypeEnv::maskForKind(ast::TypeKind::Str);
+                if ((maskOf(tc.out,tc.outSet)&~strMask)!=0U && callNode.args[0]->kind != ast::NodeKind::StringLiteral) { addDiag(diags, "array.array: typecode must be str", callNode.args[0].get()); ok=false; return true; }
+                if (callNode.args.size() == 2) {
+                    ExpressionTyper init{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[1]->accept(init);
+                    if (!init.ok) { ok=false; return true; }
+                    const uint32_t listMask = TypeEnv::maskForKind(ast::TypeKind::List);
+                    if ((maskOf(init.out,init.outSet)&~listMask)!=0U && callNode.args[1]->kind != ast::NodeKind::ListLiteral) { addDiag(diags, "array.array: initializer must be list", callNode.args[1].get()); ok=false; return true; }
+                }
+                // Opaque array object: treat as Dict-like opaque
+                setRet(ast::TypeKind::Dict); return true;
+            }
+            if (fn == "append") {
+                if (callNode.args.size() != 2) { addDiag(diags, "array.append() takes 2 args", &callNode); ok=false; return true; }
+                ExpressionTyper v{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[1]->accept(v);
+                if (!v.ok) { ok=false; return true; }
+                const uint32_t num = TypeEnv::maskForKind(ast::TypeKind::Int)|TypeEnv::maskForKind(ast::TypeKind::Bool)|TypeEnv::maskForKind(ast::TypeKind::Float);
+                if ((maskOf(v.out,v.outSet)&~num)!=0U && callNode.args[1]->kind != ast::NodeKind::IntLiteral && callNode.args[1]->kind != ast::NodeKind::FloatLiteral) { addDiag(diags, "array.append: numeric value required", callNode.args[1].get()); ok=false; return true; }
+                setRet(ast::TypeKind::NoneType); return true;
+            }
+            if (fn == "pop") {
+                if (callNode.args.size() != 1) { addDiag(diags, "array.pop() takes 1 arg", &callNode); ok=false; return true; }
+                // Returns element (boxed); treat as opaque ptr => Str is fine for typeflow
+                setRet(ast::TypeKind::Str); return true;
+            }
+            if (fn == "tolist") {
+                if (callNode.args.size() != 1) { addDiag(diags, "array.tolist() takes 1 arg", &callNode); ok=false; return true; }
+                setRet(ast::TypeKind::List); return true;
+            }
+            return false;
+        }
+        if (base && base->id == "colorsys") {
+            auto setRet = [&](ast::TypeKind k){ out=k; outSet=TypeEnv::maskForKind(k); const_cast<ast::Call&>(callNode).setType(out); };
+            if (fn == "rgb_to_hsv" || fn == "hsv_to_rgb") {
+                if (callNode.args.size() != 3) { addDiag(diags, std::string("colorsys.") + fn + "() takes 3 args", &callNode); ok=false; return true; }
+                auto checkNum = [&](size_t i){ ExpressionTyper t{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[i]->accept(t); if(!t.ok){ ok=false; return false; } const uint32_t num=TypeEnv::maskForKind(ast::TypeKind::Int)|TypeEnv::maskForKind(ast::TypeKind::Bool)|TypeEnv::maskForKind(ast::TypeKind::Float); if ((maskOf(t.out,t.outSet)&~num)!=0U) { addDiag(diags, "colorsys: numeric args required", callNode.args[i].get()); ok=false; return false; } return true; };
+                if (!checkNum(0) || !checkNum(1) || !checkNum(2)) return true;
+                setRet(ast::TypeKind::List); return true;
+            }
+            return false;
+        }
+        // os.path (nested attribute base: os.path)
+        if (callNode.callee && callNode.callee->kind == ast::NodeKind::Attribute) {
+            const auto* at2 = static_cast<const ast::Attribute*>(callNode.callee.get());
+            if (at2->value && at2->value->kind == ast::NodeKind::Attribute) {
+                const auto* op = static_cast<const ast::Attribute*>(at2->value.get());
+                if (op->value && op->value->kind == ast::NodeKind::Name) {
+                    const auto* osn = static_cast<const ast::Name*>(op->value.get());
+                    if (osn->id == "os" && op->attr == "path") {
+                        const std::string& f = at2->attr;
+                        auto setRet = [&](ast::TypeKind k){ out=k; outSet=TypeEnv::maskForKind(k); const_cast<ast::Call&>(callNode).setType(out); };
+                        auto needStr = [&](size_t i)->bool { ExpressionTyper t{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[i]->accept(t); if(!t.ok){ ok=false; return false; } const uint32_t sMask=TypeEnv::maskForKind(ast::TypeKind::Str); if ((maskOf(t.out,t.outSet)&~sMask)!=0U && callNode.args[i]->kind != ast::NodeKind::StringLiteral) { addDiag(diags, std::string("os.path.")+f+": path must be str", callNode.args[i].get()); ok=false; return false; } return true; };
+                        if (f == "join") { if (callNode.args.size()!=2){ addDiag(diags, "os.path.join() takes 2 args", &callNode); ok=false; return true; } if (!needStr(0) || !needStr(1)) return true; setRet(ast::TypeKind::Str); return true; }
+                        if (f == "dirname" || f == "basename" || f == "abspath") { if (callNode.args.size()!=1){ addDiag(diags, std::string("os.path.")+f+"() takes 1 arg", &callNode); ok=false; return true; } if (!needStr(0)) return true; setRet(ast::TypeKind::Str); return true; }
+                        if (f == "splitext") { if (callNode.args.size()!=1){ addDiag(diags, "os.path.splitext() takes 1 arg", &callNode); ok=false; return true; } if (!needStr(0)) return true; setRet(ast::TypeKind::List); return true; }
+                        if (f == "exists" || f == "isfile" || f == "isdir") { if (callNode.args.size()!=1){ addDiag(diags, std::string("os.path.")+f+"() takes 1 arg", &callNode); ok=false; return true; } if (!needStr(0)) return true; setRet(ast::TypeKind::Bool); return true; }
+                    }
+                }
+            }
+        }
+        if (base && (base->id == "posixpath" || base->id == "ntpath")) {
+            const std::string &f = fn;
+            auto setRet = [&](ast::TypeKind k){ out=k; outSet=TypeEnv::maskForKind(k); const_cast<ast::Call&>(callNode).setType(out); };
+            auto needStr = [&](size_t i)->bool { ExpressionTyper t{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[i]->accept(t); if(!t.ok){ ok=false; return false; } const uint32_t sMask=TypeEnv::maskForKind(ast::TypeKind::Str); if ((maskOf(t.out,t.outSet)&~sMask)!=0U && callNode.args[i]->kind != ast::NodeKind::StringLiteral) { addDiag(diags, std::string(base->id)+"."+f+": path must be str", callNode.args[i].get()); ok=false; return false; } return true; };
+            if (f == "join") { if (callNode.args.size()!=2){ addDiag(diags, std::string(base->id)+".join() takes 2 args", &callNode); ok=false; return true; } if (!needStr(0) || !needStr(1)) return true; setRet(ast::TypeKind::Str); return true; }
+            if (f == "dirname" || f == "basename" || f == "abspath") { if (callNode.args.size()!=1){ addDiag(diags, std::string(base->id)+"."+f+"() takes 1 arg", &callNode); ok=false; return true; } if (!needStr(0)) return true; setRet(ast::TypeKind::Str); return true; }
+            if (f == "splitext") { if (callNode.args.size()!=1){ addDiag(diags, std::string(base->id)+".splitext() takes 1 arg", &callNode); ok=false; return true; } if (!needStr(0)) return true; setRet(ast::TypeKind::List); return true; }
+            if (f == "exists" || f == "isfile" || f == "isdir") { if (callNode.args.size()!=1){ addDiag(diags, std::string(base->id)+"."+f+"() takes 1 arg", &callNode); ok=false; return true; } if (!needStr(0)) return true; setRet(ast::TypeKind::Bool); return true; }
+            return false;
+        }
+        if (base && base->id == "reprlib") {
+            if (fn == "repr") {
+                if (callNode.args.size() != 1) { addDiag(diags, "reprlib.repr() takes 1 arg", &callNode); ok=false; return true; }
+                ExpressionTyper a0{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[0]->accept(a0);
+                if (!a0.ok) { ok=false; return true; }
+                out = ast::TypeKind::Str; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true;
+            }
+            return false;
+        }
+        if (base && base->id == "types") {
+            if (fn == "SimpleNamespace") {
+                if (callNode.args.size() > 1) { addDiag(diags, "types.SimpleNamespace() takes 0 or 1 args", &callNode); ok=false; return true; }
+                if (callNode.args.size() == 1) {
+                    ExpressionTyper a0{env,sigs,retParamIdxs,diags,polyTargets,outers}; callNode.args[0]->accept(a0);
+                    if (!a0.ok) { ok=false; return true; }
+                    const uint32_t listMask = TypeEnv::maskForKind(ast::TypeKind::List);
+                    if ((maskOf(a0.out,a0.outSet)&~listMask)!=0U && callNode.args[0]->kind != ast::NodeKind::ListLiteral) { addDiag(diags, "types.SimpleNamespace: initializer must be list", callNode.args[0].get()); ok=false; return true; }
+                }
+                out = ast::TypeKind::Dict; outSet = TypeEnv::maskForKind(out); const_cast<ast::Call&>(callNode).setType(out); return true;
             }
             return false;
         }

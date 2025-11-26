@@ -1,6 +1,6 @@
 /***
- * Name: test_execute_unicodedata
- * Purpose: Compile and run a program using unicodedata; verify stdout and exit code.
+ * Name: test_execute_array
+ * Purpose: Compile and run a program using array; verify stdout and exit code.
  */
 #include <gtest/gtest.h>
 #include <fstream>
@@ -9,30 +9,31 @@
 #include <string>
 #include <sys/wait.h>
 
-static std::string slurp_ud(const std::string& p) {
+static std::string slurp_array(const std::string& p) {
   std::ifstream in(p);
-  std::string s; std::getline(in, s, '\0'); return s;
+  std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  return s;
 }
 
-TEST(ExecuteUnicodedata, StdoutAndExit) {
+TEST(ExecuteArray, StdoutAndExit) {
   namespace fs = std::filesystem;
   std::vector<fs::path> candidates = {fs::path("../../../demos"), fs::path("../../demos"), fs::path("demos")};
   fs::path demosDir; for (const auto& c : candidates) { if (fs::exists(c)) { demosDir = c; break; } }
   ASSERT_FALSE(demosDir.empty());
-  const auto srcPath = std::filesystem::weakly_canonical(demosDir / "e2e_unicodedata.py").string();
+  const auto srcPath = std::filesystem::weakly_canonical(demosDir / "e2e_array.py").string();
   const bool atRepoRoot = fs::exists("build/pycc");
   fs::path outDir = atRepoRoot ? fs::path("build/Testing") : fs::path("../Testing");
   std::error_code ec; fs::create_directory(outDir, ec);
   fs::path pyccFile = atRepoRoot ? fs::path("build/pycc") : (fs::current_path().parent_path() / "pycc");
-  fs::path outBin = outDir / "e2e_unicodedata";
+  fs::path outBin = outDir / "e2e_array";
   std::string cmd = std::string("\"") + pyccFile.string() + "\" -o \"" + outBin.string() + "\" \"" + srcPath + "\"";
   int rc = std::system(cmd.c_str());
   if (rc != 0) {
     std::string cmd2 = std::string("../pycc -o \"") + outBin.string() + "\" \"" + srcPath + "\"";
     rc = std::system(cmd2.c_str());
   }
-  if (rc != 0) { GTEST_SKIP() << "pycc failed to compile unicodedata demo"; return; }
-  fs::path outTxt = outDir / "out_unicodedata.txt";
+  if (rc != 0) { GTEST_SKIP() << "pycc failed to compile array demo"; return; }
+  fs::path outTxt = outDir / "out_array.txt";
   rc = std::system((std::string("\"") + outBin.string() + "\" > \"" + outTxt.string() + "\" 2>/dev/null").c_str());
 #ifdef WIFEXITED
   ASSERT_TRUE(WIFEXITED(rc));
@@ -41,6 +42,7 @@ TEST(ExecuteUnicodedata, StdoutAndExit) {
 #else
   EXPECT_EQ(rc, 0);
 #endif
-  auto out = slurp_ud(outTxt.string());
-  EXPECT_EQ(out, std::string("UNICODE_OK\\n"));
+  auto out = slurp_array(outTxt.string());
+  EXPECT_EQ(out, std::string("ARRAY_OK\\n"));
 }
+

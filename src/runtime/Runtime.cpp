@@ -1514,6 +1514,12 @@ void sys_exit(int32_t code) {
   // In test environment, we don't actually exit the process.
 }
 
+// C ABI for sys module
+extern "C" void* pycc_sys_platform() { return ::pycc::rt::sys_platform(); }
+extern "C" void* pycc_sys_version() { return ::pycc::rt::sys_version(); }
+extern "C" long long pycc_sys_maxsize() { return static_cast<long long>(::pycc::rt::sys_maxsize()); }
+extern "C" void pycc_sys_exit(int code) { ::pycc::rt::sys_exit(code); }
+
 // Bytes (immutable)
 void* bytes_new(const void* data, std::size_t len) {
   const std::lock_guard<std::mutex> lock(g_mu);

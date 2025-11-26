@@ -5599,12 +5599,20 @@ namespace pycc::codegen {
                                         if (bn->id == "json" && at->attr == "dumps") {
                                             it->second.tag = PtrTag::Str;
                                         }
+                                        if (bn->id == "collections") {
+                                            if (at->attr == "Counter" || at->attr == "OrderedDict" || at->attr == "ChainMap") {
+                                                it->second.tag = PtrTag::Dict;
+                                            }
+                                        }
                                         if (bn->id == "tempfile") {
                                             if (at->attr == "gettempdir" || at->attr == "mkdtemp") {
                                                 it->second.tag = PtrTag::Str;
                                             } else if (at->attr == "mkstemp") {
                                                 it->second.tag = PtrTag::List;
                                             }
+                                        }
+                                        if (bn->id == "argparse") {
+                                            if (at->attr == "parse_args") { it->second.tag = PtrTag::Dict; }
                                         }
                                     }
                                 }
