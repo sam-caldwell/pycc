@@ -66,6 +66,8 @@ if(BUILD_TESTING)
     endif()
     # Run e2e tests under the run directory
     set_tests_properties(test_e2e PROPERTIES WORKING_DIRECTORY ${RUN_DIR})
+    # Provide a convenient ./pycc in RUN_DIR for e2e tests that expect it
+    file(CREATE_LINK ${CMAKE_BINARY_DIR}/pycc ${RUN_DIR}/pycc SYMBOLIC)
     # Tell tests to stay in the CTest-provided working directory (do not create run_local)
     set_tests_properties(test_e2e PROPERTIES ENVIRONMENT "PYCC_TEST_STAY_CWD=1")
   endif()
